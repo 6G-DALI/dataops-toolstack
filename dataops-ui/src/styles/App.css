@@ -1,0 +1,25 @@
+.app-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-content {
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px 20px;
+}
+
+.page-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: #1c2a3a;
+}
+
+.page-subtitle {
+  font-size: 13px;
+  color: #6c757d;
+  margin-bottom: 16px;
+}

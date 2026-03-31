@@ -1,0 +1,197 @@
+import { useEffect, useState } from 'react'
+import { getAllTasks, createDag } from '../api/airflow'
+import LoadingSpinner from './LoadingSpinner'
+import ErrorMessage from './ErrorMessage'
+import '../styles/DagBuilder.css'
+import '../styles/Button.css'
+
+
+const LOCKED_FIRST = 'download_dataset'
+const LOCKED_LAST  = 'store_dataset'
+
+const LOCKED_TASKS = [
+  { task_id: LOCKED_FIRST, dag_id: 'csv_pipeline', task_type: 'PythonOperator', locked: true },
+  { task_id: LOCKED_LAST,  dag_id: 'csv_pipeline', task_type: 'PythonOperator', locked: true },
+]
+
+export default function DagBuilder({ onNavigate }) {
+  const [availableTasks, setAvailableTasks] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  const [filter, setFilter] = useState('')
+  // Pipeline always starts with the two locked bookend tasks
+  const [pipeline, setPipeline] = useState(LOCKED_TASKS)
+
+  const [dagId, setDagId] = useState('')
+  const [description, setDescription] = useState('')
+
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState(null)
+
+  useEffect(() => {
+    getAllTasks()
+      .then(data => setAvailableTasks(data.tasks || []))
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false))
+  }, [])
+
+  function addTask(task) {
+    // Insert before the locked last task
+    setPipeline(prev => [
+      ...prev.slice(0, -1),
+      { ...task, locked: false },
+      prev[prev.length - 1],
+    ])
+  }
+
+  function removeTask(index) {
+    if (pipeline[index].locked) return
+    setPipeline(prev => prev.filter((_, i) => i !== index))
+  }
+
+  function moveTask(index, direction) {
+    if (pipeline[index].locked) return
+    const swapWith = index + direction
+    if (pipeline[swapWith]?.locked) return
+    setPipeline(prev => {
+      const next = [...prev]
+      ;[next[index], next[swapWith]] = [next[swapWith], next[index]]
+      return next
+    })
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setSubmitError(null)
+    if (!dagId.trim()) return setSubmitError('DAG ID is required.')
+    if (pipeline.length === 0) return setSubmitError('Add at least one task to the pipeline.')
+
+    setSubmitting(true)
+    try {
+      await createDag({
+        dag_id: dagId.trim(),
+        description,
+        schedule: 'None',
+        task_ids: pipeline.map(t => t.task_id),
+      })
+      onNavigate('dags', {})
+    } catch (err) {
+      setSubmitError(err.message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (loading) return <LoadingSpinner />
+  if (error) return <ErrorMessage message={error} />
+
+  const libraryTasks = availableTasks.filter(
+    t => t.task_id !== LOCKED_FIRST && t.task_id !== LOCKED_LAST
+  )
+
+  const visible = filter
+    ? libraryTasks.filter(t =>
+        t.task_id.toLowerCase().includes(filter.toLowerCase()) ||
+        t.dag_id.toLowerCase().includes(filter.toLowerCase())
+      )
+    : libraryTasks
+
+  return (
+    <div>
+      <h1 className="page-title">Build a DAG</h1>
+      <p className="page-subtitle">Pick tasks from the library and arrange them into a pipeline.</p>
+
+      <div className="builder-layout">
+        {/* Left: task library */}
+        <div className="builder-panel">
+          <div className="builder-panel-header">Task Library ({availableTasks.length})</div>
+          <div className="builder-task-filter">
+            <input
+              type="text"
+              placeholder="Filter tasks..."
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+            />
+          </div>
+          <div className="builder-task-list">
+            {visible.length === 0 ? (
+              <div style={{ padding: '24px', textAlign: 'center', color: '#aaa', fontSize: '13px' }}>
+                No tasks match
+              </div>
+            ) : visible.map((task, i) => (
+              <div className="builder-task-item" key={`${task.dag_id}-${task.task_id}-${i}`}>
+                <div>
+                  <code>{task.task_id}</code>
+                  <div className="task-meta">{task.dag_id} · {task.task_type || 'PythonOperator'}</div>
+                </div>
+                <button className="btn btn-primary" style={{ padding: '3px 10px', fontSize: '12px' }} onClick={() => addTask(task)}>
+                  + Add
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Right: pipeline */}
+        <div className="builder-panel">
+          <div className="builder-panel-header">Pipeline ({pipeline.length} tasks)</div>
+          <div className="builder-task-list">
+            {pipeline.map((task, i) => (
+              <div className={`pipeline-item${task.locked ? ' pipeline-item-locked' : ''}`} key={i}>
+                <div className="step-num">{i + 1}</div>
+                <div style={{ flex: 1 }}>
+                  <span className="task-label">{task.task_id}</span>
+                  {task.locked && <span className="lock-badge">locked</span>}
+                  <div className="task-source">{task.dag_id}</div>
+                </div>
+                <div className="pipeline-controls">
+                  <button className="icon-btn" disabled={task.locked || i === 0 || pipeline[i - 1]?.locked} onClick={() => moveTask(i, -1)} title="Move up">↑</button>
+                  <button className="icon-btn" disabled={task.locked || i === pipeline.length - 1 || pipeline[i + 1]?.locked} onClick={() => moveTask(i, 1)} title="Move down">↓</button>
+                  <button className="icon-btn remove" disabled={task.locked} onClick={() => removeTask(i)} title="Remove">✕</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* DAG config form */}
+      <form className="builder-form" onSubmit={handleSubmit}>
+        <div className="builder-panel-header" style={{ margin: '-20px -20px 16px', padding: '10px 20px', borderRadius: '6px 6px 0 0' }}>
+          DAG Configuration
+        </div>
+        <div className="form-group" style={{ marginBottom: '16px' }}>
+          <label>DAG ID *</label>
+          <input
+            type="text"
+            placeholder="my_new_dag"
+            value={dagId}
+            onChange={e => setDagId(e.target.value.replace(/\s+/g, '_'))}
+            required
+          />
+        </div>
+        <div className="form-group" style={{ marginBottom: '16px' }}>
+          <label>Description</label>
+          <input
+            type="text"
+            placeholder="What does this DAG do?"
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+          />
+        </div>
+
+        {submitError && <ErrorMessage message={submitError} />}
+
+        <div className="builder-submit">
+          <button type="button" className="btn btn-secondary" onClick={() => onNavigate('dags', {})}>
+            Cancel
+          </button>
+          <button type="submit" className="btn btn-primary" disabled={submitting}>
+            {submitting ? 'Creating…' : 'Create DAG'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
