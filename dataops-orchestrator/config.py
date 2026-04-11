@@ -15,4 +15,7 @@ CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3
 MOCK = os.getenv("MOCK", "false").lower() == "true"
 
 # Folder where generated DAG Python files will be written
-AIRFLOW_DAGS_FOLDER = os.getenv("AIRFLOW_DAGS_FOLDER", "./generated_dags")
+AIRFLOW_DAGS_FOLDER = os.getenv("AIRFLOW_DAGS_FOLDER", "/srv/data/dags")
+
+# Folder where user-defined task Python files will be stored
+AIRFLOW_TASKS_FOLDER = os.getenv("AIRFLOW_TASKS_FOLDER", "/srv/data/tasks")

@@ -185,6 +185,18 @@ async def set_dag_paused(dag_id: str, is_paused: bool) -> dict:
     return await get_dag(dag_id)
 
 
+async def delete_dag(dag_id: str) -> dict:
+    import os
+    from config import AIRFLOW_DAGS_FOLDER
+    global _DAGS
+    _DAGS = [d for d in _DAGS if d["dag_id"] != dag_id]
+    _paused.pop(dag_id, None)
+    path = os.path.join(AIRFLOW_DAGS_FOLDER, f"{dag_id}.py")
+    if os.path.exists(path):
+        os.remove(path)
+    return {}
+
+
 async def trigger_dag(dag_id: str, conf: dict = None) -> dict:
     run_id = f"manual__{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S+00:00')}"
     run = {
@@ -289,13 +301,38 @@ async def get_dataset(dataset_id) -> dict:
     return ds
 
 
-async def create_dag(dag_id: str, description: str, schedule: str, task_ids: list) -> dict:
+_custom_tasks: list = []
+
+
+async def create_task(task_id: str, description: str, code: str) -> dict:
+    existing = next((t for t in _custom_tasks if t["task_id"] == task_id), None)
+    if existing:
+        existing["description"] = description
+        existing["code"] = code
+    else:
+        _custom_tasks.append({"task_id": task_id, "description": description, "code": code, "file": f"(mock) {task_id}.py"})
+    return {"task_id": task_id, "description": description, "file": f"(mock) {task_id}.py", "status": "created"}
+
+
+async def get_custom_task(task_id: str) -> dict:
+    task = next((t for t in _custom_tasks if t["task_id"] == task_id), None)
+    if not task:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return task
+
+
+async def list_custom_tasks() -> dict:
+    return {"tasks": _custom_tasks, "total_entries": len(_custom_tasks)}
+
+
+async def create_dag(dag_id: str, description: str, schedule: str, task_ids: list, owner: str = "airflow") -> dict:
     entry = {
         "dag_id": dag_id,
         "description": description,
         "is_paused": False,
         "is_active": True,
-        "owners": ["dataops"],
+        "owners": [owner],
         "schedule_interval": {"value": schedule},
         "tags": [],
         "timetable_description": schedule,

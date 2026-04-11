@@ -11,6 +11,7 @@ class DagCreateRequest(BaseModel):
     description: str = ""
     schedule: str = "@daily"
     task_ids: list[str]
+    owner: str = "airflow"
 
 
 @router.get("")
@@ -55,7 +56,13 @@ async def get_task(dag_id: str, task_id: str):
     return await af.get_task(dag_id, task_id)
 
 
+@router.delete("/{dag_id}")
+async def delete_dag(dag_id: str):
+    """Delete a DAG from Airflow."""
+    return await af.delete_dag(dag_id)
+
+
 @router.post("")
 async def create_dag(body: DagCreateRequest):
     """Create a new DAG by combining existing tasks."""
-    return await af.create_dag(body.dag_id, body.description, body.schedule, body.task_ids)
+    return await af.create_dag(body.dag_id, body.description, body.schedule, body.task_ids, body.owner)

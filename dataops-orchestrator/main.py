@@ -3,18 +3,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import HOST, PORT, CORS_ORIGINS
-from routers import dags, runs, tasks, datasets
+from routers import dags, runs, tasks, datasets, stats
 
 app = FastAPI(
     title="DataOps Orchestrator",
     description="Middleware API between the React UI and Apache Airflow",
-    version="1.0.0",
+    version="0.2.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -23,6 +23,7 @@ app.include_router(dags.router)
 app.include_router(runs.router)
 app.include_router(tasks.router)
 app.include_router(datasets.router)
+app.include_router(stats.router)
 
 
 @app.get("/health", tags=["Health"])
