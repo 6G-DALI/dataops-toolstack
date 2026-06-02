@@ -16,6 +16,9 @@ export default function Header({ view, dagId, runId, taskId, onNavigate }) {
   } else if (view === 'dag-builder') {
     crumbs.push({ label: 'Tasks', view: 'all-tasks', params: {} })
     crumbs.push({ label: 'Build DAG', view: 'dag-builder', params: {} })
+  } else if (view === 'task-creator') {
+    crumbs.push({ label: 'Tasks', view: 'all-tasks', params: {} })
+    crumbs.push({ label: dagId ? 'Edit Task' : 'Create Task', view: 'task-creator', params: {} })
   } else {
     crumbs.push({ label: 'DAGs', view: 'dags', params: {} })
     if (dagId) {
@@ -32,14 +35,16 @@ export default function Header({ view, dagId, runId, taskId, onNavigate }) {
     }
   }
 
-  const activeTopView = ['all-tasks', 'dag-builder'].includes(view) ? 'all-tasks'
+  const activeTopView = ['all-tasks', 'dag-builder', 'task-creator'].includes(view) ? 'all-tasks'
     : view === 'datasets' ? 'datasets'
     : 'dags'
 
   return (
     <>
       <header className="header">
-        <span className="header-title">Airflow DataOps</span>
+        <span className="header-title" style={{ cursor: 'pointer' }} onClick={() => onNavigate('home', {})}>
+          6G-<span style={{ color: '#f2712c' }}>DALI</span> DataOps
+        </span>
         <nav className="header-nav">
           {NAV_ITEMS.map(item => (
             <button

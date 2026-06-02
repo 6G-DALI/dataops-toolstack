@@ -13,29 +13,37 @@
   background: #fff;
   border-radius: 6px;
   box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  border: 1px solid var(--dali-gray);
   overflow: hidden;
 }
 
 .builder-panel-header {
-  background: #f8f9fa;
+  background: var(--dali-navy);
+  color: rgba(255,255,255,0.9);
   padding: 10px 16px;
   font-weight: 600;
   font-size: 13px;
-  color: #555;
-  border-bottom: 1px solid #dee2e6;
+  border-bottom: 2px solid var(--dali-blue);
 }
 
 .builder-task-filter {
   padding: 8px 12px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid #f0f2f5;
 }
 
 .builder-task-filter input {
   width: 100%;
   padding: 6px 10px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--dali-gray);
   border-radius: 4px;
   font-size: 13px;
+  box-sizing: border-box;
+}
+
+.builder-task-filter input:focus {
+  outline: none;
+  border-color: var(--dali-blue);
+  box-shadow: 0 0 0 2px rgba(4,92,180,0.15);
 }
 
 .builder-task-list {
@@ -48,16 +56,16 @@
   align-items: center;
   justify-content: space-between;
   padding: 8px 14px;
-  border-bottom: 1px solid #f5f5f5;
+  border-bottom: 1px solid #f0f2f5;
   font-size: 13px;
   cursor: default;
 }
 
 .builder-task-item:last-child { border-bottom: none; }
-.builder-task-item:hover { background: #f0f4ff; }
+.builder-task-item:hover { background: #eef3fb; }
 
 .builder-task-item .task-meta {
-  color: #888;
+  color: var(--dali-muted);
   font-size: 11px;
 }
 
@@ -73,7 +81,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
-  border-bottom: 1px solid #f5f5f5;
+  border-bottom: 1px solid #f0f2f5;
   font-size: 13px;
 }
 
@@ -82,7 +90,7 @@
 .pipeline-item .step-num {
   width: 22px;
   height: 22px;
-  background: #1a73e8;
+  background: var(--dali-blue);
   color: #fff;
   border-radius: 50%;
   display: flex;
@@ -96,27 +104,28 @@
 .pipeline-item .task-label {
   flex: 1;
   font-family: monospace;
+  color: var(--dali-text);
 }
 
 .pipeline-item .task-source {
   font-size: 11px;
-  color: #888;
+  color: var(--dali-muted);
 }
 
 .pipeline-item-locked {
-  background: #f8f9fa;
+  background: #f8fafc;
 }
 
 .pipeline-item-locked .step-num {
-  background: #6c757d;
+  background: var(--dali-muted);
 }
 
 .lock-badge {
   display: inline-block;
   margin-left: 8px;
   padding: 1px 6px;
-  background: #e2e3e5;
-  color: #555;
+  background: #e2e8f0;
+  color: var(--dali-muted);
   border-radius: 8px;
   font-size: 10px;
   font-weight: 600;
@@ -132,7 +141,7 @@
 
 .icon-btn {
   background: none;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--dali-gray);
   border-radius: 3px;
   width: 24px;
   height: 24px;
@@ -141,20 +150,22 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #555;
+  color: var(--dali-muted);
 }
 
-.icon-btn:hover { background: #f0f0f0; }
+.icon-btn:hover { background: #eef3fb; border-color: var(--dali-blue); color: var(--dali-blue); }
 .icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-.icon-btn.remove { color: #dc3545; border-color: #f5c6cb; }
-.icon-btn.remove:hover { background: #f8d7da; }
+.icon-btn.remove { color: #dc2626; border-color: #fecaca; }
+.icon-btn.remove:hover { background: #fee2e2; border-color: #dc2626; }
 
 .builder-form {
   background: #fff;
   border-radius: 6px;
   box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  border: 1px solid var(--dali-gray);
   padding: 20px;
   margin-top: 20px;
+  overflow: hidden;
 }
 
 .form-row {
@@ -173,7 +184,7 @@
 .form-group label {
   font-size: 12px;
   font-weight: 600;
-  color: #555;
+  color: var(--dali-muted);
   text-transform: uppercase;
   letter-spacing: 0.4px;
 }
@@ -181,7 +192,7 @@
 .form-group input,
 .form-group select {
   padding: 8px 10px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--dali-gray);
   border-radius: 4px;
   font-size: 13px;
 }
@@ -189,8 +200,8 @@
 .form-group input:focus,
 .form-group select:focus {
   outline: none;
-  border-color: #1a73e8;
-  box-shadow: 0 0 0 2px rgba(26,115,232,0.15);
+  border-color: var(--dali-blue);
+  box-shadow: 0 0 0 2px rgba(4,92,180,0.15);
 }
 
 .builder-submit {

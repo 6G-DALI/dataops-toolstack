@@ -1,4 +1,4 @@
-const BASE_URL = import.meta.env.VITE_ORCHESTRATOR_URL || 'http://localhost:8000'
+const BASE_URL = import.meta.env.VITE_ORCHESTRATOR_URL
 
 const headers = { 'Content-Type': 'application/json' }
 
@@ -15,8 +15,16 @@ async function request(path, options = {}) {
   return response.json()
 }
 
+export function getStats() {
+  return request('/stats')
+}
+
 export function getDags() {
   return request('/dags')
+}
+
+export function deleteDag(dagId) {
+  return request(`/dags/${encodeURIComponent(dagId)}`, { method: 'DELETE' })
 }
 
 export function patchDag(dagId, isPaused) {
@@ -57,6 +65,21 @@ export function createDag(body) {
 
 export function getDatasets() {
   return request('/datasets')
+}
+
+export function getCustomTasks() {
+  return request('/tasks/custom')
+}
+
+export function getCustomTask(taskId) {
+  return request(`/tasks/custom/${encodeURIComponent(taskId)}`)
+}
+
+export function createTask(body) {
+  return request('/tasks', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 }
 
 export function getTaskLogs(dagId, runId, taskId, tryNumber = 1) {

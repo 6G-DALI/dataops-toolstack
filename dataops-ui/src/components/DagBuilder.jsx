@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getAllTasks, createDag } from '../api/airflow'
+import { getAllTasks, getCustomTasks, createDag } from '../api/airflow'
 import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
 import '../styles/DagBuilder.css'
@@ -25,13 +25,25 @@ export default function DagBuilder({ onNavigate }) {
 
   const [dagId, setDagId] = useState('')
   const [description, setDescription] = useState('')
+  const [owner, setOwner] = useState('')
 
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState(null)
 
   useEffect(() => {
-    getAllTasks()
-      .then(data => setAvailableTasks(data.tasks || []))
+    Promise.all([getAllTasks(), getCustomTasks()])
+      .then(([airflow, custom]) => {
+        const airflowTasks = airflow.tasks || []
+        const customTasks = (custom.tasks || []).map(t => ({
+          task_id: t.task_id,
+          dag_id: 'custom',
+          task_type: 'PythonOperator',
+        }))
+        // merge, custom tasks take precedence (deduplicate by task_id)
+        const seen = new Set(customTasks.map(t => t.task_id))
+        const merged = [...customTasks, ...airflowTasks.filter(t => !seen.has(t.task_id))]
+        setAvailableTasks(merged)
+      })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
   }, [])
@@ -74,6 +86,7 @@ export default function DagBuilder({ onNavigate }) {
         description,
         schedule: 'None',
         task_ids: pipeline.map(t => t.task_id),
+        owner: owner.trim() || 'airflow',
       })
       onNavigate('dags', {})
     } catch (err) {
@@ -178,6 +191,15 @@ export default function DagBuilder({ onNavigate }) {
             placeholder="What does this DAG do?"
             value={description}
             onChange={e => setDescription(e.target.value)}
+          />
+        </div>
+        <div className="form-group" style={{ marginBottom: '16px' }}>
+          <label>Owner</label>
+          <input
+            type="text"
+            placeholder="airflow"
+            value={owner}
+            onChange={e => setOwner(e.target.value)}
           />
         </div>
 

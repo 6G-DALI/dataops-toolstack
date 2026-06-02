@@ -1,3 +1,21 @@
+:root {
+  --dali-navy:    #151241;
+  --dali-blue:    #045cb4;
+  --dali-orange:  #f2712c;
+  --dali-slate:   #1e293b;
+  --dali-bg:      #F0F5FA;
+  --dali-gray:    #D1D5DB;
+  --dali-text:    #1e293b;
+  --dali-muted:   #475569;
+}
+
+body {
+  background: var(--dali-bg);
+  color: var(--dali-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  margin: 0;
+}
+
 .app-container {
   min-height: 100vh;
   display: flex;
@@ -13,13 +31,24 @@
 
 .page-title {
   font-size: 20px;
-  font-weight: 600;
+  font-weight: 700;
   margin-bottom: 16px;
-  color: #1c2a3a;
+  color: var(--dali-navy);
 }
 
 .page-subtitle {
   font-size: 13px;
-  color: #6c757d;
+  color: var(--dali-muted);
   margin-bottom: 16px;
+}
+
+a {
+  color: var(--dali-blue);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--dali-orange);
+  text-decoration: underline;
 }
