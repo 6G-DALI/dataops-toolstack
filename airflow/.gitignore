@@ -9,5 +9,8 @@ logs/
 dags/*.py
 dags/tasks/*.py
 
+# Hand-authored DAGs that must be tracked despite the rule above
+!dags/gx_validate_dataset.py
+
 # macOS
 .DS_Store
