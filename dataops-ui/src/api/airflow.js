@@ -15,8 +15,16 @@ async function request(path, options = {}) {
   return response.json()
 }
 
+export function getStats() {
+  return request('/stats')
+}
+
 export function getDags() {
   return request('/dags')
+}
+
+export function deleteDag(dagId) {
+  return request(`/dags/${encodeURIComponent(dagId)}`, { method: 'DELETE' })
 }
 
 export function patchDag(dagId, isPaused) {
@@ -77,6 +85,21 @@ export function registerService(serviceId) {
 
 export function deregisterService(serviceId) {
   return request(`/services/${encodeURIComponent(serviceId)}/register`, { method: 'DELETE' })
+}
+
+export function getCustomTasks() {
+  return request('/tasks/custom')
+}
+
+export function getCustomTask(taskId) {
+  return request(`/tasks/custom/${encodeURIComponent(taskId)}`)
+}
+
+export function createTask(body) {
+  return request('/tasks', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 }
 
 export function getTaskLogs(dagId, runId, taskId, tryNumber = 1) {

@@ -3,6 +3,7 @@
   border-radius: 6px;
   box-shadow: 0 1px 4px rgba(0,0,0,0.08);
   background: #fff;
+  border: 1px solid var(--dali-gray);
 }
 
 table {
@@ -12,26 +13,27 @@ table {
 }
 
 thead th {
-  background: #f8f9fa;
+  background: var(--dali-navy);
+  color: rgba(255,255,255,0.9);
   padding: 10px 14px;
   text-align: left;
   font-weight: 600;
-  color: #555;
-  border-bottom: 2px solid #dee2e6;
+  border-bottom: 2px solid var(--dali-blue);
   white-space: nowrap;
 }
 
 tbody tr {
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid #f0f2f5;
   transition: background 0.1s;
 }
 
 tbody tr:last-child { border-bottom: none; }
-tbody tr:hover { background: #f0f4ff; }
+tbody tr:hover { background: #eef3fb; }
 
 tbody td {
   padding: 9px 14px;
   vertical-align: middle;
+  color: var(--dali-text);
 }
 
 .clickable-row { cursor: pointer; }

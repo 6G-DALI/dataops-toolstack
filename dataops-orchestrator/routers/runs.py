@@ -5,9 +5,9 @@ router = APIRouter(prefix="/dags/{dag_id}/runs", tags=["DAG Runs"])
 
 
 @router.get("")
-async def list_runs(dag_id: str, limit: int = Query(25, ge=1, le=200)):
+async def list_runs(dag_id: str, limit: int = Query(10, ge=1, le=200), offset: int = Query(0, ge=0)):
     """List DAG runs for a given DAG, ordered by most recent first."""
-    return await af.list_dag_runs(dag_id, limit=limit)
+    return await af.list_dag_runs(dag_id, limit=limit, offset=offset)
 
 
 @router.get("/{run_id}")

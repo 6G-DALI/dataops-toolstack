@@ -1,19 +1,20 @@
 .btn {
   display: inline-block;
-  padding: 5px 12px;
+  padding: 6px 14px;
   border: none;
   border-radius: 4px;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   transition: opacity 0.15s, background 0.15s;
+  letter-spacing: 0.2px;
 }
 
-.btn:hover { opacity: 0.85; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:hover    { opacity: 0.88; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-.btn-primary { background: #1a73e8; color: #fff; }
-.btn-warning { background: #f0ad4e; color: #fff; }
-.btn-success { background: #28a745; color: #fff; }
-.btn-danger  { background: #dc3545; color: #fff; }
-.btn-secondary { background: #6c757d; color: #fff; }
+.btn-primary   { background: var(--dali-blue);   color: #fff; }
+.btn-warning   { background: var(--dali-orange);  color: #fff; }
+.btn-success   { background: #16a34a;             color: #fff; }
+.btn-danger    { background: #dc2626;             color: #fff; }
+.btn-secondary { background: var(--dali-slate);   color: #fff; }

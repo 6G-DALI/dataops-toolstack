@@ -9,6 +9,8 @@ import AllTaskList from './components/AllTaskList'
 import DagBuilder from './components/DagBuilder'
 import DatasetList from './components/DatasetList'
 import ServiceList from './components/ServiceList'
+import TaskCreator from './components/TaskCreator'
+import HomePage from './components/HomePage'
 import './styles/App.css'
 
 function parseHash() {
@@ -58,6 +60,9 @@ export default function App() {
         onNavigate={navigate}
       />
       <main className="main-content">
+        {view === 'home' && (
+          <HomePage onNavigate={navigate} />
+        )}
         {view === 'dags' && (
           <DagList onNavigate={navigate} />
         )}
@@ -78,6 +83,9 @@ export default function App() {
         )}
         {view === 'dag-builder' && (
           <DagBuilder onNavigate={navigate} />
+        )}
+        {view === 'task-creator' && (
+          <TaskCreator editTaskId={dagId || null} onNavigate={navigate} />
         )}
         {view === 'datasets' && (
           <DatasetList />

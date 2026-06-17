@@ -333,28 +333,29 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-  dataops-orchestrator:
-    image: ghcr.io/sparkworksnet/dataops-orchestrator:latest
-    restart: always
-    ports:
-      - "8000:8000"
-    environment:
-      AIRFLOW_URL: http://airflow-apiserver:8080
-      AIRFLOW_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
-      AIRFLOW_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
-      CORS_ORIGINS: ${DATAOPS_CORS_ORIGINS:-http://localhost:3000}
-    volumes:
-      - ${AIRFLOW_PROJ_DIR:-.}/dags:/srv/data/dags:z
-      - ${AIRFLOW_PROJ_DIR:-.}/dags/tasks:/srv/data/tasks:z
-    depends_on:
-      airflow-apiserver:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 10s
+#  dataops-orchestrator:
+#    build:
+#      context: ../dataops-orchestrator
+#    restart: always
+#    ports:
+#      - "8000:8000"
+#    environment:
+#      AIRFLOW_URL: http://airflow-apiserver:8080
+#      AIRFLOW_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+#      AIRFLOW_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+#      CORS_ORIGINS: ${DATAOPS_CORS_ORIGINS:-http://localhost:3000}
+#    volumes:
+#      - ${AIRFLOW_PROJ_DIR:-.}/dags:/srv/data/dags:z
+#      - ${AIRFLOW_PROJ_DIR:-.}/dags/tasks:/srv/data/tasks:z
+#    depends_on:
+#      airflow-apiserver:
+#        condition: service_healthy
+#    healthcheck:
+#      test: ["CMD", "curl", "--fail", "http://localhost:8000/health"]
+#      interval: 30s
+#      timeout: 10s
+#      retries: 5
+#      start_period: 10s
 
 volumes:
   postgres-db-volume:

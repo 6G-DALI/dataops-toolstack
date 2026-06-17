@@ -33,8 +33,10 @@ async def pause_dag(dag_id: str, is_paused: bool = Query(...)):
 
 
 class TriggerRequest(BaseModel):
-    dataset_uri: Optional[str] = None
-    dataset_id: Optional[int] = None
+    conn_id: Optional[str] = "dali-dataspace"
+    input_key: Optional[str] = None
+    catalogue_id: Optional[str] = None
+    expectations: Optional[list] = []
 
 
 @router.post("/{dag_id}/trigger")

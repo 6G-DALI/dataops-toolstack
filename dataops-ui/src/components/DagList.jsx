@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getDags, patchDag, triggerDag } from '../api/airflow'
+import { getDags, patchDag, triggerDag, deleteDag } from '../api/airflow'
 import ErrorMessage from './ErrorMessage'
 import StateBadge from './StateBadge'
 import TriggerModal from './TriggerModal'
@@ -12,6 +12,7 @@ export default function DagList({ onNavigate }) {
   const [error, setError] = useState(null)
   const [triggering, setTriggering] = useState({})
   const [triggered, setTriggered] = useState({})
+  const [deleting, setDeleting] = useState({})
   const [triggerModalDagId, setTriggerModalDagId] = useState(null)
 
   useEffect(() => {
@@ -43,6 +44,19 @@ export default function DagList({ onNavigate }) {
       setError(err.message)
     } finally {
       setTriggering(prev => ({ ...prev, [dagId]: false }))
+    }
+  }
+
+  async function handleDelete(dagId) {
+    if (!window.confirm(`Delete DAG "${dagId}"? This cannot be undone.`)) return
+    setDeleting(prev => ({ ...prev, [dagId]: true }))
+    try {
+      await deleteDag(dagId)
+      setDags(prev => prev.filter(d => d.dag_id !== dagId))
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setDeleting(prev => ({ ...prev, [dagId]: false }))
     }
   }
 
@@ -91,6 +105,14 @@ export default function DagList({ onNavigate }) {
             onClick={() => setTriggerModalDagId(dag.dag_id)}
           >
             {triggered[dag.dag_id] ? 'Triggered!' : 'Trigger'}
+          </Button>
+          <Button
+            size="small"
+            danger
+            loading={deleting[dag.dag_id]}
+            onClick={() => handleDelete(dag.dag_id)}
+          >
+            Delete
           </Button>
         </Space>
       ),

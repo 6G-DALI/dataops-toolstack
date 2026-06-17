@@ -114,7 +114,7 @@ else:
     # ── DAGs ──────────────────────────────────────────────────────────────────
 
     async def list_dags(limit: int = 100) -> dict:
-        return await _get("/dags", params={"limit": limit, "order_by": "dag_id"})
+        return await _get("/dags", params={"limit": limit, "order_by": "dag_id", "tags": ["6gdali"]})
 
     async def get_dag(dag_id: str) -> dict:
         return await _get(f"/dags/{dag_id}")
@@ -130,14 +130,18 @@ else:
         return result
 
     async def trigger_dag(dag_id: str, conf: dict = None) -> dict:
-        return await _post(f"/dags/{dag_id}/dagRuns", {"conf": conf or {}})
+        from datetime import datetime, timezone
+        return await _post(f"/dags/{dag_id}/dagRuns", {
+            "conf": conf or {},
+            "logical_date": datetime.now(timezone.utc).isoformat(),
+        })
 
     # ── DAG Runs ──────────────────────────────────────────────────────────────
 
-    async def list_dag_runs(dag_id: str, limit: int = 25) -> dict:
+    async def list_dag_runs(dag_id: str, limit: int = 25, offset: int = 0) -> dict:
         return await _get(
             f"/dags/{dag_id}/dagRuns",
-            params={"order_by": "-execution_date", "limit": limit},
+            params={"order_by": "-logical_date", "limit": limit, "offset": offset},
         )
 
     async def get_dag_run(dag_id: str, run_id: str) -> dict:

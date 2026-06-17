@@ -8,12 +8,12 @@
   letter-spacing: 0.4px;
 }
 
-.badge-success    { background: #d4edda; color: #155724; }
-.badge-failed     { background: #f8d7da; color: #721c24; }
-.badge-running    { background: #cce5ff; color: #004085; }
-.badge-queued     { background: #fff3cd; color: #856404; }
-.badge-up_for_retry { background: #ffeeba; color: #856404; }
-.badge-skipped    { background: #e2e3e5; color: #383d41; }
-.badge-paused     { background: #e2e3e5; color: #383d41; }
-.badge-active     { background: #d4edda; color: #155724; }
-.badge-default    { background: #e9ecef; color: #495057; }
+.badge-success      { background: #dcfce7; color: #166534; }
+.badge-failed       { background: #fee2e2; color: #991b1b; }
+.badge-running      { background: #dbeafe; color: #1e40af; }
+.badge-queued       { background: #fef9c3; color: #854d0e; }
+.badge-up_for_retry { background: #ffedd5; color: #9a3412; }
+.badge-skipped      { background: #f1f5f9; color: #475569; }
+.badge-paused       { background: #f1f5f9; color: #475569; }
+.badge-active       { background: #dcfce7; color: #166534; }
+.badge-default      { background: #f1f5f9; color: #475569; }

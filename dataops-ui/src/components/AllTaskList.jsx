@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getAllTasks } from '../api/airflow'
+import { getAllTasks, getCustomTasks } from '../api/airflow'
 import ErrorMessage from './ErrorMessage'
 import { Table, Button, Tag, Input, Space } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
@@ -17,9 +17,9 @@ const COLUMNS = (onNavigate) => [
     title: 'DAG',
     dataIndex: 'dag_id',
     key: 'dag_id',
-    render: (id) => (
-      <a onClick={() => onNavigate('dag-tasks', { dagId: id })} style={{ cursor: 'pointer' }}>{id}</a>
-    ),
+    render: (id) => id === 'custom'
+      ? <span style={{ color: '#888', fontStyle: 'italic' }}>custom</span>
+      : <a onClick={() => onNavigate('dag-tasks', { dagId: id })} style={{ cursor: 'pointer' }}>{id}</a>,
     sorter: (a, b) => a.dag_id.localeCompare(b.dag_id),
   },
   {
@@ -43,6 +43,14 @@ const COLUMNS = (onNavigate) => [
     width: 140,
     render: v => v ? <Tag color="orange">Yes</Tag> : <Tag color="default">No</Tag>,
   },
+  {
+    title: '',
+    key: 'actions',
+    width: 80,
+    render: (_, t) => t.dag_id === 'custom'
+      ? <Button size="small" onClick={() => onNavigate('task-creator', { taskId: t.task_id })}>Edit</Button>
+      : null,
+  },
 ]
 
 export default function AllTaskList({ onNavigate }) {
@@ -52,8 +60,19 @@ export default function AllTaskList({ onNavigate }) {
   const [search, setSearch] = useState('')
 
   useEffect(() => {
-    getAllTasks()
-      .then(data => setTasks(data.tasks || []))
+    Promise.all([getAllTasks(), getCustomTasks()])
+      .then(([airflow, custom]) => {
+        const customTasks = (custom.tasks || []).map(t => ({
+          task_id: t.task_id,
+          dag_id: 'custom',
+          task_type: 'PythonOperator',
+          owner: '—',
+          depends_on_past: false,
+        }))
+        const seen = new Set(customTasks.map(t => t.task_id))
+        const merged = [...customTasks, ...(airflow.tasks || []).filter(t => !seen.has(t.task_id))]
+        setTasks(merged)
+      })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
   }, [])
@@ -85,9 +104,8 @@ export default function AllTaskList({ onNavigate }) {
             allowClear
             style={{ width: 260 }}
           />
-          <Button type="primary" onClick={() => onNavigate('dag-builder', {})}>
-            + Build DAG
-          </Button>
+          <Button onClick={() => onNavigate('task-creator', {})}>+ Create Task</Button>
+          <Button type="primary" onClick={() => onNavigate('dag-builder', {})}>+ Build DAG</Button>
         </Space>
       </div>
 

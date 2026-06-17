@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import HOST, PORT, CORS_ORIGINS
-from routers import dags, runs, tasks, datasets, stats
+from routers import dags, runs, tasks, datasets, stats, services
 
 app = FastAPI(
     title="DataOps Orchestrator",
@@ -24,6 +24,7 @@ app.include_router(runs.router)
 app.include_router(tasks.router)
 app.include_router(datasets.router)
 app.include_router(stats.router)
+app.include_router(services.router)
 
 
 @app.get("/health", tags=["Health"])
