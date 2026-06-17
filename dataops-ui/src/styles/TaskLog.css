@@ -1,18 +1,118 @@
 .log-container {
   background: #1e1e1e;
   border-radius: 6px;
-  padding: 16px;
+  padding: 12px 0;
   overflow-x: auto;
   max-height: 75vh;
   overflow-y: auto;
   box-shadow: 0 1px 4px rgba(0,0,0,0.15);
-}
-
-.log-container pre {
-  margin: 0;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 12px;
-  color: #d4d4d4;
-  white-space: pre;
   line-height: 1.6;
+}
+
+.log-empty {
+  color: #6b7280;
+  padding: 16px;
+  display: block;
+}
+
+.log-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 2px 16px;
+  flex-wrap: wrap;
+}
+
+.log-entry:hover {
+  background: rgba(255,255,255,0.04);
+}
+
+.log-entry-raw {
+  opacity: 0.7;
+}
+
+.log-index {
+  color: #4b5563;
+  min-width: 36px;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.log-timestamp {
+  color: #6b7280;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.log-level {
+  font-weight: 600;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.log-level-info     { background: #1e3a5f; color: #60a5fa; }
+.log-level-warning  { background: #3b2f00; color: #fbbf24; }
+.log-level-error    { background: #3b0f0f; color: #f87171; }
+.log-level-debug    { background: #1f2937; color: #9ca3af; }
+
+.log-message {
+  color: #d4d4d4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  flex: 1;
+}
+
+.log-extra {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 4px;
+}
+
+.log-extra-field {
+  display: inline-flex;
+  gap: 3px;
+  background: #2d2d2d;
+  border-radius: 3px;
+  padding: 0 5px;
+}
+
+.log-extra-key  { color: #818cf8; }
+.log-extra-val  { color: #a5f3fc; }
+
+.log-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  margin: 4px 0;
+  border-top: 1px solid #2d2d2d;
+  border-bottom: 1px solid #2d2d2d;
+}
+
+.log-group-header::before {
+  content: '▸';
+  color: #4b5563;
+  font-size: 10px;
+}
+
+.log-group-label {
+  color: #6b7280;
+  font-size: 11px;
+  font-style: italic;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.log-source {
+  color: #4b5563;
+  font-size: 11px;
+  margin-left: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
 }

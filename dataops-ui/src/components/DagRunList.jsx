@@ -1,63 +1,102 @@
 import { useEffect, useState } from 'react'
 import { getDagRuns } from '../api/airflow'
-import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
 import StateBadge from './StateBadge'
-import '../styles/Table.css'
+import { Table, Pagination } from 'antd'
+import 'antd/dist/reset.css'
+
+const COLUMNS = [
+  {
+    title: 'Run ID',
+    dataIndex: 'dag_run_id',
+    key: 'dag_run_id',
+    render: v => <span style={{ fontFamily: 'monospace', fontSize: '12px' }}>{v}</span>,
+  },
+  {
+    title: 'Type',
+    dataIndex: 'run_type',
+    key: 'run_type',
+  },
+  {
+    title: 'Execution Date',
+    dataIndex: 'execution_date',
+    key: 'execution_date',
+    render: formatDate,
+  },
+  {
+    title: 'Start',
+    dataIndex: 'start_date',
+    key: 'start_date',
+    render: formatDate,
+  },
+  {
+    title: 'End',
+    dataIndex: 'end_date',
+    key: 'end_date',
+    render: formatDate,
+  },
+  {
+    title: 'State',
+    dataIndex: 'state',
+    key: 'state',
+    render: state => <StateBadge state={state} />,
+  },
+]
 
 export default function DagRunList({ dagId, onNavigate }) {
   const [runs, setRuns] = useState([])
+  const [total, setTotal] = useState(0)
+  const [limit, setLimit] = useState(10)
+  const [page, setPage] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    getDagRuns(dagId)
-      .then(data => setRuns(data.dag_runs || []))
+    setLoading(true)
+    setError(null)
+    getDagRuns(dagId, limit, page * limit)
+      .then(data => {
+        setRuns(data.dag_runs || [])
+        setTotal(data.total_entries ?? 0)
+      })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
-  }, [dagId])
+  }, [dagId, limit, page])
 
-  if (loading) return <LoadingSpinner />
+  function handleLimitChange(newLimit) {
+    setLimit(newLimit)
+    setPage(0)
+  }
+
   if (error) return <ErrorMessage message={error} />
 
   return (
     <div>
       <h1 className="page-title">DAG Runs</h1>
-      <p className="page-subtitle">
-        DAG: <strong>{dagId}</strong> — {runs.length} run{runs.length !== 1 ? 's' : ''}
-      </p>
-      <div className="table-wrapper">
-        <table>
-          <thead>
-            <tr>
-              <th>Run ID</th>
-              <th>Type</th>
-              <th>Execution Date</th>
-              <th>Start</th>
-              <th>End</th>
-              <th>State</th>
-            </tr>
-          </thead>
-          <tbody>
-            {runs.length === 0 ? (
-              <tr><td colSpan={6} style={{ textAlign: 'center', color: '#888', padding: '24px' }}>No runs found</td></tr>
-            ) : runs.map(run => (
-              <tr
-                key={run.dag_run_id}
-                className="clickable-row"
-                onClick={() => onNavigate('tasks', { dagId, runId: run.dag_run_id })}
-              >
-                <td style={{ fontFamily: 'monospace', fontSize: '12px' }}>{run.dag_run_id}</td>
-                <td>{run.run_type}</td>
-                <td>{formatDate(run.execution_date)}</td>
-                <td>{formatDate(run.start_date)}</td>
-                <td>{formatDate(run.end_date)}</td>
-                <td><StateBadge state={run.state} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <p className="page-subtitle">DAG: <strong>{dagId}</strong></p>
+      <Table
+        rowKey="dag_run_id"
+        columns={COLUMNS}
+        dataSource={runs}
+        loading={loading}
+        pagination={false}
+        onRow={run => ({ onClick: () => onNavigate('tasks', { dagId, runId: run.dag_run_id }), style: { cursor: 'pointer' } })}
+        size="small"
+        style={{ marginBottom: 16 }}
+      />
+      <Pagination
+        current={page + 1}
+        pageSize={limit}
+        total={total}
+        pageSizeOptions={[10, 25, 50, 100, 200]}
+        showSizeChanger
+        showTotal={(t, range) => `${range[0]}–${range[1]} of ${t} runs`}
+        onChange={(p, size) => {
+          if (size !== limit) handleLimitChange(size)
+          else setPage(p - 1)
+        }}
+        size="small"
+      />
     </div>
   )
 }

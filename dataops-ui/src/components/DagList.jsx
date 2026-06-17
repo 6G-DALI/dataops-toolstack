@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react'
 import { getDags, patchDag, triggerDag } from '../api/airflow'
-import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
 import StateBadge from './StateBadge'
 import TriggerModal from './TriggerModal'
-import '../styles/Table.css'
-import '../styles/Button.css'
+import { Table, Button, Space } from 'antd'
+import 'antd/dist/reset.css'
 
 export default function DagList({ onNavigate }) {
   const [dags, setDags] = useState([])
@@ -47,8 +46,56 @@ export default function DagList({ onNavigate }) {
     }
   }
 
-  if (loading) return <LoadingSpinner />
   if (error) return <ErrorMessage message={error} />
+
+  const columns = [
+    {
+      title: 'DAG ID',
+      dataIndex: 'dag_id',
+      key: 'dag_id',
+      render: (id) => (
+        <a onClick={() => onNavigate('runs', { dagId: id })} style={{ cursor: 'pointer' }}>{id}</a>
+      ),
+    },
+    {
+      title: 'Owner',
+      dataIndex: 'owners',
+      key: 'owners',
+      render: (owners) => (owners || []).join(', ') || '—',
+    },
+    {
+      title: 'Status',
+      dataIndex: 'is_paused',
+      key: 'status',
+      render: (is_paused) => <StateBadge state={is_paused ? 'paused' : 'active'} />,
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      render: (_, dag) => (
+        <Space>
+          <Button size="small" onClick={() => onNavigate('dag-tasks', { dagId: dag.dag_id })}>
+            Tasks
+          </Button>
+          <Button
+            size="small"
+            type={dag.is_paused ? 'primary' : 'default'}
+            onClick={() => handleTogglePause(dag)}
+          >
+            {dag.is_paused ? 'Unpause' : 'Pause'}
+          </Button>
+          <Button
+            size="small"
+            type="primary"
+            loading={triggering[dag.dag_id]}
+            onClick={() => setTriggerModalDagId(dag.dag_id)}
+          >
+            {triggered[dag.dag_id] ? 'Triggered!' : 'Trigger'}
+          </Button>
+        </Space>
+      ),
+    },
+  ]
 
   return (
     <div>
@@ -61,56 +108,14 @@ export default function DagList({ onNavigate }) {
       )}
       <h1 className="page-title">DAGs</h1>
       <p className="page-subtitle">{dags.length} DAG{dags.length !== 1 ? 's' : ''} found</p>
-      <div className="table-wrapper">
-        <table>
-          <thead>
-            <tr>
-              <th>DAG ID</th>
-              <th>Owner</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {dags.map(dag => (
-              <tr key={dag.dag_id}>
-                <td>
-                  <a onClick={() => onNavigate('runs', { dagId: dag.dag_id })}>
-                    {dag.dag_id}
-                  </a>
-                </td>
-                <td>{(dag.owners || []).join(', ') || '—'}</td>
-                <td>
-                  <StateBadge state={dag.is_paused ? 'paused' : 'active'} />
-                </td>
-                <td>
-                  <div className="table-actions">
-                    <button
-                      className="btn btn-secondary"
-                      onClick={() => onNavigate('dag-tasks', { dagId: dag.dag_id })}
-                    >
-                      Tasks
-                    </button>
-                    <button
-                      className={`btn ${dag.is_paused ? 'btn-success' : 'btn-warning'}`}
-                      onClick={() => handleTogglePause(dag)}
-                    >
-                      {dag.is_paused ? 'Unpause' : 'Pause'}
-                    </button>
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => setTriggerModalDagId(dag.dag_id)}
-                      disabled={triggering[dag.dag_id]}
-                    >
-                      {triggering[dag.dag_id] ? 'Triggering…' : triggered[dag.dag_id] ? 'Triggered!' : 'Trigger'}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <Table
+        rowKey="dag_id"
+        columns={columns}
+        dataSource={dags}
+        loading={loading}
+        pagination={false}
+        size="small"
+      />
     </div>
   )
 }

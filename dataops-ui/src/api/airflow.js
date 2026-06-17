@@ -32,8 +32,12 @@ export function triggerDag(dagId, conf = {}) {
   })
 }
 
-export function getDagRuns(dagId) {
-  return request(`/dags/${encodeURIComponent(dagId)}/runs`)
+export function getDagRuns(dagId, limit = 10, offset = 0) {
+  return request(`/dags/${encodeURIComponent(dagId)}/runs?limit=${limit}&offset=${offset}`)
+}
+
+export function getDagRun(dagId, runId) {
+  return request(`/dags/${encodeURIComponent(dagId)}/runs/${encodeURIComponent(runId)}`)
 }
 
 export function getTaskInstances(dagId, runId) {
@@ -57,6 +61,22 @@ export function createDag(body) {
 
 export function getDatasets() {
   return request('/datasets')
+}
+
+export function getServices() {
+  return request('/services')
+}
+
+export function registerAllServices() {
+  return request('/services/register', { method: 'POST' })
+}
+
+export function registerService(serviceId) {
+  return request(`/services/${encodeURIComponent(serviceId)}/register`, { method: 'POST' })
+}
+
+export function deregisterService(serviceId) {
+  return request(`/services/${encodeURIComponent(serviceId)}/register`, { method: 'DELETE' })
 }
 
 export function getTaskLogs(dagId, runId, taskId, tryNumber = 1) {

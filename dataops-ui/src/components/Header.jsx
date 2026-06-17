@@ -4,6 +4,7 @@ const NAV_ITEMS = [
   { label: 'Tasks',    view: 'all-tasks', params: {} },
   { label: 'DAGs',     view: 'dags',      params: {} },
   { label: 'Datasets', view: 'datasets',  params: {} },
+  { label: 'Services', view: 'services',  params: {} },
 ]
 
 export default function Header({ view, dagId, runId, taskId, onNavigate }) {
@@ -34,6 +35,7 @@ export default function Header({ view, dagId, runId, taskId, onNavigate }) {
 
   const activeTopView = ['all-tasks', 'dag-builder'].includes(view) ? 'all-tasks'
     : view === 'datasets' ? 'datasets'
+    : view === 'services' ? 'services'
     : 'dags'
 
   return (

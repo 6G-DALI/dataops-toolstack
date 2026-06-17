@@ -8,6 +8,7 @@ import DagTaskList from './components/DagTaskList'
 import AllTaskList from './components/AllTaskList'
 import DagBuilder from './components/DagBuilder'
 import DatasetList from './components/DatasetList'
+import ServiceList from './components/ServiceList'
 import './styles/App.css'
 
 function parseHash() {
@@ -80,6 +81,9 @@ export default function App() {
         )}
         {view === 'datasets' && (
           <DatasetList />
+        )}
+        {view === 'services' && (
+          <ServiceList />
         )}
       </main>
     </div>

@@ -1,15 +1,55 @@
 import { useEffect, useState } from 'react'
 import { getAllTasks } from '../api/airflow'
-import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
-import '../styles/Table.css'
-import '../styles/Button.css'
+import { Table, Button, Tag, Input, Space } from 'antd'
+import { SearchOutlined } from '@ant-design/icons'
+import 'antd/dist/reset.css'
+
+const COLUMNS = (onNavigate) => [
+  {
+    title: 'Task ID',
+    dataIndex: 'task_id',
+    key: 'task_id',
+    render: v => <code style={{ fontSize: '12px' }}>{v}</code>,
+    sorter: (a, b) => a.task_id.localeCompare(b.task_id),
+  },
+  {
+    title: 'DAG',
+    dataIndex: 'dag_id',
+    key: 'dag_id',
+    render: (id) => (
+      <a onClick={() => onNavigate('dag-tasks', { dagId: id })} style={{ cursor: 'pointer' }}>{id}</a>
+    ),
+    sorter: (a, b) => a.dag_id.localeCompare(b.dag_id),
+  },
+  {
+    title: 'Type',
+    dataIndex: 'task_type',
+    key: 'task_type',
+    width: 180,
+    render: v => v ? <Tag>{v}</Tag> : '—',
+  },
+  {
+    title: 'Owner',
+    dataIndex: 'owner',
+    key: 'owner',
+    width: 120,
+    render: v => v || '—',
+  },
+  {
+    title: 'Depends on Past',
+    dataIndex: 'depends_on_past',
+    key: 'depends_on_past',
+    width: 140,
+    render: v => v ? <Tag color="orange">Yes</Tag> : <Tag color="default">No</Tag>,
+  },
+]
 
 export default function AllTaskList({ onNavigate }) {
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [filter, setFilter] = useState('')
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     getAllTasks()
@@ -18,75 +58,47 @@ export default function AllTaskList({ onNavigate }) {
       .finally(() => setLoading(false))
   }, [])
 
-  if (loading) return <LoadingSpinner />
   if (error) return <ErrorMessage message={error} />
 
-  const visible = filter
+  const visible = search
     ? tasks.filter(t =>
-        t.task_id.toLowerCase().includes(filter.toLowerCase()) ||
-        t.dag_id.toLowerCase().includes(filter.toLowerCase())
+        t.task_id.toLowerCase().includes(search.toLowerCase()) ||
+        t.dag_id.toLowerCase().includes(search.toLowerCase())
       )
     : tasks
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <div>
           <h1 className="page-title" style={{ marginBottom: 0 }}>All Tasks</h1>
-          <p className="page-subtitle" style={{ marginTop: '4px' }}>
-            {visible.length} of {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+          <p className="page-subtitle" style={{ margin: '4px 0 0' }}>
+            {visible.length}{visible.length !== tasks.length ? ` of ${tasks.length}` : ''} task{tasks.length !== 1 ? 's' : ''}
           </p>
         </div>
-        <button className="btn btn-primary" onClick={() => onNavigate('dag-builder', {})}>
-          + Build DAG
-        </button>
+        <Space>
+          <Input
+            placeholder="Search by task ID or DAG…"
+            prefix={<SearchOutlined />}
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            allowClear
+            style={{ width: 260 }}
+          />
+          <Button type="primary" onClick={() => onNavigate('dag-builder', {})}>
+            + Build DAG
+          </Button>
+        </Space>
       </div>
 
-      <input
-        type="text"
-        placeholder="Filter by task ID or DAG..."
-        value={filter}
-        onChange={e => setFilter(e.target.value)}
-        style={{
-          width: '100%', padding: '8px 12px', marginBottom: '12px',
-          border: '1px solid #dee2e6', borderRadius: '4px', fontSize: '13px',
-        }}
+      <Table
+        rowKey={(t, i) => `${t.dag_id}-${t.task_id}-${i}`}
+        columns={COLUMNS(onNavigate)}
+        dataSource={visible}
+        loading={loading}
+        pagination={{ pageSize: 25, showSizeChanger: true, pageSizeOptions: [10, 25, 50, 100] }}
+        size="small"
       />
-
-      <div className="table-wrapper">
-        <table>
-          <thead>
-            <tr>
-              <th>Task ID</th>
-              <th>DAG</th>
-              <th>Type</th>
-              <th>Owner</th>
-              <th>Depends on Past</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.length === 0 ? (
-              <tr>
-                <td colSpan={5} style={{ textAlign: 'center', color: '#888', padding: '24px' }}>
-                  No tasks found
-                </td>
-              </tr>
-            ) : visible.map((task, i) => (
-              <tr key={`${task.dag_id}-${task.task_id}-${i}`}>
-                <td><code>{task.task_id}</code></td>
-                <td>
-                  <a onClick={() => onNavigate('dag-tasks', { dagId: task.dag_id })}>
-                    {task.dag_id}
-                  </a>
-                </td>
-                <td>{task.task_type || '—'}</td>
-                <td>{task.owner || '—'}</td>
-                <td>{task.depends_on_past ? 'Yes' : 'No'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   )
 }
