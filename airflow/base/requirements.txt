@@ -1,0 +1,6 @@
+# Python packages baked into the custom Airflow image.
+# These were previously injected at container startup via
+# _PIP_ADDITIONAL_REQUIREMENTS in .env — pin/extend them here instead.
+great_expectations
+pandas
+apache-airflow-providers-amazon
