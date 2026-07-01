@@ -119,6 +119,9 @@ else:
     async def get_dag(dag_id: str) -> dict:
         return await _get(f"/dags/{dag_id}")
 
+    async def get_dag_details(dag_id: str) -> dict:
+        return await _get(f"/dags/{dag_id}/details")
+
     async def set_dag_paused(dag_id: str, is_paused: bool) -> dict:
         return await _patch(f"/dags/{dag_id}", {"is_paused": is_paused})
 

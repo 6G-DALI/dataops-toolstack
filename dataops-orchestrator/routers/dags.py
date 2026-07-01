@@ -26,6 +26,12 @@ async def get_dag(dag_id: str):
     return await af.get_dag(dag_id)
 
 
+@router.get("/{dag_id}/details")
+async def get_dag_details(dag_id: str):
+    """Get full DAG details including params."""
+    return await af.get_dag_details(dag_id)
+
+
 @router.patch("/{dag_id}/pause")
 async def pause_dag(dag_id: str, is_paused: bool = Query(...)):
     """Pause or unpause a DAG."""

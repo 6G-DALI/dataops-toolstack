@@ -134,6 +134,7 @@ def _normalize_distribution(
         "sns_project_name": sns,
         "asset_id":         detail.get("asset_id", ""),
         "asset_title":      asset_title,
+        "dataset_id":       ds["id"],
         "input_key":        f"{ds['id']}/{asset_title}" if asset_title else "",
         "variable_measured": variable_measured,
         "catalog_id":       catalog_id,
