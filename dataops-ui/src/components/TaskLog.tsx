@@ -2,22 +2,23 @@ import { useEffect, useState } from 'react'
 import { getTaskLogs } from '../api/airflow'
 import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
+import type { LogContentEntry, LogEntry, TaskLogResponse } from '../types'
 import '../styles/TaskLog.css'
 
-function parseLog(text) {
+function parseLog(text: string): LogEntry[] {
   // Airflow v2 returns {"content": [...], "continuation_token": "..."}
   try {
-    const obj = JSON.parse(text)
+    const obj = JSON.parse(text) as TaskLogResponse
     if (Array.isArray(obj.content)) {
       return obj.content
         .filter(e => e.event !== '::endgroup::')
         .map(e => {
-          const isGroup = e.event?.startsWith('::group::')
+          const isGroup = e.event?.startsWith('::group::') ?? false
           return {
             timestamp: e.timestamp ?? null,
             level: e.level ? e.level.toUpperCase() : null,
             message: isGroup
-              ? e.event.replace(/^::group::/, '').trim()
+              ? (e.event ?? '').replace(/^::group::/, '').trim()
               : (e.event ?? ''),
             logger: e.logger ?? null,
             source: e.filename ? `${e.filename}:${e.lineno ?? ''}` : null,
@@ -26,14 +27,16 @@ function parseLog(text) {
           }
         })
     }
-  } catch {}
+  } catch {
+    // fall through to line-by-line parsing below
+  }
 
   // Fallback: try each line as JSON
-  return text.split('\n').flatMap(line => {
+  return text.split('\n').flatMap<LogEntry>(line => {
     const trimmed = line.trim()
     if (!trimmed) return []
     try {
-      const obj = JSON.parse(trimmed)
+      const obj = JSON.parse(trimmed) as LogContentEntry
       return [{
         timestamp: obj.timestamp ?? obj.time ?? null,
         level: obj.level ? obj.level.toUpperCase() : null,
@@ -49,7 +52,7 @@ function parseLog(text) {
   })
 }
 
-function formatTimestamp(ts) {
+function formatTimestamp(ts: string | null): string | null {
   if (!ts) return null
   try {
     return new Date(ts).toISOString().replace('T', ' ').replace('Z', '').slice(0, 23)
@@ -58,7 +61,7 @@ function formatTimestamp(ts) {
   }
 }
 
-const LEVEL_CLASS = {
+const LEVEL_CLASS: Record<string, string> = {
   ERROR:    'log-level-error',
   CRITICAL: 'log-level-error',
   WARNING:  'log-level-warning',
@@ -67,15 +70,22 @@ const LEVEL_CLASS = {
   DEBUG:    'log-level-debug',
 }
 
-export default function TaskLog({ dagId, runId, taskId, tryNumber = 1 }) {
-  const [entries, setEntries] = useState([])
+interface TaskLogProps {
+  dagId: string
+  runId: string
+  taskId: string
+  tryNumber?: number
+}
+
+export default function TaskLog({ dagId, runId, taskId, tryNumber = 1 }: TaskLogProps) {
+  const [entries, setEntries] = useState<LogEntry[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     getTaskLogs(dagId, runId, taskId, tryNumber)
       .then(text => setEntries(parseLog(text ?? '')))
-      .catch(err => setError(err.message))
+      .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false))
   }, [dagId, runId, taskId, tryNumber])
 
@@ -86,8 +96,7 @@ export default function TaskLog({ dagId, runId, taskId, tryNumber = 1 }) {
 
   return (
     <div>
-      <h1 className="page-title">Task Log</h1>
-      <p className="page-subtitle">
+      <p className="text-muted">
         Task: <strong>{taskId}</strong> &nbsp;|&nbsp; Try: {tryNumber}
         &nbsp;|&nbsp; {lineCount} line{lineCount !== 1 ? 's' : ''}
       </p>

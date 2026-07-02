@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
+import type { FormEvent } from 'react'
 import { getAllTasks, getCustomTasks, createDag } from '../api/airflow'
 import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
+import type { AllTask, NavigateFn } from '../types'
 import '../styles/DagBuilder.css'
 import '../styles/Button.css'
 
@@ -9,32 +11,36 @@ import '../styles/Button.css'
 const LOCKED_FIRST = 'download_dataset'
 const LOCKED_LAST  = 'store_dataset'
 
-const LOCKED_TASKS = [
+const LOCKED_TASKS: AllTask[] = [
   { task_id: LOCKED_FIRST, dag_id: 'csv_pipeline', task_type: 'PythonOperator', locked: true },
   { task_id: LOCKED_LAST,  dag_id: 'csv_pipeline', task_type: 'PythonOperator', locked: true },
 ]
 
-export default function DagBuilder({ onNavigate }) {
-  const [availableTasks, setAvailableTasks] = useState([])
+interface DagBuilderProps {
+  onNavigate: NavigateFn
+}
+
+export default function DagBuilder({ onNavigate }: DagBuilderProps) {
+  const [availableTasks, setAvailableTasks] = useState<AllTask[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [error, setError] = useState<string | null>(null)
 
   const [filter, setFilter] = useState('')
   // Pipeline always starts with the two locked bookend tasks
-  const [pipeline, setPipeline] = useState(LOCKED_TASKS)
+  const [pipeline, setPipeline] = useState<AllTask[]>(LOCKED_TASKS)
 
   const [dagId, setDagId] = useState('')
   const [description, setDescription] = useState('')
   const [owner, setOwner] = useState('')
 
   const [submitting, setSubmitting] = useState(false)
-  const [submitError, setSubmitError] = useState(null)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   useEffect(() => {
     Promise.all([getAllTasks(), getCustomTasks()])
       .then(([airflow, custom]) => {
         const airflowTasks = airflow.tasks || []
-        const customTasks = (custom.tasks || []).map(t => ({
+        const customTasks: AllTask[] = (custom.tasks || []).map(t => ({
           task_id: t.task_id,
           dag_id: 'custom',
           task_type: 'PythonOperator',
@@ -44,11 +50,11 @@ export default function DagBuilder({ onNavigate }) {
         const merged = [...customTasks, ...airflowTasks.filter(t => !seen.has(t.task_id))]
         setAvailableTasks(merged)
       })
-      .catch(err => setError(err.message))
+      .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false))
   }, [])
 
-  function addTask(task) {
+  function addTask(task: AllTask) {
     // Insert before the locked last task
     setPipeline(prev => [
       ...prev.slice(0, -1),
@@ -57,12 +63,12 @@ export default function DagBuilder({ onNavigate }) {
     ])
   }
 
-  function removeTask(index) {
+  function removeTask(index: number) {
     if (pipeline[index].locked) return
     setPipeline(prev => prev.filter((_, i) => i !== index))
   }
 
-  function moveTask(index, direction) {
+  function moveTask(index: number, direction: number) {
     if (pipeline[index].locked) return
     const swapWith = index + direction
     if (pipeline[swapWith]?.locked) return
@@ -73,7 +79,7 @@ export default function DagBuilder({ onNavigate }) {
     })
   }
 
-  async function handleSubmit(e) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setSubmitError(null)
     if (!dagId.trim()) return setSubmitError('DAG ID is required.')
@@ -90,7 +96,7 @@ export default function DagBuilder({ onNavigate }) {
       })
       onNavigate('dags', {})
     } catch (err) {
-      setSubmitError(err.message)
+      setSubmitError((err as Error).message)
     } finally {
       setSubmitting(false)
     }
@@ -112,8 +118,7 @@ export default function DagBuilder({ onNavigate }) {
 
   return (
     <div>
-      <h1 className="page-title">Build a DAG</h1>
-      <p className="page-subtitle">Pick tasks from the library and arrange them into a pipeline.</p>
+      <p className="text-muted">Pick tasks from the library and arrange them into a pipeline.</p>
 
       <div className="builder-layout">
         {/* Left: task library */}

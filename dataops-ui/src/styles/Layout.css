@@ -1,0 +1,21 @@
+/* DALI brand accents on top of the AdminLTE shell */
+.sidebar-brand .brand-text {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.dali-accent {
+  color: #f2712c;
+}
+
+.app-sidebar .nav-icon {
+  font-size: 1.05rem;
+  margin-right: 0.55rem;
+  vertical-align: -2px;
+}
+
+.app-header .nav-link {
+  font-size: 1.2rem;
+  display: inline-flex;
+  align-items: center;
+}

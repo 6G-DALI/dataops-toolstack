@@ -2,17 +2,22 @@ import { useEffect, useState } from 'react'
 import { getDagTasks } from '../api/airflow'
 import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
+import type { DagTask } from '../types'
 import '../styles/Table.css'
 
-export default function DagTaskList({ dagId }) {
-  const [tasks, setTasks] = useState([])
+interface DagTaskListProps {
+  dagId: string
+}
+
+export default function DagTaskList({ dagId }: DagTaskListProps) {
+  const [tasks, setTasks] = useState<DagTask[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     getDagTasks(dagId)
       .then(data => setTasks(data.tasks || []))
-      .catch(err => setError(err.message))
+      .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false))
   }, [dagId])
 
@@ -21,8 +26,7 @@ export default function DagTaskList({ dagId }) {
 
   return (
     <div>
-      <h1 className="page-title">Tasks</h1>
-      <p className="page-subtitle">
+      <p className="text-muted">
         DAG: <strong>{dagId}</strong> — {tasks.length} task{tasks.length !== 1 ? 's' : ''} defined
       </p>
       <div className="table-wrapper">

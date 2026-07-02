@@ -4,14 +4,30 @@ import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
 import StateBadge from './StateBadge'
 import TaskLog from './TaskLog'
+import type { TaskInstance } from '../types'
 import '../styles/TaskTimeline.css'
 
-export default function TaskInstanceList({ dagId, runId }) {
-  const [tasks, setTasks] = useState([])
-  const [conf, setConf] = useState(null)
+interface TaskInstanceListProps {
+  dagId: string
+  runId: string
+}
+
+interface Selection {
+  taskId: string
+  tryNumber: number
+}
+
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString()
+}
+
+export default function TaskInstanceList({ dagId, runId }: TaskInstanceListProps) {
+  const [tasks, setTasks] = useState<TaskInstance[]>([])
+  const [conf, setConf] = useState<Record<string, unknown> | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-  const [selected, setSelected] = useState(null)
+  const [error, setError] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Selection | null>(null)
 
   useEffect(() => {
     getDagRun(dagId, runId)
@@ -26,18 +42,18 @@ export default function TaskInstanceList({ dagId, runId }) {
         const sorted = (data.task_instances || []).slice().sort((a, b) => {
           if (!a.start_date) return 1
           if (!b.start_date) return -1
-          return new Date(a.start_date) - new Date(b.start_date)
+          return new Date(a.start_date).getTime() - new Date(b.start_date).getTime()
         })
         setTasks(sorted)
       })
-      .catch(err => setError(err.message))
+      .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false))
   }, [dagId, runId])
 
   if (loading) return <LoadingSpinner />
   if (error) return <ErrorMessage message={error} />
 
-  function handleSelect(task) {
+  function handleSelect(task: TaskInstance) {
     setSelected(prev =>
       prev?.taskId === task.task_id ? null : { taskId: task.task_id, tryNumber: task.try_number || 1 }
     )
@@ -46,7 +62,6 @@ export default function TaskInstanceList({ dagId, runId }) {
   return (
     <div>
       <div className="run-header">
-        <h1 className="page-title">{runId}</h1>
         {conf && (
           <div className="run-conf">
             <span className="run-conf-title">Configuration</span>
@@ -62,7 +77,7 @@ export default function TaskInstanceList({ dagId, runId }) {
         )}
       </div>
 
-      <p className="page-subtitle">Task Instances</p>
+      <p className="text-muted">Task Instances</p>
 
       {tasks.length === 0 ? (
         <p className="timeline-empty">No tasks found.</p>
@@ -101,7 +116,7 @@ export default function TaskInstanceList({ dagId, runId }) {
                         <span className="timeline-meta-label">End</span>
                             {formatDate(task.end_date)}
                       </span>
-                      {task.try_number > 1 && (
+                      {(task.try_number ?? 0) > 1 && (
                         <span className="timeline-meta-item">
                           <span className="timeline-meta-label">Try</span>
                           {task.try_number}
@@ -128,9 +143,4 @@ export default function TaskInstanceList({ dagId, runId }) {
       )}
     </div>
   )
-}
-
-function formatDate(iso) {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleString()
 }
