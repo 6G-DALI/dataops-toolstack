@@ -26,6 +26,14 @@
   border-bottom: 2px solid var(--dali-blue);
 }
 
+.builder-panel-header .icon-btn {
+  color: rgba(255,255,255,0.9);
+}
+
+.builder-panel-header .spin {
+  animation: spin 0.7s linear infinite;
+}
+
 .builder-task-filter {
   padding: 8px 12px;
   border-bottom: 1px solid #f0f2f5;

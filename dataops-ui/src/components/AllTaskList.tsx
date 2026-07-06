@@ -88,9 +88,6 @@ export default function AllTaskList({ onNavigate }: AllTaskListProps) {
           <button className="btn btn-sm btn-outline-secondary" onClick={() => onNavigate('task-creator', {})}>
             + Create Task
           </button>
-          <button className="btn btn-sm btn-primary" onClick={() => onNavigate('dag-builder', {})}>
-            + Build DAG
-          </button>
         </div>
       </div>
 

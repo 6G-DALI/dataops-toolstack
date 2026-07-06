@@ -1,12 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { getDags, patchDag, triggerDag, deleteDag } from '../api/airflow'
 import ErrorMessage from './ErrorMessage'
 import LoadingSpinner from './LoadingSpinner'
+import Pagination from './Pagination'
 import StateBadge from './StateBadge'
 import TriggerModal from './TriggerModal'
+import { FiSearch } from 'react-icons/fi'
 import type { Dag, NavigateFn, TriggerConf } from '../types'
 
 type BusyMap = Record<string, boolean>
+type SortKey = 'dag_id' | 'owners'
+type SortDir = 'asc' | 'desc'
 
 interface DagListProps {
   onNavigate: NavigateFn
@@ -20,6 +24,11 @@ export default function DagList({ onNavigate }: DagListProps) {
   const [triggered, setTriggered] = useState<BusyMap>({})
   const [deleting, setDeleting] = useState<BusyMap>({})
   const [triggerModalDagId, setTriggerModalDagId] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [sortKey, setSortKey] = useState<SortKey>('dag_id')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
 
   useEffect(() => {
     getDags()
@@ -27,6 +36,35 @@ export default function DagList({ onNavigate }: DagListProps) {
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false))
   }, [])
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    const list = q
+      ? dags.filter(d =>
+          d.dag_id.toLowerCase().includes(q) ||
+          (d.owners || []).some(o => o.toLowerCase().includes(q))
+        )
+      : dags
+    const sorted = [...list].sort((a, b) => {
+      const av = sortKey === 'owners' ? (a.owners || []).join(', ') : a.dag_id
+      const bv = sortKey === 'owners' ? (b.owners || []).join(', ') : b.dag_id
+      const cmp = av.localeCompare(bv)
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+    return sorted
+  }, [dags, search, sortKey, sortDir])
+
+  const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize)
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
+    else { setSortKey(key); setSortDir('asc') }
+  }
+
+  function sortIndicator(key: SortKey) {
+    if (sortKey !== key) return null
+    return <span className="ms-1 text-muted">{sortDir === 'asc' ? '▲' : '▼'}</span>
+  }
 
   async function handleTogglePause(dag: Dag) {
     const newPaused = !dag.is_paused
@@ -80,28 +118,45 @@ export default function DagList({ onNavigate }: DagListProps) {
         />
       )}
 
-      <div className="card">
-        <div className="card-header d-flex align-items-center justify-content-between">
-          <span className="fw-semibold">DAGs</span>
-          <span className="text-muted small">{dags.length} DAG{dags.length !== 1 ? 's' : ''} found</span>
+      <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+        <span className="text-muted small">
+          {filtered.length}{filtered.length !== dags.length ? ` of ${dags.length}` : ''} DAG{dags.length !== 1 ? 's' : ''}
+        </span>
+        <div className="d-flex align-items-center gap-2">
+          <div className="input-group input-group-sm" style={{ width: 260 }}>
+            <span className="input-group-text"><FiSearch /></span>
+            <input
+              type="text"
+              className="form-control"
+              placeholder="Search by DAG ID or owner…"
+              value={search}
+              onChange={e => { setSearch(e.target.value); setPage(1) }}
+            />
+          </div>
+          <button className="btn btn-sm btn-primary" onClick={() => onNavigate('dag-builder', {})}>
+            + Build DAG
+          </button>
         </div>
+      </div>
+
+      <div className="card">
         <div className="card-body p-0">
           <div className="table-responsive">
             <table className="table table-hover align-middle mb-0">
               <thead>
                 <tr>
-                  <th>DAG ID</th>
-                  <th>Owner</th>
+                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('dag_id')}>DAG ID{sortIndicator('dag_id')}</th>
+                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('owners')}>Owner{sortIndicator('owners')}</th>
                   <th>Status</th>
                   <th className="text-end">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {dags.length === 0 ? (
+                {pageItems.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="text-center text-muted py-4">No DAGs found</td>
                   </tr>
-                ) : dags.map(dag => (
+                ) : pageItems.map(dag => (
                   <tr key={dag.dag_id}>
                     <td>
                       <a href="#" onClick={e => { e.preventDefault(); onNavigate('runs', { dagId: dag.dag_id }) }}>
@@ -144,6 +199,17 @@ export default function DagList({ onNavigate }: DagListProps) {
               </tbody>
             </table>
           </div>
+        </div>
+        <div className="card-footer">
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={filtered.length}
+            pageSizeOptions={[10, 25, 50, 100]}
+            unit="DAGs"
+            onPageChange={setPage}
+            onPageSizeChange={size => { setPageSize(size); setPage(1) }}
+          />
         </div>
       </div>
     </div>

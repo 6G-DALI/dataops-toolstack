@@ -1,19 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { getAllTasks, getCustomTasks, createDag } from '../api/airflow'
 import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
+import { FiRefreshCw } from 'react-icons/fi'
 import type { AllTask, NavigateFn } from '../types'
 import '../styles/DagBuilder.css'
 import '../styles/Button.css'
 
 
-const LOCKED_FIRST = 'download_dataset'
-const LOCKED_LAST  = 'store_dataset'
+const LOCKED_FIRST = 'download_dataset_edc'
 
 const LOCKED_TASKS: AllTask[] = [
   { task_id: LOCKED_FIRST, dag_id: 'csv_pipeline', task_type: 'PythonOperator', locked: true },
-  { task_id: LOCKED_LAST,  dag_id: 'csv_pipeline', task_type: 'PythonOperator', locked: true },
 ]
 
 interface DagBuilderProps {
@@ -23,10 +22,11 @@ interface DagBuilderProps {
 export default function DagBuilder({ onNavigate }: DagBuilderProps) {
   const [availableTasks, setAvailableTasks] = useState<AllTask[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const [filter, setFilter] = useState('')
-  // Pipeline always starts with the two locked bookend tasks
+  // Pipeline always starts with the locked first task
   const [pipeline, setPipeline] = useState<AllTask[]>(LOCKED_TASKS)
 
   const [dagId, setDagId] = useState('')
@@ -36,8 +36,10 @@ export default function DagBuilder({ onNavigate }: DagBuilderProps) {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
-  useEffect(() => {
-    Promise.all([getAllTasks(), getCustomTasks()])
+  const loadTasks = useCallback((isInitial: boolean) => {
+    if (isInitial) setLoading(true)
+    else setRefreshing(true)
+    return Promise.all([getAllTasks(), getCustomTasks()])
       .then(([airflow, custom]) => {
         const airflowTasks = airflow.tasks || []
         const customTasks: AllTask[] = (custom.tasks || []).map(t => ({
@@ -49,18 +51,21 @@ export default function DagBuilder({ onNavigate }: DagBuilderProps) {
         const seen = new Set(customTasks.map(t => t.task_id))
         const merged = [...customTasks, ...airflowTasks.filter(t => !seen.has(t.task_id))]
         setAvailableTasks(merged)
+        setError(null)
       })
       .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (isInitial) setLoading(false)
+        else setRefreshing(false)
+      })
   }, [])
 
+  useEffect(() => {
+    loadTasks(true)
+  }, [loadTasks])
+
   function addTask(task: AllTask) {
-    // Insert before the locked last task
-    setPipeline(prev => [
-      ...prev.slice(0, -1),
-      { ...task, locked: false },
-      prev[prev.length - 1],
-    ])
+    setPipeline(prev => [...prev, { ...task, locked: false }])
   }
 
   function removeTask(index: number) {
@@ -105,9 +110,7 @@ export default function DagBuilder({ onNavigate }: DagBuilderProps) {
   if (loading) return <LoadingSpinner />
   if (error) return <ErrorMessage message={error} />
 
-  const libraryTasks = availableTasks.filter(
-    t => t.task_id !== LOCKED_FIRST && t.task_id !== LOCKED_LAST
-  )
+  const libraryTasks = availableTasks.filter(t => t.task_id !== LOCKED_FIRST)
 
   const visible = filter
     ? libraryTasks.filter(t =>
@@ -123,7 +126,18 @@ export default function DagBuilder({ onNavigate }: DagBuilderProps) {
       <div className="builder-layout">
         {/* Left: task library */}
         <div className="builder-panel">
-          <div className="builder-panel-header">Task Library ({availableTasks.length})</div>
+          <div className="builder-panel-header d-flex align-items-center justify-content-between">
+            <span>Task Library ({availableTasks.length})</span>
+            <button
+              type="button"
+              className="icon-btn"
+              disabled={refreshing}
+              onClick={() => loadTasks(false)}
+              title="Refresh task library"
+            >
+              <FiRefreshCw className={refreshing ? 'spin' : ''} />
+            </button>
+          </div>
           <div className="builder-task-filter">
             <input
               type="text"
