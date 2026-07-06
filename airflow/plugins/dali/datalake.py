@@ -44,22 +44,38 @@ def download_dataset() -> str:
 @task
 def download_dataset_edc() -> str:
     """
-    Retrieve a dataset from the 6G-DALI provider EDC connector into the DataOps
-    S3 bucket, then return its content as a string.
+    Retrieve a dataset from the 6G-DALI provider EDC connector into a fixed
+    DataOps S3 destination, then return its content as a string.
 
     Flow:
-        1. Request the provider's catalogue via the DataOps EDC consumer
-        2. Negotiate a contract for the requested asset
-        3. Generate a presigned PUT URL for the DataOps S3 destination
+        1. Request the provider's catalogue via the DataOps EDC consumer,
+           looking up the asset by "{dataset_id}/{asset_title}"
+        2. Negotiate a contract for the matched offer
+        3. Generate a presigned PUT URL for a freshly, randomly named
+           object in the DataOps S3 destination bucket
         4. Initiate the transfer — the provider EDC PUTs directly to the
            presigned URL (no S3 credentials are shared with the provider)
         5. Poll until the transfer is complete
-        6. Read the file from the DataOps S3 and return its content
+        6. Read the file back from the DataOps S3 destination and return
+           its content
 
     Required params:
-        dataset_id        Asset ID in the provider's catalogue
-        asset_title       Filename of the target object
-        catalogue_id      DataOps S3 bucket where the file will land
+        dataset_id     Folder/prefix of the asset in the provider's catalogue
+        asset_title    Filename of the target object; combined with
+                       dataset_id as "{dataset_id}/{asset_title}" to form
+                       the asset ID used for the catalogue lookup, contract
+                       negotiation, and transfer request
+
+    Optional params:
+        provider_id    Connector ID asserted to the provider during
+                       contract negotiation and transfer
+                       (default: "daliprovider")
+
+    The destination is fixed in code, not derived from DAG params:
+        destination_bucket   "6g-dali-dataops"
+        destination_key      a randomly generated "{uuid4}.csv" filename,
+                              so concurrent runs never collide on the same
+                              object
 
     The provider EDC connector's protocol (DSP) address is fixed via
     EDC_PROVIDER_PROTOCOL_URL (see dali.utils), not a DAG param — a
@@ -85,7 +101,6 @@ def download_dataset_edc() -> str:
     mgmt         = f"{EDC_CONSUMER_URL}/management/v3"
 
     # ── Step 3: presigned PUT URL generation ─────────────────────────────────
-    catalogue_id = params["catalogue_id"]
     asset_title  = params["asset_title"]
     input_key    = f"{dataset_id}/{asset_title}"
 
