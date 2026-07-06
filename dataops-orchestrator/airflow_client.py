@@ -354,7 +354,7 @@ else:
             "    start_date=datetime(2025, 1, 1),",
             f"    schedule={schedule_expr},",
             "    catchup=False,",
-            '    tags=["dataops", "generated"],',
+            '    tags=["6gdali", "dataops", "generated"],',
             f'    default_args={{"owner": "{owner}"}},',
             ")",
             f"def {func_name}():",
