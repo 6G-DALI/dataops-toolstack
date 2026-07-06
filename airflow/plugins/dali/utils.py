@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import math
+import os
 import urllib.request
 
 import great_expectations as gx
@@ -12,6 +13,13 @@ DEFAULT_EXPECTATIONS = [
 ]
 
 DEFAULT_CONN_ID     = "dali-dataspace"
+
+# S3/MinIO connection IDs are fixed per deployment and supplied through the
+# environment — they are intentionally NOT exposed as DAG params so a triggering
+# user cannot point a run at a different Data Space / DataOps bucket.
+DATASPACE_S3_CONN_ID = os.getenv("DATASPACE_S3_CONN_ID", DEFAULT_CONN_ID)
+DATAOPS_S3_CONN_ID   = os.getenv("DATAOPS_S3_CONN_ID", DEFAULT_CONN_ID)
+
 PIVEAU_DATASETS_URL = "https://dspace.sparkworks.net/datasets"
 DALI_NS             = "https://dali-project.eu/ns#"
 

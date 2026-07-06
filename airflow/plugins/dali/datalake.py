@@ -10,7 +10,7 @@ from airflow.decorators import task
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.sdk import get_current_context
 
-from dali.utils import DEFAULT_CONN_ID
+from dali.utils import DATAOPS_S3_CONN_ID, DATASPACE_S3_CONN_ID
 
 EDC_CONSUMER_URL  = os.getenv("EDC_CONSUMER_URL", "http://ds.uc1.ac3.sparkworks.net:18181")
 EDC_POLL_INTERVAL = int(os.getenv("EDC_POLL_INTERVAL", "3"))
@@ -20,7 +20,7 @@ EDC_POLL_TIMEOUT  = int(os.getenv("EDC_POLL_TIMEOUT", "120"))
 @task
 def download_dataset() -> str:
     params = get_current_context()["params"]
-    hook = S3Hook(aws_conn_id=params.get("conn_id", DEFAULT_CONN_ID))
+    hook = S3Hook(aws_conn_id=DATASPACE_S3_CONN_ID)
     input_key = f"{params['dataset_id']}/{params['asset_title']}"
     obj = hook.get_key(key=input_key, bucket_name=params["catalogue_id"])
     return obj.get()["Body"].read().decode("utf-8")
@@ -46,7 +46,9 @@ def download_dataset_edc() -> str:
         dataset_id        Asset ID in the provider's catalogue
         asset_title       Filename of the target object
         catalogue_id      DataOps S3 bucket where the file will land
-        conn_id           Airflow AWS connection for the DataOps S3
+
+    The DataOps S3 connection is taken from the DATAOPS_S3_CONN_ID env var
+    (see dali.utils), not from a DAG param.
     """
     print("download_dataset_edc()")
     params = get_current_context()["params"]
@@ -59,7 +61,6 @@ def download_dataset_edc() -> str:
     # ── Step 3: presigned PUT URL generation ─────────────────────────────────
     catalogue_id = params["catalogue_id"]
     asset_title  = params["asset_title"]
-    conn_id      = params.get("conn_id", DEFAULT_CONN_ID)
     input_key    = f"{dataset_id}/{asset_title}"
 
     # ── 1. Request the offer for the specific asset from the provider ─────────
@@ -148,7 +149,7 @@ def download_dataset_edc() -> str:
         raise TimeoutError(f"[edc] negotiation did not complete within {EDC_POLL_TIMEOUT}s")
 
     # ── 4. Generate a presigned PUT URL for the DataOps S3 destination ───────
-    hook = S3Hook(aws_conn_id=conn_id)
+    hook = S3Hook(aws_conn_id=DATAOPS_S3_CONN_ID)
     s3_client = hook.get_conn()
     presigned_put_url = s3_client.generate_presigned_url(
         "put_object",
@@ -214,7 +215,7 @@ def upload_results(report: dict) -> str:
 
     print(f"[dali] upload_results bucket={catalogue_id!r} output_key={output_key!r}")
 
-    hook = S3Hook(aws_conn_id=params.get("conn_id", DEFAULT_CONN_ID))
+    hook = S3Hook(aws_conn_id=DATASPACE_S3_CONN_ID)
     hook.load_string(
         string_data=json.dumps(report, indent=2),
         key=output_key,
