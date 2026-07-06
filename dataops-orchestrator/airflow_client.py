@@ -255,22 +255,32 @@ else:
         "publish_quality_to_piveau": ("dali.dataspace", 1),
     }
 
-    def _custom_task_arity(code: str, task_id: str) -> int:
+    def _locate_custom_task(code: str, task_id: str):
         """
-        Count the non-context parameters a custom task's function accepts
-        (excluding **kwargs-style catch-alls used for the Airflow context),
-        so the generated chain only threads the previous task's return value
-        in as an argument when the function can actually accept it.
+        Parse a custom task's saved source and locate its `task_id` function.
+
+        Returns (arity, decorator_insert_line) where arity is the count of
+        non-context parameters the function accepts (excluding **kwargs-style
+        catch-alls used for the Airflow context, so the generated chain only
+        threads the previous task's return value in when the function can
+        actually accept it), and decorator_insert_line is the 1-indexed
+        source line an `@task` decorator should be inserted directly above —
+        this is NOT necessarily line 1, since saved task source may contain
+        its own leading imports/docstring/other functions before the target
+        one. Returns None if the function can't be found (e.g. renamed after
+        saving, or unparseable source).
         """
         try:
             tree = ast.parse(code)
         except SyntaxError:
-            return 0
+            return None
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name == task_id:
                 a = node.args
-                return len(a.posonlyargs) + len(a.args) + len(a.kwonlyargs)
-        return 0
+                arity = len(a.posonlyargs) + len(a.args) + len(a.kwonlyargs)
+                insert_line = node.decorator_list[0].lineno if node.decorator_list else node.lineno
+                return arity, insert_line
+        return None
 
     def _generate_dag_code(dag_id: str, description: str, schedule: str, task_ids: list, owner: str = "airflow") -> str:
         import_lines: list[str] = []
@@ -289,8 +299,18 @@ else:
             if os.path.exists(fpath):
                 with open(fpath) as f:
                     code = f.read().strip()
-                arity[t] = _custom_task_arity(code, t)
-                inline_blocks.append(f"@task\n{code}")
+                located = _locate_custom_task(code, t)
+                if located:
+                    arity[t], insert_line = located
+                    code_lines = code.splitlines()
+                    code_lines.insert(insert_line - 1, "@task")
+                    inline_blocks.append("\n".join(code_lines))
+                else:
+                    arity[t] = 0
+                    inline_blocks.append(
+                        f"@task\ndef {t}(**context):\n"
+                        f"    pass  # TODO: could not find a '{t}' function in the saved task source"
+                    )
             else:
                 inline_blocks.append(f"@task\ndef {t}(**context):\n    pass  # TODO: implement {t}")
                 arity[t] = 0
