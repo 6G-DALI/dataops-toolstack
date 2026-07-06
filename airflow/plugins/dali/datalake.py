@@ -10,9 +10,13 @@ from airflow.decorators import task
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.sdk import get_current_context
 
-from dali.utils import DATAOPS_S3_CONN_ID, DATASPACE_S3_CONN_ID
+from dali.utils import (
+    DATAOPS_S3_CONN_ID,
+    DATASPACE_S3_CONN_ID,
+    EDC_CONSUMER_URL,
+    EDC_PROVIDER_PROTOCOL_URL,
+)
 
-EDC_CONSUMER_URL  = os.getenv("EDC_CONSUMER_URL", "http://ds.uc1.ac3.sparkworks.net:18181")
 EDC_POLL_INTERVAL = int(os.getenv("EDC_POLL_INTERVAL", "3"))
 EDC_POLL_TIMEOUT  = int(os.getenv("EDC_POLL_TIMEOUT", "120"))
 
@@ -21,7 +25,17 @@ EDC_POLL_TIMEOUT  = int(os.getenv("EDC_POLL_TIMEOUT", "120"))
 def download_dataset() -> str:
     params = get_current_context()["params"]
     hook = S3Hook(aws_conn_id=DATASPACE_S3_CONN_ID)
+
+    conn = hook.get_connection(DATASPACE_S3_CONN_ID)
+    print(f"[dali] conn_id={DATASPACE_S3_CONN_ID!r} login={conn.login!r} extra={conn.extra!r}")
+    client = hook.get_conn()
+    print(f"[dali] resolved endpoint_url={client.meta.endpoint_url!r} region={client.meta.region_name!r} "
+          f"addressing_style={client.meta.config.s3.get('addressing_style') if client.meta.config.s3 else None!r}")
+
     input_key = f"{params['dataset_id']}/{params['asset_title']}"
+    print(f"[dali] dataset_id={params['dataset_id']} asset_title={params['asset_title']}")
+    print(f"[dali] bucket={params['catalogue_id']!r} key={input_key!r}")
+
     obj = hook.get_key(key=input_key, bucket_name=params["catalogue_id"])
     return obj.get()["Body"].read().decode("utf-8")
 
@@ -42,10 +56,21 @@ def download_dataset_edc() -> str:
         6. Read the file from the DataOps S3 and return its content
 
     Required params:
-        edc_provider_url  Base URL of the provider EDC connector
         dataset_id        Asset ID in the provider's catalogue
         asset_title       Filename of the target object
         catalogue_id      DataOps S3 bucket where the file will land
+
+    The provider EDC connector's protocol (DSP) address is fixed via
+    EDC_PROVIDER_PROTOCOL_URL (see dali.utils), not a DAG param — a
+    triggering user should not be able to point this DAG at an arbitrary
+    connector, and the consumer only ever needs the provider's protocol
+    port, never its management or control ports.
+
+    The DataOps EDC consumer connector's MANAGEMENT API (a separate service
+    from the provider above) is likewise fixed via EDC_CONSUMER_URL (see
+    dali.utils) — every catalog/negotiation/transfer call below is made
+    against *our own* connector's management API; the provider is only
+    ever addressed indirectly, via counterPartyAddress.
 
     The DataOps S3 connection is taken from the DATAOPS_S3_CONN_ID env var
     (see dali.utils), not from a DAG param.
@@ -54,7 +79,7 @@ def download_dataset_edc() -> str:
     params = get_current_context()["params"]
 
     # ── Step 1 & 2: catalogue request + contract negotiation ─────────────────
-    provider_url = params["edc_provider_url"].rstrip("/")
+    provider_url = EDC_PROVIDER_PROTOCOL_URL
     dataset_id   = params["dataset_id"]
     mgmt         = f"{EDC_CONSUMER_URL}/management/v3"
 
