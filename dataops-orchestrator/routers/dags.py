@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Query
-from typing import Optional
+from fastapi import APIRouter, Body, Query
+from typing import Any
 from pydantic import BaseModel
 import airflow_client as af
 
@@ -38,17 +38,17 @@ async def pause_dag(dag_id: str, is_paused: bool = Query(...)):
     return await af.set_dag_paused(dag_id, is_paused)
 
 
-class TriggerRequest(BaseModel):
-    conn_id: Optional[str] = "dali-dataspace"
-    input_key: Optional[str] = None
-    catalogue_id: Optional[str] = None
-    expectations: Optional[list] = []
-
-
 @router.post("/{dag_id}/trigger")
-async def trigger_dag(dag_id: str, body: TriggerRequest = None):
-    """Trigger a new DAG run with an optional source dataset."""
-    conf = body.model_dump(exclude_none=True) if body else {}
+async def trigger_dag(dag_id: str, conf: dict[str, Any] = Body(default_factory=dict)):
+    """
+    Trigger a new DAG run. `conf` is passed straight through as dag_run.conf.
+
+    Different DAGs declare different params (e.g. dataset_id/asset_title/
+    catalogue_id vs. input_key/edc_provider_url) — the DataOps UI already
+    builds the request body per-DAG from that DAG's own param schema
+    (see TriggerModal.tsx), so this endpoint must not constrain it to a
+    fixed field set or it will silently drop whatever it doesn't declare.
+    """
     return await af.trigger_dag(dag_id, conf)
 
 
