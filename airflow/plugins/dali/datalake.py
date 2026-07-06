@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 
 import requests
@@ -176,14 +177,18 @@ def download_dataset_edc() -> str:
     # ── 4. Generate a presigned PUT URL for the DataOps S3 destination ───────
     hook = S3Hook(aws_conn_id=DATAOPS_S3_CONN_ID)
     s3_client = hook.get_conn()
+
+    destination_bucket = "6g-dali-dataops"
+    destination_key = f"{uuid.uuid4()}.csv"
+
     presigned_put_url = s3_client.generate_presigned_url(
         "put_object",
-        Params={"Bucket": catalogue_id, "Key": input_key},
+        Params={"Bucket": destination_bucket, "Key": destination_key},
         ExpiresIn=EDC_POLL_TIMEOUT * 2,
     )
     print(f"presigned_put_url: {presigned_put_url}")
 
-    print(f"[edc] presigned PUT URL generated for s3://{catalogue_id}/{input_key}")
+    print(f"[edc] presigned PUT URL generated for s3://{destination_bucket}/{destination_key}")
 
     # ── 5. Initiate data transfer — provider PUTs to our presigned URL ────────
     xfer_resp = requests.post(
@@ -225,8 +230,8 @@ def download_dataset_edc() -> str:
         raise TimeoutError(f"[edc] transfer did not complete within {EDC_POLL_TIMEOUT}s")
 
     # ── 7. Retrieve the transferred file from DataOps S3 ─────────────────────
-    print(f"[edc] retrieving {input_key} from bucket {catalogue_id}")
-    obj = hook.get_key(key=input_key, bucket_name=catalogue_id)
+    print(f"[edc] retrieving {destination_key} from bucket {destination_bucket}")
+    obj = hook.get_key(key=destination_key, bucket_name=destination_bucket)
     return obj.get()["Body"].read().decode("utf-8")
 
 
