@@ -84,8 +84,8 @@ export function patchDag(dagId: string, isPaused: boolean): Promise<unknown> {
   })
 }
 
-export function triggerDag(dagId: string, conf: TriggerConf = {}): Promise<unknown> {
-  return request<unknown>(`/dags/${encodeURIComponent(dagId)}/trigger`, {
+export function triggerDag(dagId: string, conf: TriggerConf = {}): Promise<DagRun> {
+  return request<DagRun>(`/dags/${encodeURIComponent(dagId)}/trigger`, {
     method: 'POST',
     body: JSON.stringify(conf),
   })

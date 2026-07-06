@@ -131,7 +131,7 @@
   border-radius: 0;
   flex: 1;
   min-height: 0;
-  max-height: none;
+  max-height: 65vh;
 }
 
 .timeline-log-panel .log-container pre {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getTaskLogs } from '../api/airflow'
 import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
@@ -75,19 +75,53 @@ interface TaskLogProps {
   runId: string
   taskId: string
   tryNumber?: number
+  state?: string | null
 }
 
-export default function TaskLog({ dagId, runId, taskId, tryNumber = 1 }: TaskLogProps) {
+const POLL_INTERVAL_MS = 3000
+const TERMINAL_TASK_STATES = new Set(['success', 'failed', 'skipped', 'upstream_failed', 'removed'])
+
+export default function TaskLog({ dagId, runId, taskId, tryNumber = 1, state }: TaskLogProps) {
   const [entries, setEntries] = useState<LogEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    getTaskLogs(dagId, runId, taskId, tryNumber)
-      .then(text => setEntries(parseLog(text ?? '')))
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false))
-  }, [dagId, runId, taskId, tryNumber])
+    const el = containerRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [entries])
+
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    async function load(isInitial: boolean) {
+      try {
+        const text = await getTaskLogs(dagId, runId, taskId, tryNumber)
+        if (cancelled) return
+        setEntries(parseLog(text ?? ''))
+        if (isInitial) setError(null)
+      } catch (err) {
+        if (isInitial) setError((err as Error).message)
+        // on later polls, keep the last good log and just retry silently
+      } finally {
+        if (isInitial) setLoading(false)
+      }
+
+      if (cancelled) return
+      const isTerminal = !!state && TERMINAL_TASK_STATES.has(state.toLowerCase())
+      if (isTerminal) return
+      timer = setTimeout(() => load(false), POLL_INTERVAL_MS)
+    }
+
+    load(true)
+
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [dagId, runId, taskId, tryNumber, state])
 
   if (loading) return <LoadingSpinner />
   if (error) return <ErrorMessage message={error} />
@@ -100,7 +134,7 @@ export default function TaskLog({ dagId, runId, taskId, tryNumber = 1 }: TaskLog
         Task: <strong>{taskId}</strong> &nbsp;|&nbsp; Try: {tryNumber}
         &nbsp;|&nbsp; {lineCount} line{lineCount !== 1 ? 's' : ''}
       </p>
-      <div className="log-container">
+      <div className="log-container" ref={containerRef}>
         {entries.length === 0 ? (
           <span className="log-empty">(empty log)</span>
         ) : (

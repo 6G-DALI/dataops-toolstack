@@ -43,9 +43,10 @@ export default function DagList({ onNavigate }: DagListProps) {
     setTriggerModalDagId(null)
     setTriggering(prev => ({ ...prev, [dagId]: true }))
     try {
-      await triggerDag(dagId, conf)
+      const run = await triggerDag(dagId, conf)
       setTriggered(prev => ({ ...prev, [dagId]: true }))
       setTimeout(() => setTriggered(prev => ({ ...prev, [dagId]: false })), 3000)
+      onNavigate('tasks', { dagId, runId: run.dag_run_id })
     } catch (err) {
       setError((err as Error).message)
     } finally {

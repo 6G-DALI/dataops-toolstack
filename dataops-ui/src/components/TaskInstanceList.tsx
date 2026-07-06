@@ -17,6 +17,9 @@ interface Selection {
   tryNumber: number
 }
 
+const POLL_INTERVAL_MS = 3000
+const TERMINAL_RUN_STATES = new Set(['success', 'failed'])
+
 function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—'
   return new Date(iso).toLocaleString()
@@ -30,24 +33,50 @@ export default function TaskInstanceList({ dagId, runId }: TaskInstanceListProps
   const [selected, setSelected] = useState<Selection | null>(null)
 
   useEffect(() => {
-    getDagRun(dagId, runId)
-      .then(run => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    async function load(isInitial: boolean) {
+      let runState: string | null | undefined
+
+      try {
+        const run = await getDagRun(dagId, runId)
+        if (cancelled) return
         const c = run.conf
         setConf(c && Object.keys(c).length > 0 ? c : null)
-      })
-      .catch(() => {})
+        runState = run.state
+      } catch {
+        // conf/state is supplementary — don't let it block task polling
+      }
 
-    getTaskInstances(dagId, runId)
-      .then(data => {
+      try {
+        const data = await getTaskInstances(dagId, runId)
+        if (cancelled) return
         const sorted = (data.task_instances || []).slice().sort((a, b) => {
           if (!a.start_date) return 1
           if (!b.start_date) return -1
           return new Date(a.start_date).getTime() - new Date(b.start_date).getTime()
         })
         setTasks(sorted)
-      })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false))
+        if (isInitial) setError(null)
+      } catch (err) {
+        if (isInitial) setError((err as Error).message)
+        // on later polls, keep the last good view and just retry silently
+      } finally {
+        if (isInitial) setLoading(false)
+      }
+
+      if (cancelled) return
+      if (runState && TERMINAL_RUN_STATES.has(runState)) return
+      timer = setTimeout(() => load(false), POLL_INTERVAL_MS)
+    }
+
+    load(true)
+
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
   }, [dagId, runId])
 
   if (loading) return <LoadingSpinner />
@@ -136,6 +165,7 @@ export default function TaskInstanceList({ dagId, runId }: TaskInstanceListProps
                 runId={runId}
                 taskId={selected.taskId}
                 tryNumber={selected.tryNumber}
+                state={tasks.find(t => t.task_id === selected.taskId)?.state}
               />
             </div>
           )}
