@@ -126,7 +126,7 @@ def download_dataset_edc() -> str:
     print(f"[edc] found offer {offer_id} for asset {dataset_id}")
 
     # ── 2. Initiate contract negotiation ─────────────────────────────────────
-    provider_id = params.get("provider_id", "provider")
+    provider_id = params.get("provider_id", "daliprovider")
     neg_resp = requests.post(
         f"{mgmt}/contractnegotiations",
         json={
