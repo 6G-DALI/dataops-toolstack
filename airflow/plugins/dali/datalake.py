@@ -100,7 +100,7 @@ def download_dataset_edc() -> str:
                 "filterExpression": [{
                     "operandLeft": "https://w3id.org/edc/v0.0.1/ns/id",
                     "operator": "=",
-                    "operandRight": dataset_id,
+                    "operandRight": input_key,
                 }]
             },
         },
@@ -144,7 +144,7 @@ def download_dataset_edc() -> str:
                 "odrl:permission":  offer.get("odrl:permission", []),
                 "odrl:prohibition": offer.get("odrl:prohibition", []),
                 "odrl:obligation":  offer.get("odrl:obligation", []),
-                "odrl:target":      {"@id": dataset_id},
+                "odrl:target":      {"@id": input_key},
                 "odrl:assigner":    {"@id": provider_id},
             },
         },
@@ -193,7 +193,7 @@ def download_dataset_edc() -> str:
             "connectorId":         provider_id,
             "protocol":            "dataspace-protocol-http",
             "contractId":          agreement_id,
-            "assetId":             dataset_id,
+            "assetId":             input_key,
             "transferType":        "PresignedHttpData-PUSH",
             "dataDestination": {
                 "type":    "PresignedHttpData",
