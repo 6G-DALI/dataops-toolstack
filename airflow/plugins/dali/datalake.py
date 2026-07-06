@@ -181,6 +181,8 @@ def download_dataset_edc() -> str:
         Params={"Bucket": catalogue_id, "Key": input_key},
         ExpiresIn=EDC_POLL_TIMEOUT * 2,
     )
+    print(f"presigned_put_url: {presigned_put_url}")
+
     print(f"[edc] presigned PUT URL generated for s3://{catalogue_id}/{input_key}")
 
     # ── 5. Initiate data transfer — provider PUTs to our presigned URL ────────
