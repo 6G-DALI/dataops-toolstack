@@ -26,6 +26,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # QEMU provides the arm64 emulation needed to build a non-native arch on
+      # the amd64 GitHub runner.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # Buildx is required for multi-platform builds.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -48,6 +57,7 @@ jobs:
         with:
           context: airflow/base
           push: true
+          platforms: linux/amd64,linux/arm64/v8
           build-args: |
             AIRFLOW_VERSION=${{ env.AIRFLOW_VERSION }}
           tags: ${{ steps.meta.outputs.tags }}
