@@ -23,7 +23,8 @@ from dali.utils import (
 @task
 def run_expectations(csv_content: str) -> dict:
     params = get_current_context()["params"]
-    input_key = params["input_key"]
+    dataset_id = params["dataset_id"]
+    input_key = f"{dataset_id}/{params['asset_title']}"
     expectations = parse_expectations(params["expectations"])
 
     df = pd.read_csv(io.StringIO(csv_content))
@@ -37,7 +38,6 @@ def run_expectations(csv_content: str) -> dict:
     if expectations:
         resolved = expectations
     else:
-        dataset_id = input_key.split("/")[0]
         columns = fetch_columns_from_piveau(dataset_id)
         resolved = list(DEFAULT_EXPECTATIONS)
         for col in columns:
