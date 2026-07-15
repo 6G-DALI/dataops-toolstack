@@ -1,14 +1,26 @@
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import rabbitmq_consumer
 from config import HOST, PORT, CORS_ORIGINS
 from routers import dags, runs, tasks, datasets, stats, services
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    rabbitmq_consumer.start()
+    yield
+    await rabbitmq_consumer.stop()
+
 
 app = FastAPI(
     title="DataOps Orchestrator",
     description="Middleware API between the React UI and Apache Airflow",
     version="0.2.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
