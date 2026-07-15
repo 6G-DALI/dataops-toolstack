@@ -29,24 +29,19 @@ def publish_quality_to_piveau(report: dict) -> None:
     get_resp.raise_for_status()
     graph = get_resp.json()
 
-    dataset_uri = base_url
-    run_time    = report["run_time"]
+    run_time = report["run_time"]
 
     nodes = graph.get("@graph", [])
 
-    ds_node = next((n for n in nodes if n.get("@id") == dataset_uri), None)
-    dist_ref = (ds_node or {}).get("dcat:distribution")
-    if isinstance(dist_ref, list):
-        dist_ref = dist_ref[0] if dist_ref else None
-    dist_uri = dist_ref.get("@id") if isinstance(dist_ref, dict) else dist_ref
-    if not dist_uri:
-        print(f"[dali] dataset {dataset_id} has no dcat:distribution — skipping quality publish")
-        return
+    def _node_types(node: dict) -> list[str]:
+        t = node.get("@type", [])
+        return t if isinstance(t, list) else [t]
 
-    dist_node = next((n for n in nodes if n.get("@id") == dist_uri), None)
+    dist_node = next((n for n in nodes if any("Distribution" in t for t in _node_types(n))), None)
     if dist_node is None:
-        dist_node = {"@id": dist_uri, "@type": "dcat:Distribution"}
-        nodes.append(dist_node)
+        print(f"[dali] dataset {dataset_id} has no dcat:Distribution node — skipping quality publish")
+        return
+    dist_uri = dist_node["@id"]
 
     meas_refs  = []
     meas_nodes = []
