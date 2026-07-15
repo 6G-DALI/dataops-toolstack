@@ -14,7 +14,7 @@ from dali.utils import DALI_NS, PIVEAU_DATASETS_URL
 def publish_quality_to_piveau(report: dict) -> None:
     import requests as req
     params = get_current_context()["params"]
-    dataset_id   = params["input_key"].split("/")[0]
+    dataset_id   = params["dataset_id"]
     catalogue_id = params["catalogue_id"]
     api_key      = os.environ["PIVEAU_API_KEY"]
 
@@ -32,13 +32,29 @@ def publish_quality_to_piveau(report: dict) -> None:
     dataset_uri = base_url
     run_time    = report["run_time"]
 
+    nodes = graph.get("@graph", [])
+
+    ds_node = next((n for n in nodes if n.get("@id") == dataset_uri), None)
+    dist_ref = (ds_node or {}).get("dcat:distribution")
+    if isinstance(dist_ref, list):
+        dist_ref = dist_ref[0] if dist_ref else None
+    dist_uri = dist_ref.get("@id") if isinstance(dist_ref, dict) else dist_ref
+    if not dist_uri:
+        print(f"[dali] dataset {dataset_id} has no dcat:distribution — skipping quality publish")
+        return
+
+    dist_node = next((n for n in nodes if n.get("@id") == dist_uri), None)
+    if dist_node is None:
+        dist_node = {"@id": dist_uri, "@type": "dcat:Distribution"}
+        nodes.append(dist_node)
+
     meas_refs  = []
     meas_nodes = []
     for r in report["results"]:
         exp_type = r["expectation_type"]
         col      = r.get("kwargs", {}).get("column", "")
         suffix   = f"{exp_type}_{col}" if col else exp_type
-        meas_uri = f"{dataset_uri}/quality/{suffix}"
+        meas_uri = f"{dist_uri}/quality/{suffix}"
         meas_refs.append({"@id": meas_uri})
         meas_nodes.append({
             "@id":                 meas_uri,
@@ -52,19 +68,14 @@ def publish_quality_to_piveau(report: dict) -> None:
             "dct:date":            {"@value": run_time, "@type": "xsd:dateTime"},
         })
 
-    nodes = graph.get("@graph", [])
-    nodes = [n for n in nodes if not str(n.get("@id", "")).startswith(f"{dataset_uri}/quality/")]
-
-    ds_node = next((n for n in nodes if n.get("@id") == dataset_uri), None)
-    if ds_node is None:
-        ds_node = {"@id": dataset_uri, "@type": "dcat:Dataset"}
-        nodes.append(ds_node)
-    for key in list(ds_node.keys()):
+    nodes = [n for n in nodes if not str(n.get("@id", "")).startswith(f"{dist_uri}/quality/")]
+    dist_node = next(n for n in nodes if n.get("@id") == dist_uri)
+    for key in list(dist_node.keys()):
         if "hasQualityMeasurement" in key:
-            del ds_node[key]
+            del dist_node[key]
 
     if meas_refs:
-        ds_node["dqv:hasQualityMeasurement"] = meas_refs
+        dist_node["dqv:hasQualityMeasurement"] = meas_refs
         nodes.extend(meas_nodes)
 
     graph["@graph"] = nodes
