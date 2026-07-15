@@ -30,6 +30,13 @@ async def get_dataset(dataset_id: int):
     return await af.get_dataset(dataset_id)
 
 
+@router.get("/{dataset_id}/distributions")
+async def list_distributions(dataset_id: str, catalogue_id: str | None = None):
+    """List the distributions of a single dataset, for the second step of the
+    Catalogue -> Dataset -> Distribution DAG-trigger picker."""
+    return await af.list_distributions(dataset_id, catalogue_id)
+
+
 @router.post("/submit")
 async def submit_dataset(file: UploadFile, metadata: str = Form(...), expectations: str = Form("[]")):
     """

@@ -307,6 +307,12 @@ async def list_catalogues() -> dict:
     return {"catalogues": catalogues, "total_entries": len(catalogues)}
 
 
+async def list_distributions(dataset_id: str, catalogue_id: str | None = None) -> dict:
+    from piveau_client import fetch_distributions
+    distributions = await fetch_distributions(dataset_id, catalogue_id=catalogue_id)
+    return {"distributions": distributions, "total_entries": len(distributions)}
+
+
 _custom_tasks: list = []
 
 

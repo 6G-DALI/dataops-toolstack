@@ -1,7 +1,11 @@
 """
 Fetches datasets from a piveau-hub-search instance and normalises them
-to the flat dataset shape used by the orchestrator API.
-One entry is produced per distribution.
+to the flat shapes used by the orchestrator API.
+
+Two levels are exposed: `fetch_datasets` returns one entry per dataset,
+`fetch_distributions` returns one entry per distribution of a single
+dataset (mirroring the Catalogue -> Dataset -> Distribution drill-down
+used by the DataOps UI's DAG trigger picker).
 """
 
 import asyncio
@@ -155,28 +159,21 @@ def _normalize_distribution(
     }
 
 
-def _expand(
-    ds: dict, sns: str,
-    variable_measured: list[str], dist_details: dict[str, dict], raw: dict
-) -> list[dict]:
-    """Return one entry per distribution; fall back to one entry if none."""
-    dists = ds.get("distributions") or []
-    if dists:
-        return [
-            _normalize_distribution(ds, dist, sns, variable_measured, dist_details, raw)
-            for dist in dists
-        ]
+def _fallback_distribution(ds: dict, sns: str, variable_measured: list[str], raw: dict) -> dict:
+    """A dataset-as-distribution stand-in, used when a dataset has no distributions."""
     landing = ds.get("landing_page") or []
     uri = landing[0].get("resource", "") if landing else ds.get("resource", ds.get("id", ""))
     catalog = ds.get("catalog") or {}
     catalog_id = catalog.get("id", "")
-    return [{
+    return {
         "id":               f"piveau_{ds['id']}",
         "name":             _title(ds.get("title")),
         "uri":              uri,
         "sns_project_name": sns,
         "asset_id":         "",
         "asset_title":      "",
+        "dataset_id":       ds["id"],
+        "input_key":        "",
         "variable_measured": variable_measured,
         "catalog_id":       catalog_id,
         "catalog_title":    _title(catalog.get("title")),
@@ -193,38 +190,114 @@ def _expand(
         "created_at": ds.get("issued"),
         "updated_at": ds.get("modified"),
         "raw": raw,
-    }]
+    }
+
+
+def _expand(
+    ds: dict, sns: str,
+    variable_measured: list[str], dist_details: dict[str, dict], raw: dict
+) -> list[dict]:
+    """Return one entry per distribution of `ds`; fall back to one entry if none."""
+    dists = ds.get("distributions") or []
+    if dists:
+        return [
+            _normalize_distribution(ds, dist, sns, variable_measured, dist_details, raw)
+            for dist in dists
+        ]
+    return [_fallback_distribution(ds, sns, variable_measured, raw)]
+
+
+def _normalize_dataset(ds: dict, sns: str, variable_measured: list[str], raw: dict) -> dict:
+    """One entry per dataset — distribution details are fetched separately, see fetch_distributions."""
+    catalog = ds.get("catalog") or {}
+    catalog_id = catalog.get("id", "")
+    dists = ds.get("distributions") or []
+    formats = sorted({
+        fmt for d in dists
+        if (fmt := (d.get("format") or {}).get("label", ""))
+    })
+    return {
+        "id":                 ds["id"],
+        "name":               _title(ds.get("title")),
+        "sns_project_name":   sns,
+        "dataset_id":         ds["id"],
+        "distribution_count": len(dists),
+        "variable_measured":  variable_measured,
+        "catalog_id":         catalog_id,
+        "catalog_title":      _title(catalog.get("title")),
+        "catalog_url":        f"{_DSPACE_CATALOGUE_BASE}/catalogues/{catalog_id}?locale=en" if catalog_id else "",
+        "extra": {
+            "formats":     formats,
+            "description": _title(ds.get("description")),
+            "source":      "piveau",
+            "publisher":   (ds.get("publisher") or {}).get("name", ""),
+        },
+        "consuming_dags": [],
+        "producing_dags": [],
+        "created_at": ds.get("issued"),
+        "updated_at": ds.get("modified"),
+        "raw": raw,
+    }
+
+
+async def _search_datasets(catalogue_id: str | None = None, limit: int = 100) -> list[tuple[dict, tuple]]:
+    """Query piveau's dataset search index and fetch each result's JSON-LD detail.
+
+    Returns a list of (search_result, (sns, variable_measured, dist_details, raw))
+    pairs — the shared groundwork for both fetch_datasets and fetch_distributions.
+    """
+    params = {"index": "dataset", "limit": limit}
+    if catalogue_id:
+        params["catalog"] = catalogue_id
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(f"{PIVEAU_URL}{_SEARCH_PATH}", params=params)
+        r.raise_for_status()
+        data = r.json()
+        results = [ds for ds in data.get("result", {}).get("results", [])
+                   if ds.get("index") == "dataset"]
+
+        details = await asyncio.gather(
+            *[_fetch_dataset_detail(client, ds["id"]) for ds in results]
+        )
+        return list(zip(results, details))
 
 
 async def fetch_datasets(catalogue_id: str | None = None, limit: int = 100) -> list[dict]:
-    """Fetch datasets from piveau and return one entry per distribution.
+    """Fetch datasets from piveau — one entry per dataset.
 
     When `catalogue_id` is given, only datasets in that catalogue are
     requested from piveau — this both scopes the result to a single
     catalogue and avoids that catalogue's datasets being crowded out by
     unrelated ones under the shared `limit`.
     """
-    params = {"index": "dataset", "limit": limit}
-    if catalogue_id:
-        params["catalog"] = catalogue_id
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{PIVEAU_URL}{_SEARCH_PATH}", params=params)
-            r.raise_for_status()
-            data = r.json()
-            results = [ds for ds in data.get("result", {}).get("results", [])
-                       if ds.get("index") == "dataset"]
-
-            details = await asyncio.gather(
-                *[_fetch_dataset_detail(client, ds["id"]) for ds in results]
-            )
-
-            entries = []
-            for ds, (sns, variable_measured, dist_details, raw) in zip(results, details):
-                entries.extend(_expand(ds, sns, variable_measured, dist_details, raw))
-            return entries
+        pairs = await _search_datasets(catalogue_id, limit)
+        return [
+            _normalize_dataset(ds, sns, variable_measured, raw)
+            for ds, (sns, variable_measured, dist_details, raw) in pairs
+        ]
     except Exception as exc:
         print(f"[piveau] fetch_datasets failed: {exc}")
+        return []
+
+
+async def fetch_distributions(
+    dataset_id: str, catalogue_id: str | None = None, limit: int = 100
+) -> list[dict]:
+    """Fetch the distributions of a single dataset, one entry each.
+
+    `catalogue_id` narrows the underlying search when known (the caller
+    already picked a catalogue in the two-step Catalogue -> Dataset flow),
+    but isn't required to find the dataset.
+    """
+    try:
+        pairs = await _search_datasets(catalogue_id, limit)
+        for ds, (sns, variable_measured, dist_details, raw) in pairs:
+            if str(ds.get("id")) == str(dataset_id):
+                return _expand(ds, sns, variable_measured, dist_details, raw)
+        return []
+    except Exception as exc:
+        print(f"[piveau] fetch_distributions failed: {exc}")
         return []
 
 
