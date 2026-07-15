@@ -240,13 +240,26 @@ def _normalize_dataset(ds: dict, sns: str, variable_measured: list[str], raw: di
     }
 
 
+def _dataset_catalog_id(ds: dict) -> str:
+    return (ds.get("catalog") or {}).get("id", "")
+
+
 async def _search_datasets(catalogue_id: str | None = None, limit: int = 100) -> list[tuple[dict, tuple]]:
     """Query piveau's dataset search index and fetch each result's JSON-LD detail.
 
     Returns a list of (search_result, (sns, variable_measured, dist_details, raw))
     pairs — the shared groundwork for both fetch_datasets and fetch_distributions.
+
+    We pass `catalog` as a query filter, but piveau-hub-search's exact
+    filtering contract for it isn't confirmed (untested against a live
+    instance) — so correctness doesn't rely on it: results are also
+    filtered by `catalog.id` client-side below. When filtering client-side,
+    we ask piveau for more results than requested, since the real `limit`
+    cutoff otherwise happens *before* our filter and could hide a
+    catalogue's datasets if they don't sort near the front of the raw feed.
     """
-    params = {"index": "dataset", "limit": limit}
+    fetch_limit = max(limit, 500) if catalogue_id else limit
+    params = {"index": "dataset", "limit": fetch_limit}
     if catalogue_id:
         params["catalog"] = catalogue_id
     async with httpx.AsyncClient(timeout=10) as client:
@@ -255,6 +268,8 @@ async def _search_datasets(catalogue_id: str | None = None, limit: int = 100) ->
         data = r.json()
         results = [ds for ds in data.get("result", {}).get("results", [])
                    if ds.get("index") == "dataset"]
+        if catalogue_id:
+            results = [ds for ds in results if _dataset_catalog_id(ds) == catalogue_id][:limit]
 
         details = await asyncio.gather(
             *[_fetch_dataset_detail(client, ds["id"]) for ds in results]
