@@ -196,9 +196,17 @@ def _expand(
     }]
 
 
-async def fetch_datasets(limit: int = 100) -> list[dict]:
-    """Fetch datasets from piveau and return one entry per distribution."""
+async def fetch_datasets(catalogue_id: str | None = None, limit: int = 100) -> list[dict]:
+    """Fetch datasets from piveau and return one entry per distribution.
+
+    When `catalogue_id` is given, only datasets in that catalogue are
+    requested from piveau — this both scopes the result to a single
+    catalogue and avoids that catalogue's datasets being crowded out by
+    unrelated ones under the shared `limit`.
+    """
     params = {"index": "dataset", "limit": limit}
+    if catalogue_id:
+        params["catalog"] = catalogue_id
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(f"{PIVEAU_URL}{_SEARCH_PATH}", params=params)
@@ -214,7 +222,26 @@ async def fetch_datasets(limit: int = 100) -> list[dict]:
             entries = []
             for ds, (sns, variable_measured, dist_details, raw) in zip(results, details):
                 entries.extend(_expand(ds, sns, variable_measured, dist_details, raw))
-            return [e for e in entries if e.get("asset_id")]
+            return entries
     except Exception as exc:
         print(f"[piveau] fetch_datasets failed: {exc}")
+        return []
+
+
+async def fetch_catalogues(limit: int = 100) -> list[dict]:
+    """Fetch the list of catalogues known to piveau (id + title)."""
+    params = {"index": "catalog", "limit": limit}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{PIVEAU_URL}{_SEARCH_PATH}", params=params)
+            r.raise_for_status()
+            data = r.json()
+            results = [c for c in data.get("result", {}).get("results", [])
+                       if c.get("index") == "catalog"]
+            return [
+                {"id": c.get("id", ""), "title": _title(c.get("title")) or c.get("id", "")}
+                for c in results
+            ]
+    except Exception as exc:
+        print(f"[piveau] fetch_catalogues failed: {exc}")
         return []

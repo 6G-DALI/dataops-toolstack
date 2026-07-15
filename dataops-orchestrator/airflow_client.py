@@ -7,7 +7,7 @@ if MOCK:
         list_task_instances, get_task_instance, get_task_logs,
         list_tasks, get_task,
         list_all_tasks, create_dag,
-        list_datasets, get_dataset,
+        list_datasets, get_dataset, list_catalogues,
         create_task, list_custom_tasks, get_custom_task,
     )
 else:
@@ -175,9 +175,9 @@ else:
 
     # ── Datasets ──────────────────────────────────────────────────────────────
 
-    async def list_datasets() -> dict:
+    async def list_datasets(catalogue_id: str | None = None) -> dict:
         from piveau_client import fetch_datasets
-        datasets = await fetch_datasets()
+        datasets = await fetch_datasets(catalogue_id=catalogue_id)
         return {"datasets": datasets, "total_entries": len(datasets)}
 
     async def get_dataset(dataset_id) -> dict:
@@ -187,6 +187,11 @@ else:
         if not ds:
             raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
         return ds
+
+    async def list_catalogues() -> dict:
+        from piveau_client import fetch_catalogues
+        catalogues = await fetch_catalogues()
+        return {"catalogues": catalogues, "total_entries": len(catalogues)}
 
     async def list_all_tasks() -> dict:
         dags_data = await list_dags(limit=100)

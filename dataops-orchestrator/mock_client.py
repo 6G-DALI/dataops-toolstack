@@ -285,9 +285,9 @@ async def list_all_tasks() -> dict:
 _created_dags: list = []
 
 
-async def list_datasets() -> dict:
+async def list_datasets(catalogue_id: str | None = None) -> dict:
     from piveau_client import fetch_datasets
-    datasets = await fetch_datasets()
+    datasets = await fetch_datasets(catalogue_id=catalogue_id)
     return {"datasets": datasets, "total_entries": len(datasets)}
 
 
@@ -299,6 +299,12 @@ async def get_dataset(dataset_id) -> dict:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
     return ds
+
+
+async def list_catalogues() -> dict:
+    from piveau_client import fetch_catalogues
+    catalogues = await fetch_catalogues()
+    return {"catalogues": catalogues, "total_entries": len(catalogues)}
 
 
 _custom_tasks: list = []

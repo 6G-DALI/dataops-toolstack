@@ -13,9 +13,15 @@ router = APIRouter(prefix="/datasets", tags=["Datasets"])
 
 
 @router.get("")
-async def list_datasets():
-    """List all datasets known to Airflow."""
-    return await af.list_datasets()
+async def list_datasets(catalogue_id: str | None = None):
+    """List datasets known to Airflow, optionally scoped to a single catalogue."""
+    return await af.list_datasets(catalogue_id)
+
+
+@router.get("/catalogues")
+async def list_catalogues():
+    """List all catalogues known to piveau, for scoping a subsequent dataset listing."""
+    return await af.list_catalogues()
 
 
 @router.get("/{dataset_id}")
