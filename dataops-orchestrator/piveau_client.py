@@ -230,14 +230,14 @@ async def fetch_datasets(catalogue_id: str | None = None, limit: int = 100) -> l
 
 async def fetch_catalogues(limit: int = 100) -> list[dict]:
     """Fetch the list of catalogues known to piveau (id + title)."""
-    params = {"index": "catalog", "limit": limit}
+    params = {"index": "catalogue", "limit": limit}
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(f"{PIVEAU_URL}{_SEARCH_PATH}", params=params)
             r.raise_for_status()
             data = r.json()
             results = [c for c in data.get("result", {}).get("results", [])
-                       if c.get("index") == "catalog"]
+                       if c.get("index") == "catalogue"]
             return [
                 {"id": c.get("id", ""), "title": _title(c.get("title")) or c.get("id", "")}
                 for c in results
