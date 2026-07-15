@@ -77,7 +77,7 @@ def _testbed_context_block(tc) -> list[str]:
         if kind == "uri":
             lines.append(f"        {pred} <{value}> ;")
         elif kind == "bool":
-            lines.append(f'        {pred} {str(value).lower()}^^xsd:boolean ;')
+            lines.append(f'        {pred} {str(value).lower()} ;')
         elif kind == "num":
             num = int(value) if float(value).is_integer() else value
             lines.append(f"        {pred} {num} ;")
@@ -117,9 +117,9 @@ def build_turtle(dataset_id: str, sub: DatasetSubmission, distribution_url: str 
         f"    dct:accessRights        <{access_rights_uri}> ;",
         f"    dct:license             <{obj.license}> ;",
         f'    dali:snsProjectName     "{_esc(ident.sns_project_name)}" ;',
-        f'    dali:gdprCompliant      {str(obj.gdpr_compliant).lower()}^^xsd:boolean ;',
-        f'    dali:fairCompliant      {str(obj.fair_compliant).lower()}^^xsd:boolean ;',
-        f'    gax:containsPII         {str(obj.contains_pii).lower()}^^xsd:boolean ;',
+        f'    dali:gdprCompliant      {str(obj.gdpr_compliant).lower()} ;',
+        f'    dali:fairCompliant      {str(obj.fair_compliant).lower()} ;',
+        f'    gax:containsPII         {str(obj.contains_pii).lower()} ;',
         f'    dct:conformsTo          <https://www.go-fair.org/fair-principles/> ;',
     ]
 
