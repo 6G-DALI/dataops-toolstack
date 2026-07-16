@@ -2,10 +2,14 @@
 DAG: dali_dataspace_validate_dataset
 
 Validates a single distribution of a dataset: retrieves its file from a
-MinIO/S3 location, runs a configurable set of Great Expectations checks,
-writes the validation results as a JSON file back to the same MinIO/S3
-bucket, and publishes the results as dqv:QualityMeasurement nodes attached
-to that distribution's own record in piveau (not the dataset).
+MinIO/S3 location, checks that its content actually matches its own format
+(a proper CSV/TSV/JSON Lines file loadable into a DataFrame — see
+dali.validation.validate_file_format) before running a configurable set of
+Great Expectations checks, writes the validation results as a JSON file back
+to the same MinIO/S3 bucket, and publishes the results as
+dqv:QualityMeasurement nodes attached to that distribution's own record in
+piveau (not the dataset). If the format check fails, the GX suite is skipped
+entirely and the report reflects just that failure.
 
 A dataset can have more than one distribution — `asset_id` is what tells
 this run which one it's validating, both for finding the right
@@ -62,7 +66,7 @@ from airflow.models.param import Param
 
 from dali.dataspace import publish_quality_to_piveau
 from dali.datalake import download_dataset, upload_results
-from dali.validation import report_outcome, run_expectations
+from dali.validation import report_outcome, run_expectations, validate_file_format
 
 
 @dag(
@@ -80,9 +84,12 @@ from dali.validation import report_outcome, run_expectations
     },
 )
 def dali_dataspace_validate_dataset():
-    downloaded  = download_dataset()
-    report      = run_expectations(csv_content=downloaded["content"], asset_title=downloaded["asset_title"])
-    output_key  = upload_results(report=report)
+    downloaded    = download_dataset()
+    format_check  = validate_file_format(file_content=downloaded["content"], asset_title=downloaded["asset_title"])
+    report        = run_expectations(
+        file_content=downloaded["content"], asset_title=downloaded["asset_title"], format_check=format_check
+    )
+    output_key    = upload_results(report=report)
     publish_quality_to_piveau(report=report)
     report_outcome(output_key=output_key, report=report)
 
