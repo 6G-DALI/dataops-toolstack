@@ -69,7 +69,15 @@ async def submit_dataset(file: UploadFile, metadata: str = Form(...), expectatio
     dataset_id = str(uuid.uuid4())
     catalogue_id = CONTRIBUTED_DATASETS_CATALOGUE
 
-    object_key = dlc.upload_dataset_file(catalogue_id, dataset_id, file.filename, content)
+    # Named "{FIRST_DISTRIBUTION_ID}.{ext}" (ext derived from content-type)
+    # rather than the original upload filename. pdc.build_turtle writes this
+    # same FIRST_DISTRIBUTION_ID as the distribution's dali:assetId, so the
+    # validate DAG can later resolve this exact object key from dali:assetId +
+    # dcat:mediaType alone (see dali.dataspace.resolve_asset_title), without
+    # asset_title being passed around as a separate value.
+    ext = pdc.extension_for_media_type(file.content_type)
+    object_filename = f"{pdc.FIRST_DISTRIBUTION_ID}.{ext}"
+    object_key = dlc.upload_dataset_file(catalogue_id, dataset_id, object_filename, content)
 
     distribution_url = None
     if DATASPACE_S3_ENDPOINT_URL:
@@ -80,7 +88,6 @@ async def submit_dataset(file: UploadFile, metadata: str = Form(...), expectatio
     dag_result = await af.trigger_dag(VALIDATION_DAG_ID, {
         "catalogue_id":    catalogue_id,
         "dataset_id":      dataset_id,
-        "asset_title":     file.filename,
         "distribution_id": pdc.FIRST_DISTRIBUTION_ID,
         "expectations":    exp_list,
     })

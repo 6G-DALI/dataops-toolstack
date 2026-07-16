@@ -32,8 +32,11 @@ def _client():
 def upload_dataset_file(catalogue_id: str, dataset_id: str, filename: str, content: bytes) -> str:
     """
     Upload a submitted dataset file to <catalogue_id>/<dataset_id>/<filename>
-    in the Data Lake, matching the object-key convention every DataOps DAG
-    already assumes (see input_key = f"{dataset_id}/{asset_title}").
+    in the Data Lake, matching the object-key convention the validate DAG
+    resolves via distribution_id + dcat:mediaType (see
+    dali.dataspace.resolve_asset_title and piveau_dataset_client.py's
+    FIRST_DISTRIBUTION_ID/extension_for_media_type — `filename` here should
+    be built the same way, not an arbitrary original upload name).
     Returns the object key.
     """
     key = f"{dataset_id}/{filename}"

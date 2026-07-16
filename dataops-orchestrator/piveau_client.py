@@ -78,6 +78,14 @@ async def _fetch_dataset_detail(
 
     Returns (snsProjectName, variableMeasured, dist_details, raw) where
     dist_details maps distribution UUID -> {asset_id, asset_title}.
+
+    variableMeasured is collected from the dataset node (per the MAP) and
+    merged with any found on distribution nodes (some records place it there
+    instead, or a dataset may have several distributions each with their own
+    columns) — this is a display aggregate shown the same on every
+    distribution card, not something that drives validation, so merging
+    everything here (unlike the Airflow DAG's strictly per-distribution
+    fetch_columns_from_piveau) is intentional.
     """
     try:
         r = await client.get(f"{DSPACE_URL}/{dataset_id}", timeout=10)
@@ -91,17 +99,22 @@ async def _fetch_dataset_detail(
 
         for node in nodes:
             types = _node_types(node)
+            is_dataset = "dcat:Dataset" in types or any("Dataset" in t for t in types)
+            is_distribution = "dcat:Distribution" in types or any("Distribution" in t for t in types)
 
-            # Dataset node — carries snsProjectName and variableMeasured
-            if "dcat:Dataset" in types or any("Dataset" in t for t in types):
+            # Dataset node — carries snsProjectName and (per the MAP) variableMeasured
+            if is_dataset:
                 if _SNS_PROJECT_NAME in node:
                     sns = _scalar(node[_SNS_PROJECT_NAME])
                 if _VARIABLE_MEASURED in node:
-                    variable_measured = _string_list(node[_VARIABLE_MEASURED])
+                    variable_measured.extend(_string_list(node[_VARIABLE_MEASURED]))
 
-            # Distribution node — carries assetId and title per distribution.
-            # Index by every possible key so we match whatever piveau returns as dist id.
-            if "dcat:Distribution" in types:
+            # Distribution node — carries assetId, title, and (sometimes) variableMeasured
+            # per distribution. Index dist_details by every possible key so we match
+            # whatever piveau returns as dist id.
+            if is_distribution:
+                if _VARIABLE_MEASURED in node:
+                    variable_measured.extend(_string_list(node[_VARIABLE_MEASURED]))
                 detail = {
                     "asset_id":    _scalar(node.get(_ASSET_ID, "")),
                     "asset_title": _scalar(node.get(_DCT_TITLE, "")),
@@ -109,6 +122,8 @@ async def _fetch_dataset_detail(
                 node_id = node.get("@id", "")
                 for key in _dist_keys(node_id, _scalar(node.get("dct:identifier", ""))):
                     dist_details[key] = detail
+
+        variable_measured = list(dict.fromkeys(variable_measured))  # dedupe, keep order
         return sns, variable_measured, dist_details, graph
     except Exception as exc:
         print(f"[piveau] detail fetch failed for {dataset_id}: {exc}")

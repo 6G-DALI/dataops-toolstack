@@ -43,7 +43,7 @@ async def trigger_dag(dag_id: str, conf: dict[str, Any] = Body(default_factory=d
     """
     Trigger a new DAG run. `conf` is passed straight through as dag_run.conf.
 
-    Different DAGs declare different params (e.g. dataset_id/asset_title/
+    Different DAGs declare different params (e.g. dataset_id/distribution_id/
     catalogue_id vs. input_key/edc_provider_url) — the DataOps UI already
     builds the request body per-DAG from that DAG's own param schema
     (see TriggerModal.tsx), so this endpoint must not constrain it to a

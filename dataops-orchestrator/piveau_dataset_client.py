@@ -33,6 +33,26 @@ DATASPACE_S3_ENDPOINT_URL = os.getenv("DATASPACE_S3_ENDPOINT_URL", "")
 # in sync without hardcoding "1" in two places.
 FIRST_DISTRIBUTION_ID = "1"
 
+# Kept in sync with dali/utils.py's EXTENSION_BY_MEDIA_TYPE on the Airflow
+# side: the validate DAG resolves a distribution's S3 object filename as
+# "{distribution_id}.{ext}" from its dcat:mediaType rather than taking a
+# filename param, so the object must be *uploaded* under that same name here.
+EXTENSION_BY_MEDIA_TYPE = {
+    "text/csv":                     "csv",
+    "text/tab-separated-values":    "tsv",
+    "application/json":             "json",
+    "application/ld+json":          "jsonld",
+    "text/plain":                   "txt",
+    "application/xml":              "xml",
+    "text/xml":                     "xml",
+    "application/parquet":          "parquet",
+    "application/octet-stream":     "bin",
+}
+
+
+def extension_for_media_type(media_type: str | None) -> str:
+    return EXTENSION_BY_MEDIA_TYPE.get((media_type or "").lower().strip(), "dat")
+
 _ACCESS_RIGHTS = {
     "PUBLIC":     "http://publications.europa.eu/resource/authority/access-right/PUBLIC",
     "RESTRICTED": "http://publications.europa.eu/resource/authority/access-right/RESTRICTED",
@@ -154,11 +174,6 @@ def build_turtle(dataset_id: str, sub: DatasetSubmission, distribution_url: str 
     if ident.version:
         lines.append(f'    adms:version            "{_esc(ident.version)}" ;')
 
-    for var in metrics.variable_measured:
-        lines.append(f'    schema:variableMeasured "{_esc(var)}" ;')
-    if metrics.measurement_technique:
-        lines.append(f'    schema:measurementTechnique "{_esc(metrics.measurement_technique)}"@en ;')
-
     tc_lines = _testbed_context_block(sub.testbed_context)
     if metrics.observation_point_horizontal:
         tc_lines.append(f'        dali:observationPointHorizontal "{_esc(metrics.observation_point_horizontal)}" ;')
@@ -189,9 +204,22 @@ def build_turtle(dataset_id: str, sub: DatasetSubmission, distribution_url: str 
             "    rdf:type       dcat:Distribution ;",
             f'    dct:title      "{_esc(ident.title)} - distribution"@en ;',
             f"    dcat:accessURL <{distribution_url}> ;",
+            # Identifies the underlying file — this, not the distribution's own
+            # URI/distribution_id, is what the validate DAG's resolve_asset_title
+            # prefixes with the file extension to find the S3 object (see
+            # dali/dataspace.py). Matches FIRST_DISTRIBUTION_ID since that's also
+            # the object's actual basename at upload time (routers/datasets.py).
+            f'    dali:assetId   "{FIRST_DISTRIBUTION_ID}" ;',
         ]
         if media_type:
             lines.append(f'    dcat:mediaType "{media_type}" ;')
+        # Measured variables/technique describe this distribution's file
+        # specifically, not the dataset as a whole (see MAP §5.3.E/§5.6) —
+        # placed here rather than on the dataset resource above.
+        for var in metrics.variable_measured:
+            lines.append(f'    schema:variableMeasured "{_esc(var)}" ;')
+        if metrics.measurement_technique:
+            lines.append(f'    schema:measurementTechnique "{_esc(metrics.measurement_technique)}"@en ;')
         lines[-1] = lines[-1].rstrip(" ;") + " ."
 
     turtle = "\n".join(lines)
