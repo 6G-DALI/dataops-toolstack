@@ -11,45 +11,18 @@ from dali.utils import (
     DALI_NS,
     PIVEAU_DATASETS_URL,
     dist_keys,
-    extension_for_media_type,
-    fetch_distribution_info,
     node_types,
 )
-
-
-@task
-def resolve_asset_title() -> str:
-    """Derive the distribution's S3 object filename from its dali:assetId and
-    dcat:mediaType (fetched from piveau), instead of taking it as a DAG param
-    — keeps it in sync with how dataops-orchestrator names the object at
-    upload time (see piveau_dataset_client.py's FIRST_DISTRIBUTION_ID and
-    routers/datasets.py's submit_dataset).
-
-    distribution_id only locates the right dcat:Distribution node — it is
-    piveau's own node identifier, not necessarily the same as dali:assetId,
-    which is what actually identifies the file and is what gets prefixed
-    with the extension here. Falls back to distribution_id when a
-    distribution has no dali:assetId (e.g. older/foreign records)."""
-    params = get_current_context()["params"]
-    dataset_id      = params["dataset_id"]
-    distribution_id = params.get("distribution_id", "")
-    asset_id, media_type = fetch_distribution_info(dataset_id, distribution_id)
-    ext = extension_for_media_type(media_type)
-    basename = asset_id or distribution_id or "data"
-    asset_title = f"{basename}.{ext}"
-    print(f"[dali] resolved asset_title={asset_title!r} from asset_id={asset_id!r} "
-          f"distribution_id={distribution_id!r} media_type={media_type!r}")
-    return asset_title
 
 
 @task
 def publish_quality_to_piveau(report: dict) -> None:
     import requests as req
     params = get_current_context()["params"]
-    dataset_id      = params["dataset_id"]
-    catalogue_id    = params["catalogue_id"]
-    distribution_id = params.get("distribution_id", "")
-    api_key         = os.environ["PIVEAU_API_KEY"]
+    dataset_id   = params["dataset_id"]
+    catalogue_id = params["catalogue_id"]
+    asset_id     = params.get("asset_id", "")
+    api_key      = os.environ["PIVEAU_API_KEY"]
 
     base_url = f"{PIVEAU_DATASETS_URL}/{dataset_id}"
     qs       = f"?catalogue={catalogue_id}" if catalogue_id else ""
@@ -67,11 +40,16 @@ def publish_quality_to_piveau(report: dict) -> None:
     nodes = graph.get("@graph", [])
     dist_candidates = [n for n in nodes if any("Distribution" in t for t in node_types(n))]
 
-    if distribution_id:
-        dist_node = next((n for n in dist_candidates if distribution_id in dist_keys(n)), None)
+    if asset_id:
+        # asset_id matches via dist_keys because it's embedded as the last
+        # path segment of dct:identifier (the URI dataops-orchestrator
+        # submits at upload time — see piveau_dataset_client.add_distribution)
+        # — piveau's own @id for the node is unpredictable (it mints its own
+        # UUID on write), so asset_id, not that @id, is the stable handle.
+        dist_node = next((n for n in dist_candidates if asset_id in dist_keys(n)), None)
         if dist_node is None:
             print(f"[dali] dataset {dataset_id} has no dcat:Distribution node matching "
-                  f"distribution_id={distribution_id!r} — skipping quality publish")
+                  f"asset_id={asset_id!r} — skipping quality publish")
             return
     else:
         dist_node = dist_candidates[0] if dist_candidates else None
@@ -79,9 +57,9 @@ def publish_quality_to_piveau(report: dict) -> None:
             print(f"[dali] dataset {dataset_id} has no dcat:Distribution node — skipping quality publish")
             return
         if len(dist_candidates) > 1:
-            print(f"[dali] no distribution_id given and dataset {dataset_id} has "
+            print(f"[dali] no asset_id given and dataset {dataset_id} has "
                   f"{len(dist_candidates)} distributions — defaulting to the first one "
-                  f"({dist_node.get('@id')!r}); pass distribution_id to target a specific one")
+                  f"({dist_node.get('@id')!r}); pass asset_id to target a specific one")
     dist_uri = dist_node["@id"]
 
     meas_refs  = []

@@ -79,58 +79,6 @@ def dist_keys(node: dict) -> set[str]:
     return keys
 
 
-# Minimal media-type -> file extension mapping, covering the formats DataOps
-# datasets actually use. Kept in sync with the equivalent mapping used at
-# upload time in dataops-orchestrator/piveau_dataset_client.py, since the S3
-# object name (this DAG's `asset_title`) is derived from the same rule on
-# both sides rather than passed around as a separate value.
-EXTENSION_BY_MEDIA_TYPE = {
-    "text/csv":                     "csv",
-    "text/tab-separated-values":    "tsv",
-    "application/json":             "json",
-    "application/ld+json":          "jsonld",
-    "text/plain":                   "txt",
-    "application/xml":               "xml",
-    "text/xml":                     "xml",
-    "application/parquet":          "parquet",
-    "application/octet-stream":     "bin",
-}
-
-
-def extension_for_media_type(media_type: str) -> str:
-    return EXTENSION_BY_MEDIA_TYPE.get((media_type or "").lower().strip(), "dat")
-
-
-def fetch_distribution_info(dataset_id: str, distribution_id: str) -> tuple[str, str]:
-    """Fetch a specific distribution's dali:assetId and dcat:mediaType from piveau.
-
-    `distribution_id` (see dist_keys) only locates the right dcat:Distribution
-    node in the graph — it's piveau's own node identifier, not necessarily the
-    same value as dali:assetId, which is what actually identifies the
-    underlying file in the Data Lake and is what the S3 object name is
-    derived from (see resolve_asset_title). Returns (asset_id, media_type),
-    either of which may be "" if the distribution or property isn't found.
-    """
-    url = f"{PIVEAU_DATASETS_URL}/{dataset_id}"
-    req = urllib.request.Request(url, headers={"Accept": "application/ld+json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-        graph = data.get("@graph", [])
-        for node in graph:
-            if "Distribution" not in "".join(node_types(node)):
-                continue
-            if distribution_id and distribution_id not in dist_keys(node):
-                continue
-            asset_id = _scalar(node.get(f"{DALI_NS}assetId"))
-            mt = node.get("dcat:mediaType") or node.get("http://www.w3.org/ns/dcat#mediaType")
-            return asset_id, (_scalar(mt) if mt else "")
-        return "", ""
-    except Exception as exc:
-        print(f"[dali] could not fetch distribution info: {exc}")
-        return "", ""
-
-
 def _variable_measured_of(node: dict) -> list[str]:
     vm = node.get("schema:variableMeasured") or node.get("https://schema.org/variableMeasured") or []
     if isinstance(vm, (str, dict)):
@@ -138,13 +86,13 @@ def _variable_measured_of(node: dict) -> list[str]:
     return [c for c in (_scalar(v) for v in vm) if c]
 
 
-def fetch_columns_from_piveau(dataset_id: str, distribution_id: str = "") -> list[str]:
+def fetch_columns_from_piveau(dataset_id: str, asset_id: str = "") -> list[str]:
     """Fetch schema:variableMeasured column names from piveau for a dataset.
 
     The application profile places this on the dataset node, but some
     records (e.g. harvested/externally-sourced ones) carry it on the
     dcat:Distribution node instead — both are checked. Critically, only the
-    *targeted* distribution (matched via distribution_id, see dist_keys) is
+    *targeted* distribution (matched via asset_id, see dist_keys) is
     considered, never every distribution on the dataset — a multi-distribution
     dataset can have a different column list per distribution, and mixing
     them in would generate expectations for columns that don't exist in the
@@ -163,7 +111,7 @@ def fetch_columns_from_piveau(dataset_id: str, distribution_id: str = "") -> lis
             is_dataset = any("Dataset" in t for t in types)
             is_target_distribution = (
                 any("Distribution" in t for t in types)
-                and (not distribution_id or distribution_id in dist_keys(node))
+                and (not asset_id or asset_id in dist_keys(node))
             )
             if is_dataset or is_target_distribution:
                 cols.extend(_variable_measured_of(node))
