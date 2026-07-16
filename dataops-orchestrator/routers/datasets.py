@@ -127,9 +127,16 @@ async def add_distribution(
     object_key = dlc.upload_dataset_file(catalogue_id, dataset_id, object_filename, content)
     distribution_url = f"{DATASPACE_S3_ENDPOINT_URL.rstrip('/')}/{catalogue_id}/{object_key}"
 
+    # dcat:mediaType: trust the browser/client's content-type unless it's
+    # missing or too generic (e.g. application/octet-stream, which browsers
+    # send for less common formats like .jsonl) to be worth recording as-is —
+    # in that case, register the canonical media type for the extension we
+    # actually resolved above instead.
+    media_type = pdc.resolve_media_type(file.content_type, ext)
+
     piveau_result = await pdc.add_distribution(
         dataset_id, catalogue_id, distribution_id, asset_id,
-        distribution_url, file.filename, file.content_type, dist_metrics
+        distribution_url, file.filename, media_type, dist_metrics
     )
 
     # The DAG's `asset_id` param is used both to resolve the distribution's
