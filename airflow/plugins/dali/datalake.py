@@ -22,9 +22,23 @@ EDC_POLL_INTERVAL = int(os.getenv("EDC_POLL_INTERVAL", "3"))
 EDC_POLL_TIMEOUT  = int(os.getenv("EDC_POLL_TIMEOUT", "120"))
 
 
-@task
-def download_dataset(asset_title: str) -> str:
+@task(multiple_outputs=True)
+def download_dataset() -> dict:
+    """Resolve the distribution's S3 object from its dali:assetId and download it.
+
+    `asset_id` is what dataops-orchestrator names the uploaded object after
+    (see piveau_dataset_client.py's add_distribution and
+    routers/datasets.py's add_distribution endpoint) — the object's key is
+    "{dataset_id}/{asset_id}.{ext}", but the extension isn't known up front,
+    so it's resolved here via an S3 prefix listing rather than fetched from
+    piveau (avoiding a round trip and a dependency on dcat:mediaType being
+    set correctly). Returns {"content": ..., "asset_title": ...} — the
+    basename (with extension) is needed downstream (see run_expectations)."""
     params = get_current_context()["params"]
+    dataset_id = params["dataset_id"]
+    catalogue_id = params["catalogue_id"]
+    asset_id = params["asset_id"]
+
     hook = S3Hook(aws_conn_id=DATASPACE_S3_CONN_ID)
 
     conn = hook.get_connection(DATASPACE_S3_CONN_ID)
@@ -33,12 +47,20 @@ def download_dataset(asset_title: str) -> str:
     print(f"[dali] resolved endpoint_url={client.meta.endpoint_url!r} region={client.meta.region_name!r} "
           f"addressing_style={client.meta.config.s3.get('addressing_style') if client.meta.config.s3 else None!r}")
 
-    input_key = f"{params['dataset_id']}/{asset_title}"
-    print(f"[dali] dataset_id={params['dataset_id']} asset_title={asset_title}")
-    print(f"[dali] bucket={params['catalogue_id']!r} key={input_key!r}")
+    prefix = f"{dataset_id}/{asset_id}."
+    keys = hook.list_keys(bucket_name=catalogue_id, prefix=prefix) or []
+    if not keys:
+        raise FileNotFoundError(f"[dali] no object found under s3://{catalogue_id}/{prefix}*")
+    if len(keys) > 1:
+        print(f"[dali] multiple objects match prefix {prefix!r}: {keys} — using the first one")
+    input_key = keys[0]
+    asset_title = input_key.rsplit("/", 1)[-1]
+    print(f"[dali] dataset_id={dataset_id} asset_id={asset_id} resolved asset_title={asset_title!r}")
+    print(f"[dali] bucket={catalogue_id!r} key={input_key!r}")
 
-    obj = hook.get_key(key=input_key, bucket_name=params["catalogue_id"])
-    return obj.get()["Body"].read().decode("utf-8")
+    obj = hook.get_key(key=input_key, bucket_name=catalogue_id)
+    content = obj.get()["Body"].read().decode("utf-8")
+    return {"content": content, "asset_title": asset_title}
 
 
 @task

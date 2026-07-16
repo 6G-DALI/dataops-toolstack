@@ -38,8 +38,8 @@ def run_expectations(csv_content: str, asset_title: str) -> dict:
     if expectations:
         resolved = expectations
     else:
-        distribution_id = params.get("distribution_id", "")
-        columns = fetch_columns_from_piveau(dataset_id, distribution_id)
+        asset_id = params.get("asset_id", "")
+        columns = fetch_columns_from_piveau(dataset_id, asset_id)
         resolved = list(DEFAULT_EXPECTATIONS)
         for col in columns:
             resolved.append({"type": "expect_column_to_exist", "column": col})
