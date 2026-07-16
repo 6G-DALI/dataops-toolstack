@@ -113,7 +113,16 @@ async def add_distribution(
     # name as its dct:title.
     distribution_id = await pdc.next_distribution_id(dataset_id, catalogue_id)
     asset_id = str(uuid.uuid4())
-    ext = pdc.extension_for_media_type(file.content_type)
+    # Prefer the original filename's own extension — more reliable than
+    # content-type, since browsers/clients often send generic or wrong
+    # content-types for less common formats (e.g. .jsonl as
+    # application/octet-stream). Only fall back to the content-type mapping
+    # when the filename itself has no extension.
+    ext = (
+        file.filename.rsplit(".", 1)[-1].lower()
+        if file.filename and "." in file.filename
+        else pdc.extension_for_media_type(file.content_type)
+    )
     object_filename = f"{asset_id}.{ext}"
     object_key = dlc.upload_dataset_file(catalogue_id, dataset_id, object_filename, content)
     distribution_url = f"{DATASPACE_S3_ENDPOINT_URL.rstrip('/')}/{catalogue_id}/{object_key}"

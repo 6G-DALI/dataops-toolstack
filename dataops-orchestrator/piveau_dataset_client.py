@@ -42,15 +42,18 @@ PUBLISHER_NAME_DEFAULT = os.getenv("PUBLISHER_NAME", "6G-DALI")
 DATASPACE_S3_ENDPOINT_URL = os.getenv("DATASPACE_S3_ENDPOINT_URL", "")
 DALI_NS                = "https://dali-project.eu/ns#"
 
-# Kept in sync with dali/utils.py's EXTENSION_BY_MEDIA_TYPE on the Airflow
-# side: the validate DAG resolves a distribution's S3 object filename as
-# "{asset_id}.{ext}" from its dcat:mediaType rather than taking a filename
-# param, so the object must be *uploaded* under that same name here.
+# Fallback for when the uploaded filename itself has no extension (see
+# routers/datasets.py, which prefers the original filename's own extension —
+# more reliable than content-type, since browsers/clients often send generic
+# or wrong content-types for less common formats like JSON Lines).
 EXTENSION_BY_MEDIA_TYPE = {
     "text/csv":                     "csv",
     "text/tab-separated-values":    "tsv",
     "application/json":             "json",
     "application/ld+json":          "jsonld",
+    "application/jsonl":            "jsonl",
+    "application/x-ndjson":         "jsonl",
+    "application/x-jsonlines":      "jsonl",
     "text/plain":                   "txt",
     "application/xml":              "xml",
     "text/xml":                     "xml",
@@ -61,6 +64,39 @@ EXTENSION_BY_MEDIA_TYPE = {
 
 def extension_for_media_type(media_type: str | None) -> str:
     return EXTENSION_BY_MEDIA_TYPE.get((media_type or "").lower().strip(), "dat")
+
+
+# The canonical dcat:mediaType to register for an extension resolved from the
+# uploaded filename — used when the browser/client's own content-type is
+# missing or too generic to be worth recording as-is (see routers/datasets.py).
+# Not just the reverse of EXTENSION_BY_MEDIA_TYPE: several content-types can
+# map to the same extension there, so the canonical choice is spelled out
+# explicitly here instead of derived.
+CANONICAL_MEDIA_TYPE_BY_EXTENSION = {
+    "csv":     "text/csv",
+    "tsv":     "text/tab-separated-values",
+    "json":    "application/json",
+    "jsonld":  "application/ld+json",
+    "jsonl":   "application/jsonl",
+    "ndjson":  "application/x-ndjson",
+    "txt":     "text/plain",
+    "xml":     "application/xml",
+    "parquet": "application/parquet",
+}
+
+# content-types too generic to be worth keeping as-is when a better guess
+# (the uploaded filename's own extension) is available.
+_GENERIC_MEDIA_TYPES = {"", "application/octet-stream", "binary/octet-stream"}
+
+
+def resolve_media_type(content_type: str | None, ext: str) -> str | None:
+    """Prefer the client-supplied content-type unless it's missing/generic,
+    in which case fall back to the canonical media type for the resolved
+    extension (which itself may come from the filename, not content-type —
+    see routers/datasets.py)."""
+    if content_type and content_type.lower().strip() not in _GENERIC_MEDIA_TYPES:
+        return content_type
+    return CANONICAL_MEDIA_TYPE_BY_EXTENSION.get(ext.lower(), content_type)
 
 
 _ACCESS_RIGHTS = {
