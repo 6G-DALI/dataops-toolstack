@@ -34,8 +34,9 @@ DATASPACE_S3_REGION       = os.getenv("DATASPACE_S3_REGION", "us-east-1")
 VALIDATION_DAG_ID = os.getenv("VALIDATION_DAG_ID", "dali_dataspace_validate_dataset")
 
 # Fixed staging catalogue (and matching Data Lake bucket) for datasets
-# contributed through POST /datasets/submit. Not user-selectable — every
-# contribution lands here, keyed by a server-generated dataset_id.
+# contributed through POST /datasets (+ POST /datasets/{dataset_id}/distributions).
+# Not user-selectable — every contribution lands here, keyed by a
+# server-generated dataset_id.
 CONTRIBUTED_DATASETS_CATALOGUE = os.getenv("CONTRIBUTED_DATASETS_CATALOGUE", "6g-external")
 
 # --- RabbitMQ (optional) — lets an external system trigger a DAG by

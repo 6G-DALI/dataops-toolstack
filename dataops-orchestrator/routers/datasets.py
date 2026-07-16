@@ -7,7 +7,7 @@ import airflow_client as af
 import datalake_client as dlc
 import piveau_dataset_client as pdc
 from config import CONTRIBUTED_DATASETS_CATALOGUE, DATASPACE_S3_ENDPOINT_URL, VALIDATION_DAG_ID
-from dataset_models import DatasetSubmission
+from dataset_models import DatasetCreateRequest, DistributionMetrics
 
 router = APIRouter(prefix="/datasets", tags=["Datasets"])
 
@@ -37,23 +37,57 @@ async def list_distributions(dataset_id: str, catalogue_id: str | None = None):
     return await af.list_distributions(dataset_id, catalogue_id)
 
 
-@router.post("/submit")
-async def submit_dataset(file: UploadFile, metadata: str = Form(...), expectations: str = Form("[]")):
+@router.post("")
+async def create_dataset(payload: DatasetCreateRequest):
     """
-    Submit a new dataset: upload its file to the Data Lake, register a full
-    MAP (DCAT-AP + GAIA-X + CMT) record in the Staging Catalogue, and trigger
-    the data quality validation DAG against it.
+    Step 1 of dataset submission: register the dataset's own metadata (MAP
+    Identity / Object Characteristics / Testbed Context) in the Staging
+    Catalogue. No file, no distribution yet — the dataset isn't validatable
+    until at least one distribution is added via
+    POST /datasets/{dataset_id}/distributions.
+    """
+    dataset_id = str(uuid.uuid4())
+    catalogue_id = CONTRIBUTED_DATASETS_CATALOGUE
 
-    `metadata` is a JSON-encoded DatasetSubmission (see dataset_models.py).
+    piveau_result = await pdc.create_dataset(
+        dataset_id, catalogue_id, payload.identity, payload.object, payload.testbed_context
+    )
+
+    return {
+        "dataset_id":   dataset_id,
+        "catalogue_id": catalogue_id,
+        "piveau":       piveau_result,
+    }
+
+
+@router.post("/{dataset_id}/distributions")
+async def add_distribution(
+    dataset_id: str,
+    file: UploadFile,
+    catalogue_id: str = Form(...),
+    metrics: str = Form("{}"),
+    expectations: str = Form("[]"),
+):
+    """
+    Step 2 of dataset submission: upload a file as a new distribution of an
+    already-created dataset (see POST /datasets), register the distribution
+    in piveau, and trigger the data quality validation DAG against it.
+
+    Can be called more than once per dataset to add further distributions —
+    each gets the next sequential distribution_id.
+
+    `metrics` is a JSON-encoded DistributionMetrics (see dataset_models.py) —
+    the column list (`schema:variableMeasured`) and measurement technique for
+    *this* distribution's file, not the dataset as a whole.
     `expectations` is a JSON-encoded list of Great Expectations configs, e.g.
     [{"type": "expect_table_row_count_to_be_between", "min_value": 1},
      {"type": "expect_column_to_exist", "column": "timestamp"}] — passed
     straight through to the validation DAG (see dali_dataspace_validate_dataset).
     """
     try:
-        sub = DatasetSubmission.model_validate(json.loads(metadata))
+        dist_metrics = DistributionMetrics.model_validate(json.loads(metrics))
     except (json.JSONDecodeError, ValueError) as e:
-        raise HTTPException(status_code=422, detail=f"Invalid metadata: {e}")
+        raise HTTPException(status_code=422, detail=f"Invalid metrics: {e}")
 
     try:
         exp_list = json.loads(expectations)
@@ -66,35 +100,36 @@ async def submit_dataset(file: UploadFile, metadata: str = Form(...), expectatio
     if not content:
         raise HTTPException(status_code=422, detail="Uploaded file is empty")
 
-    dataset_id = str(uuid.uuid4())
-    catalogue_id = CONTRIBUTED_DATASETS_CATALOGUE
+    if not DATASPACE_S3_ENDPOINT_URL:
+        raise HTTPException(status_code=503, detail="DATASPACE_S3_ENDPOINT_URL not configured")
 
-    # Named "{FIRST_DISTRIBUTION_ID}.{ext}" (ext derived from content-type)
-    # rather than the original upload filename. pdc.build_turtle writes this
-    # same FIRST_DISTRIBUTION_ID as the distribution's dali:assetId, so the
-    # validate DAG can later resolve this exact object key from dali:assetId +
-    # dcat:mediaType alone (see dali.dataspace.resolve_asset_title), without
-    # asset_title being passed around as a separate value.
+    # Determined *before* upload — the object is named "{distribution_id}.{ext}"
+    # (ext derived from content-type), so the validate DAG can later resolve
+    # this exact object key from dali:assetId + dcat:mediaType alone (see
+    # dali.dataspace.resolve_asset_title), without a filename being passed
+    # around as a separate value. add_distribution below writes this same
+    # distribution_id as the new distribution's dali:assetId.
+    distribution_id = await pdc.next_distribution_id(dataset_id, catalogue_id)
     ext = pdc.extension_for_media_type(file.content_type)
-    object_filename = f"{pdc.FIRST_DISTRIBUTION_ID}.{ext}"
+    object_filename = f"{distribution_id}.{ext}"
     object_key = dlc.upload_dataset_file(catalogue_id, dataset_id, object_filename, content)
+    distribution_url = f"{DATASPACE_S3_ENDPOINT_URL.rstrip('/')}/{catalogue_id}/{object_key}"
 
-    distribution_url = None
-    if DATASPACE_S3_ENDPOINT_URL:
-        distribution_url = f"{DATASPACE_S3_ENDPOINT_URL.rstrip('/')}/{catalogue_id}/{object_key}"
-
-    piveau_result = await pdc.submit_dataset(dataset_id, catalogue_id, sub, distribution_url, file.content_type)
+    piveau_result = await pdc.add_distribution(
+        dataset_id, catalogue_id, distribution_id, distribution_url, file.content_type, dist_metrics
+    )
 
     dag_result = await af.trigger_dag(VALIDATION_DAG_ID, {
         "catalogue_id":    catalogue_id,
         "dataset_id":      dataset_id,
-        "distribution_id": pdc.FIRST_DISTRIBUTION_ID,
+        "distribution_id": distribution_id,
         "expectations":    exp_list,
     })
 
     return {
         "dataset_id":       dataset_id,
         "catalogue_id":     catalogue_id,
+        "distribution_id":  distribution_id,
         "object_key":       object_key,
         "distribution_url": distribution_url,
         "piveau":           piveau_result,

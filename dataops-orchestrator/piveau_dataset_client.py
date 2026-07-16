@@ -1,8 +1,21 @@
 """
-Builds and submits a full 6G-DALI MAP dataset record (DCAT-AP + GAIA-X +
-CMT testbed-context fields) to the piveau-hub Staging Catalogue, following
-the same PUT {PIVEAU_HUB_URL}/datasets/{id}?catalogue={catalogue} pattern
-already used for service registration (see piveau_service_client.py).
+Builds and submits 6G-DALI MAP records (DCAT-AP + GAIA-X + CMT testbed-
+context fields) to the piveau-hub Staging Catalogue, following the same PUT
+{PIVEAU_HUB_URL}/datasets/{id}?catalogue={catalogue} pattern already used for
+service registration (see piveau_service_client.py).
+
+Submission is a two-step process, matching routers/datasets.py's two
+endpoints:
+  1. create_dataset   — PUT a Turtle document with just the dataset's own
+                         metadata (identity/object/testbed context). No
+                         distribution yet.
+  2. add_distribution — GET the dataset's current JSON-LD graph, append a new
+                         dcat:Distribution node (+ link it from the dataset),
+                         and PUT the whole graph back. Can be called more
+                         than once per dataset; each call gets the next
+                         sequential distribution_id (count of existing
+                         distributions + 1), so distribution numbering is
+                         never hardcoded to a single fixed value.
 
 `catalogue_id` doubles as both the piveau catalogue name and the Data Lake
 S3 bucket the file was uploaded to, matching the convention every DataOps
@@ -10,6 +23,7 @@ DAG already assumes (see dali_dataspace_validate_dataset's `catalogue_id`
 param).
 """
 
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -17,7 +31,7 @@ from datetime import datetime, timezone
 import httpx
 from fastapi import HTTPException
 
-from dataset_models import DatasetSubmission
+from dataset_models import DatasetIdentity, DatasetObject, DistributionMetrics, TestbedContext
 
 log = logging.getLogger(__name__)
 
@@ -27,16 +41,10 @@ DSPACE_BASE            = os.getenv("DSPACE_BASE_URL", "https://dataspace.6gdali.
 PUBLISHER_NAME_DEFAULT = os.getenv("PUBLISHER_NAME", "6G-DALI")
 DATASPACE_S3_ENDPOINT_URL = os.getenv("DATASPACE_S3_ENDPOINT_URL", "")
 
-# Every submission creates exactly one distribution, always numbered "1" —
-# this is also the distribution_id the validate DAG is triggered with right
-# after submission (see routers/datasets.py:submit_dataset), so the two stay
-# in sync without hardcoding "1" in two places.
-FIRST_DISTRIBUTION_ID = "1"
-
 # Kept in sync with dali/utils.py's EXTENSION_BY_MEDIA_TYPE on the Airflow
 # side: the validate DAG resolves a distribution's S3 object filename as
-# "{distribution_id}.{ext}" from its dcat:mediaType rather than taking a
-# filename param, so the object must be *uploaded* under that same name here.
+# "{asset_id}.{ext}" from its dcat:mediaType rather than taking a filename
+# param, so the object must be *uploaded* under that same name here.
 EXTENSION_BY_MEDIA_TYPE = {
     "text/csv":                     "csv",
     "text/tab-separated-values":    "tsv",
@@ -53,6 +61,7 @@ EXTENSION_BY_MEDIA_TYPE = {
 def extension_for_media_type(media_type: str | None) -> str:
     return EXTENSION_BY_MEDIA_TYPE.get((media_type or "").lower().strip(), "dat")
 
+
 _ACCESS_RIGHTS = {
     "PUBLIC":     "http://publications.europa.eu/resource/authority/access-right/PUBLIC",
     "RESTRICTED": "http://publications.europa.eu/resource/authority/access-right/RESTRICTED",
@@ -68,7 +77,12 @@ def _dataset_uri(dataset_id: str) -> str:
     return f"{DSPACE_BASE}/set/data/{dataset_id}"
 
 
-def _testbed_context_block(tc) -> list[str]:
+def _require_piveau_config() -> None:
+    if not PIVEAU_HUB_URL or not PIVEAU_API_KEY:
+        raise HTTPException(status_code=503, detail="PIVEAU_HUB_URL or PIVEAU_API_KEY not configured")
+
+
+def _testbed_context_block(tc: TestbedContext) -> list[str]:
     """Build the dali:testbedContext blank-node lines, skipping unset fields."""
     fields = [
         ("dali:underlayPlatform",       tc.underlay_platform,       "uri"),
@@ -95,6 +109,8 @@ def _testbed_context_block(tc) -> list[str]:
         ("dali:sliceType",              tc.slice_type,              "str"),
         ("dali:referencePlane",         tc.reference_plane,         "str"),
         ("dali:relatedVertical",        tc.related_vertical,        "str"),
+        ("dali:observationPointHorizontal", tc.observation_point_horizontal, "str"),
+        ("dali:observationPointVertical",   tc.observation_point_vertical,   "str"),
     ]
     lines = []
     for pred, value, kind in fields:
@@ -109,14 +125,17 @@ def _testbed_context_block(tc) -> list[str]:
             lines.append(f"        {pred} {num} ;")
         else:
             lines.append(f'        {pred} "{_esc(str(value))}" ;')
+    for fam in tc.measurement_family:
+        lines.append(f'        dali:measurementFamily "{_esc(fam)}" ;')
+    for tool in tc.measurement_tool:
+        lines.append(f'        dali:measurementTool "{_esc(tool)}" ;')
     return lines
 
 
-def build_turtle(dataset_id: str, sub: DatasetSubmission, distribution_url: str | None, media_type: str | None) -> str:
+def build_dataset_turtle(dataset_id: str, ident: DatasetIdentity, obj: DatasetObject, testbed_context: TestbedContext) -> str:
+    """Dataset-only Turtle — no dcat:Distribution, no dcat:distribution link.
+    Distributions are added afterwards, one at a time, via add_distribution."""
     uri = _dataset_uri(dataset_id)
-    ident = sub.identity
-    obj = sub.object
-    metrics = sub.metrics
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     access_rights_uri = _ACCESS_RIGHTS.get(obj.access_rights, _ACCESS_RIGHTS["PUBLIC"])
@@ -174,66 +193,28 @@ def build_turtle(dataset_id: str, sub: DatasetSubmission, distribution_url: str 
     if ident.version:
         lines.append(f'    adms:version            "{_esc(ident.version)}" ;')
 
-    tc_lines = _testbed_context_block(sub.testbed_context)
-    if metrics.observation_point_horizontal:
-        tc_lines.append(f'        dali:observationPointHorizontal "{_esc(metrics.observation_point_horizontal)}" ;')
-    if metrics.observation_point_vertical:
-        tc_lines.append(f'        dali:observationPointVertical "{_esc(metrics.observation_point_vertical)}" ;')
-    for fam in metrics.measurement_family:
-        tc_lines.append(f'        dali:measurementFamily "{_esc(fam)}" ;')
-    for tool in metrics.measurement_tool:
-        tc_lines.append(f'        dali:measurementTool "{_esc(tool)}" ;')
-
+    tc_lines = _testbed_context_block(testbed_context)
     if tc_lines:
         lines.append("    dali:testbedContext     [")
         lines.append("        rdf:type dali:TestbedContext ;")
         lines.extend(tc_lines)
         lines.append("    ] ;")
 
-    if distribution_url:
-        dist_uri = f"{uri}/distribution/{FIRST_DISTRIBUTION_ID}"
-        lines.append(f"    dcat:distribution       <{dist_uri}> ;")
-
     # close the dataset resource
     lines[-1] = lines[-1].rstrip(" ;") + " ."
 
-    if distribution_url:
-        lines += [
-            "",
-            f"<{dist_uri}>",
-            "    rdf:type       dcat:Distribution ;",
-            f'    dct:title      "{_esc(ident.title)} - distribution"@en ;',
-            f"    dcat:accessURL <{distribution_url}> ;",
-            # Identifies the underlying file — this, not the distribution's own
-            # URI/distribution_id, is what the validate DAG's resolve_asset_title
-            # prefixes with the file extension to find the S3 object (see
-            # dali/dataspace.py). Matches FIRST_DISTRIBUTION_ID since that's also
-            # the object's actual basename at upload time (routers/datasets.py).
-            f'    dali:assetId   "{FIRST_DISTRIBUTION_ID}" ;',
-        ]
-        if media_type:
-            lines.append(f'    dcat:mediaType "{media_type}" ;')
-        # Measured variables/technique describe this distribution's file
-        # specifically, not the dataset as a whole (see MAP §5.3.E/§5.6) —
-        # placed here rather than on the dataset resource above.
-        for var in metrics.variable_measured:
-            lines.append(f'    schema:variableMeasured "{_esc(var)}" ;')
-        if metrics.measurement_technique:
-            lines.append(f'    schema:measurementTechnique "{_esc(metrics.measurement_technique)}"@en ;')
-        lines[-1] = lines[-1].rstrip(" ;") + " ."
-
-    turtle = "\n".join(lines)
-    return turtle
+    return "\n".join(lines)
 
 
-async def submit_dataset(
-    dataset_id: str, catalogue_id: str, sub: DatasetSubmission, distribution_url: str | None, media_type: str | None
+async def create_dataset(
+    dataset_id: str, catalogue_id: str, ident: DatasetIdentity, obj: DatasetObject, testbed_context: TestbedContext
 ) -> dict:
-    if not PIVEAU_HUB_URL or not PIVEAU_API_KEY:
-        raise HTTPException(status_code=503, detail="PIVEAU_HUB_URL or PIVEAU_API_KEY not configured")
+    """Step 1: register the dataset's own metadata in piveau. No file, no
+    distribution yet — call add_distribution afterwards for that."""
+    _require_piveau_config()
 
-    turtle = build_turtle(dataset_id, sub, distribution_url, media_type)
-    log.info("[piveau] Turtle for dataset %s:\n%s", dataset_id, turtle)
+    turtle = build_dataset_turtle(dataset_id, ident, obj, testbed_context)
+    log.info("[piveau] dataset Turtle for %s:\n%s", dataset_id, turtle)
 
     url = f"{PIVEAU_HUB_URL}/datasets/{dataset_id}?catalogue={catalogue_id}"
     headers = {"X-API-Key": PIVEAU_API_KEY, "Content-Type": "text/turtle"}
@@ -249,4 +230,130 @@ async def submit_dataset(
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Could not reach piveau at {PIVEAU_HUB_URL}: {e}")
 
-    return {"dataset_id": dataset_id, "dataset_uri": _dataset_uri(dataset_id), "status": "submitted", "piveau_url": url}
+    return {"dataset_id": dataset_id, "dataset_uri": _dataset_uri(dataset_id), "status": "created", "piveau_url": url}
+
+
+async def _fetch_dataset_graph(dataset_id: str, catalogue_id: str) -> dict:
+    _require_piveau_config()
+    url = f"{PIVEAU_HUB_URL}/datasets/{dataset_id}?catalogue={catalogue_id}"
+    headers = {"X-API-Key": PIVEAU_API_KEY, "Accept": "application/ld+json"}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(url, headers=headers)
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"piveau error for {dataset_id}: {e.response.status_code} {e.response.text[:500]}",
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach piveau at {PIVEAU_HUB_URL}: {e}")
+    return r.json()
+
+
+def _node_types(node: dict) -> list[str]:
+    t = node.get("@type", [])
+    return t if isinstance(t, list) else [t]
+
+
+def _count_distributions(graph: dict) -> int:
+    nodes = graph.get("@graph", [])
+    return sum(1 for n in nodes if any("Distribution" in t for t in _node_types(n)))
+
+
+async def next_distribution_id(dataset_id: str, catalogue_id: str) -> str:
+    """The distribution_id the *next* add_distribution call on this dataset
+    will get — needed by the caller up front, since the S3 object must be
+    uploaded under "{this_id}.{ext}" before add_distribution itself runs."""
+    graph = await _fetch_dataset_graph(dataset_id, catalogue_id)
+    return str(_count_distributions(graph) + 1)
+
+
+async def add_distribution(
+    dataset_id: str, catalogue_id: str, distribution_id: str,
+    distribution_url: str, media_type: str | None, metrics: DistributionMetrics,
+) -> dict:
+    """Step 2: append a new dcat:Distribution to an existing dataset's piveau
+    record — fetch the current JSON-LD graph, add the node (+ link it from
+    the dataset), PUT the whole graph back. Safe to call more than once per
+    dataset; get `distribution_id` from next_distribution_id first so the
+    caller can name the S3 object to match before this runs."""
+    graph = await _fetch_dataset_graph(dataset_id, catalogue_id)
+    nodes = graph.get("@graph", [])
+    uri = _dataset_uri(dataset_id)
+
+    ds_node = next((n for n in nodes if n.get("@id") == uri), None)
+    title = ""
+    if ds_node is not None:
+        t = ds_node.get("dct:title")
+        if isinstance(t, dict):
+            title = t.get("@value", "")
+        elif isinstance(t, str):
+            title = t
+
+    dist_uri = f"{uri}/distribution/{distribution_id}"
+    dist_title = f"{title} - distribution" if title else f"Distribution {distribution_id}"
+
+    dist_node: dict = {
+        "@id": dist_uri,
+        "@type": "dcat:Distribution",
+        "dct:title": {"@value": dist_title, "@language": "en"},
+        "dcat:accessURL": {"@id": distribution_url},
+        # Identifies the underlying file — this, not the distribution's own
+        # URI/distribution_id, is what the validate DAG's resolve_asset_title
+        # prefixes with the file extension to find the S3 object (see
+        # dali/dataspace.py). Must match the object's actual uploaded
+        # basename (routers/datasets.py).
+        "dali:assetId": distribution_id,
+    }
+    if media_type:
+        dist_node["dcat:mediaType"] = media_type
+    # Measured variables/technique describe this distribution's file
+    # specifically, not the dataset as a whole (see MAP §5.3.E/§5.6).
+    if metrics.variable_measured:
+        dist_node["schema:variableMeasured"] = list(metrics.variable_measured)
+    if metrics.measurement_technique:
+        dist_node["schema:measurementTechnique"] = {"@value": metrics.measurement_technique, "@language": "en"}
+
+    nodes.append(dist_node)
+
+    if ds_node is not None:
+        existing = ds_node.get("dcat:distribution")
+        refs = [] if existing is None else (existing if isinstance(existing, list) else [existing])
+        refs.append({"@id": dist_uri})
+        ds_node["dcat:distribution"] = refs
+    else:
+        log.warning("[piveau] dataset node %s not found in its own fetched graph — "
+                    "dcat:distribution link not added, only the distribution node itself", uri)
+
+    graph["@graph"] = nodes
+
+    ctx = graph.get("@context", {})
+    if isinstance(ctx, dict):
+        ctx.setdefault("dct",    "http://purl.org/dc/terms/")
+        ctx.setdefault("dcat",   "http://www.w3.org/ns/dcat#")
+        ctx.setdefault("dali",   "https://dali-project.eu/ns#")
+        ctx.setdefault("schema", "https://schema.org/")
+        graph["@context"] = ctx
+
+    url = f"{PIVEAU_HUB_URL}/datasets/{dataset_id}?catalogue={catalogue_id}"
+    headers = {"X-API-Key": PIVEAU_API_KEY, "Content-Type": "application/ld+json"}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.put(url, content=json.dumps(graph).encode(), headers=headers)
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"piveau error for {dataset_id}: {e.response.status_code} {e.response.text[:500]}",
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach piveau at {PIVEAU_HUB_URL}: {e}")
+
+    return {
+        "dataset_id":       dataset_id,
+        "distribution_id":  distribution_id,
+        "distribution_uri": dist_uri,
+        "status":           "submitted",
+        "piveau_url":       url,
+    }
