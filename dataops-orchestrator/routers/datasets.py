@@ -103,20 +103,24 @@ async def add_distribution(
     if not DATASPACE_S3_ENDPOINT_URL:
         raise HTTPException(status_code=503, detail="DATASPACE_S3_ENDPOINT_URL not configured")
 
-    # Determined *before* upload — the object is named "{distribution_id}.{ext}"
-    # (ext derived from content-type), so the validate DAG can later resolve
-    # this exact object key from dali:assetId + dcat:mediaType alone (see
-    # dali.dataspace.resolve_asset_title), without a filename being passed
-    # around as a separate value. add_distribution below writes this same
-    # distribution_id as the new distribution's dali:assetId.
+    # asset_id is a fresh UUID, independent of distribution_id (which only
+    # numbers/locates the dcat:Distribution node in the dataset's graph). The
+    # object is named "{asset_id}.{ext}" (ext derived from content-type), so
+    # the validate DAG can later resolve this exact object key from
+    # dali:assetId + dcat:mediaType alone (see dali.dataspace.resolve_asset_title).
+    # add_distribution below writes this same asset_id as the new
+    # distribution's dali:assetId, and the uploaded file's original name as
+    # its dct:title.
     distribution_id = await pdc.next_distribution_id(dataset_id, catalogue_id)
+    asset_id = str(uuid.uuid4())
     ext = pdc.extension_for_media_type(file.content_type)
-    object_filename = f"{distribution_id}.{ext}"
+    object_filename = f"{asset_id}.{ext}"
     object_key = dlc.upload_dataset_file(catalogue_id, dataset_id, object_filename, content)
     distribution_url = f"{DATASPACE_S3_ENDPOINT_URL.rstrip('/')}/{catalogue_id}/{object_key}"
 
     piveau_result = await pdc.add_distribution(
-        dataset_id, catalogue_id, distribution_id, distribution_url, file.content_type, dist_metrics
+        dataset_id, catalogue_id, distribution_id, asset_id,
+        distribution_url, file.filename, file.content_type, dist_metrics
     )
 
     dag_result = await af.trigger_dag(VALIDATION_DAG_ID, {
