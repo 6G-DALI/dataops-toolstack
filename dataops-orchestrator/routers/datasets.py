@@ -123,10 +123,19 @@ async def add_distribution(
         distribution_url, file.filename, file.content_type, dist_metrics
     )
 
+    # The DAG's `distribution_id` param is used to locate this exact
+    # dcat:Distribution node in piveau (see dali.utils.dist_keys), which only
+    # matches a node's own @id / dct:identifier — never our internal
+    # sequential `distribution_id` counter above, which piveau has no
+    # knowledge of, nor asset_id directly. piveau mints its own new @id for
+    # the distribution on write, so add_distribution re-fetches the dataset
+    # afterwards and resolves that real, piveau-assigned id (matched via
+    # asset_id, which is preserved verbatim) — that's what has to be passed
+    # here for the DAG to actually find the node.
     dag_result = await af.trigger_dag(VALIDATION_DAG_ID, {
         "catalogue_id":    catalogue_id,
         "dataset_id":      dataset_id,
-        "distribution_id": distribution_id,
+        "distribution_id": piveau_result["distribution_id"],
         "expectations":    exp_list,
     })
 

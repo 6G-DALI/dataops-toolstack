@@ -40,6 +40,7 @@ PIVEAU_API_KEY         = os.getenv("PIVEAU_API_KEY", "")
 DSPACE_BASE            = os.getenv("DSPACE_BASE_URL", "https://dataspace.6gdali.eu")
 PUBLISHER_NAME_DEFAULT = os.getenv("PUBLISHER_NAME", "6G-DALI")
 DATASPACE_S3_ENDPOINT_URL = os.getenv("DATASPACE_S3_ENDPOINT_URL", "")
+DALI_NS                = "https://dali-project.eu/ns#"
 
 # Kept in sync with dali/utils.py's EXTENSION_BY_MEDIA_TYPE on the Airflow
 # side: the validate DAG resolves a distribution's S3 object filename as
@@ -263,6 +264,21 @@ def _node_types(node: dict) -> list[str]:
     return t if isinstance(t, list) else [t]
 
 
+def _scalar(val) -> str:
+    if isinstance(val, list):
+        val = val[0] if val else ""
+    if isinstance(val, dict):
+        return val.get("@value", "")
+    return str(val) if val else ""
+
+
+def _asset_id_of(node: dict) -> str:
+    # piveau's own Turtle/JSON-LD serialization doesn't necessarily reuse the
+    # "dali:" prefix we submitted under — it may come back keyed by the full
+    # IRI instead (confirmed against a real record). Check both forms.
+    return _scalar(node.get("dali:assetId") or node.get(f"{DALI_NS}assetId"))
+
+
 def _count_distributions(graph: dict) -> int:
     nodes = graph.get("@graph", [])
     return sum(1 for n in nodes if any("Distribution" in t for t in _node_types(n)))
@@ -367,10 +383,35 @@ async def add_distribution(
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Could not reach piveau at {PIVEAU_HUB_URL}: {e}")
 
+    # piveau mints its own canonical @id for the distribution on write,
+    # discarding whatever @id we PUT (confirmed against a real record: our
+    # submitted URI only survives as dct:identifier, while @id becomes a new
+    # piveau-assigned UUID under /set/distribution/). Callers (e.g. the
+    # validate DAG trigger) need *that* real id to ever find this node again,
+    # so re-fetch the graph and locate the node by its dali:assetId — a plain
+    # literal, unlike @id/dct:identifier, so it survives untouched — then
+    # read off piveau's actual assigned id.
+    refetched = await _fetch_dataset_graph(dataset_id, catalogue_id)
+    real_node = next(
+        (
+            n for n in refetched.get("@graph", [])
+            if any("Distribution" in t for t in _node_types(n)) and _asset_id_of(n) == asset_id
+        ),
+        None,
+    )
+    if real_node is not None:
+        real_uri = real_node.get("@id") or dist_uri
+        piveau_distribution_id = real_uri.rstrip("/").rsplit("/", 1)[-1]
+    else:
+        log.warning("[piveau] could not find the just-added distribution (asset_id=%s) in the "
+                    "re-fetched graph for %s — falling back to the locally-guessed id", asset_id, dataset_id)
+        real_uri = dist_uri
+        piveau_distribution_id = distribution_id
+
     return {
         "dataset_id":       dataset_id,
-        "distribution_id":  distribution_id,
-        "distribution_uri": dist_uri,
+        "distribution_id":  piveau_distribution_id,
+        "distribution_uri": real_uri,
         "status":           "submitted",
         "piveau_url":       url,
     }
