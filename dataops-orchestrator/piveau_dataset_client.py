@@ -333,9 +333,9 @@ async def add_distribution(
         # Identifies the underlying file — a UUID generated at upload time
         # (routers/datasets.py), independent of distribution_id (which only
         # locates this node within the dataset's graph). This, not
-        # distribution_id, is what the validate DAG's resolve_asset_title
-        # prefixes with the file extension to find the S3 object (see
-        # dali/dataspace.py). Must match the object's actual uploaded
+        # distribution_id, is what the validate DAG's download_dataset task
+        # matches against an S3 prefix listing to find the object (see
+        # dali/datalake.py). Must match the object's actual uploaded
         # basename (routers/datasets.py).
         "dali:assetId": asset_id,
     }

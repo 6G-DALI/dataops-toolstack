@@ -33,12 +33,11 @@ def upload_dataset_file(catalogue_id: str, dataset_id: str, filename: str, conte
     """
     Upload a submitted dataset file to <catalogue_id>/<dataset_id>/<filename>
     in the Data Lake, matching the object-key convention the validate DAG
-    resolves via dali:assetId + dcat:mediaType (see
-    dali.dataspace.resolve_asset_title and
-    piveau_dataset_client.py's extension_for_media_type/add_distribution —
-    `filename` here should be built the same way, i.e.
-    "{distribution_id}.{ext}", not an arbitrary original upload name).
-    Returns the object key.
+    resolves via an S3 prefix listing on dali:assetId (see
+    dali.datalake.download_dataset and piveau_dataset_client.py's
+    extension_for_media_type/add_distribution — `filename` here should be
+    built the same way, i.e. "{asset_id}.{ext}", not an arbitrary original
+    upload name). Returns the object key.
     """
     key = f"{dataset_id}/{filename}"
     client = _client()

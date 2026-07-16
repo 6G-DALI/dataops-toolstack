@@ -106,11 +106,11 @@ async def add_distribution(
     # asset_id is a fresh UUID, independent of distribution_id (which only
     # numbers/locates the dcat:Distribution node in the dataset's graph). The
     # object is named "{asset_id}.{ext}" (ext derived from content-type), so
-    # the validate DAG can later resolve this exact object key from
-    # dali:assetId + dcat:mediaType alone (see dali.dataspace.resolve_asset_title).
-    # add_distribution below writes this same asset_id as the new
-    # distribution's dali:assetId, and the uploaded file's original name as
-    # its dct:title.
+    # the validate DAG can later resolve this exact object key by listing the
+    # bucket for that prefix (see dali.datalake.download_dataset) — no piveau
+    # round trip needed. add_distribution below writes this same asset_id as
+    # the new distribution's dali:assetId, and the uploaded file's original
+    # name as its dct:title.
     distribution_id = await pdc.next_distribution_id(dataset_id, catalogue_id)
     asset_id = str(uuid.uuid4())
     ext = pdc.extension_for_media_type(file.content_type)
@@ -123,20 +123,20 @@ async def add_distribution(
         distribution_url, file.filename, file.content_type, dist_metrics
     )
 
-    # The DAG's `distribution_id` param is used to locate this exact
-    # dcat:Distribution node in piveau (see dali.utils.dist_keys), which only
-    # matches a node's own @id / dct:identifier — never our internal
-    # sequential `distribution_id` counter above, which piveau has no
-    # knowledge of, nor asset_id directly. piveau mints its own new @id for
-    # the distribution on write, so add_distribution re-fetches the dataset
-    # afterwards and resolves that real, piveau-assigned id (matched via
-    # asset_id, which is preserved verbatim) — that's what has to be passed
-    # here for the DAG to actually find the node.
+    # The DAG's `asset_id` param is used both to resolve the distribution's
+    # S3 object (dali.datalake.download_dataset lists the bucket for
+    # "{dataset_id}/{asset_id}.*") and to locate its dcat:Distribution node
+    # in piveau (dali.dataspace.publish_quality_to_piveau, via dist_keys) —
+    # asset_id works for the latter because it's embedded as the last path
+    # segment of dct:identifier (see piveau_dataset_client.add_distribution),
+    # which is stable, unlike the node's own @id (piveau mints its own UUID
+    # for that on write). Passing asset_id directly means neither step needs
+    # a round trip through piveau's own (unpredictable) distribution id.
     dag_result = await af.trigger_dag(VALIDATION_DAG_ID, {
-        "catalogue_id":    catalogue_id,
-        "dataset_id":      dataset_id,
-        "distribution_id": piveau_result["distribution_id"],
-        "expectations":    exp_list,
+        "catalogue_id": catalogue_id,
+        "dataset_id":   dataset_id,
+        "asset_id":     asset_id,
+        "expectations": exp_list,
     })
 
     return {
