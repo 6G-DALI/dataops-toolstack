@@ -52,28 +52,114 @@ def sanitize(obj):
     return obj
 
 
-def fetch_columns_from_piveau(dataset_id: str) -> list[str]:
-    """Fetch schema:variableMeasured column names from piveau for a dataset."""
+def _scalar(val) -> str:
+    """Unwrap a JSON-LD value node ({"@value": ...} or {"@id": ...}) to a plain string."""
+    if isinstance(val, dict):
+        return str(val.get("@value") or val.get("@id") or "")
+    return str(val) if val else ""
+
+
+def node_types(node: dict) -> list[str]:
+    t = node.get("@type", [])
+    return t if isinstance(t, list) else [t]
+
+
+def dist_keys(node: dict) -> set[str]:
+    """All identifiers a distribution node could plausibly be addressed by:
+    its full @id, that @id's last path segment, and likewise for
+    dct:identifier — matches piveau_client.py's _dist_keys on the UI side,
+    since piveau's own distribution "id" doesn't consistently show up in the
+    same form in every context."""
+    keys: set[str] = set()
+    for raw in (node.get("@id", ""), _scalar(node.get("dct:identifier"))):
+        if not raw:
+            continue
+        keys.add(raw)
+        keys.add(raw.rstrip("/").rsplit("/", 1)[-1])
+    return keys
+
+
+# Minimal media-type -> file extension mapping, covering the formats DataOps
+# datasets actually use. Kept in sync with the equivalent mapping used at
+# upload time in dataops-orchestrator/piveau_dataset_client.py, since the S3
+# object name (this DAG's `asset_title`) is derived from the same rule on
+# both sides rather than passed around as a separate value.
+EXTENSION_BY_MEDIA_TYPE = {
+    "text/csv":                     "csv",
+    "text/tab-separated-values":    "tsv",
+    "application/json":             "json",
+    "application/ld+json":          "jsonld",
+    "text/plain":                   "txt",
+    "application/xml":               "xml",
+    "text/xml":                     "xml",
+    "application/parquet":          "parquet",
+    "application/octet-stream":     "bin",
+}
+
+
+def extension_for_media_type(media_type: str) -> str:
+    return EXTENSION_BY_MEDIA_TYPE.get((media_type or "").lower().strip(), "dat")
+
+
+def fetch_distribution_media_type(dataset_id: str, distribution_id: str) -> str:
+    """Fetch a specific distribution's dcat:mediaType from piveau, matching it
+    by distribution_id (see dist_keys) rather than assuming it's the only/first
+    distribution on the dataset."""
     url = f"{PIVEAU_DATASETS_URL}/{dataset_id}"
     req = urllib.request.Request(url, headers={"Accept": "application/ld+json"})
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
         graph = data.get("@graph", [])
-        ds_node = next(
-            (n for n in graph if any(
-                "Dataset" in t for t in (
-                    [n.get("@type")] if isinstance(n.get("@type"), str) else n.get("@type", [])
-                )
-            )),
-            None,
-        )
-        if not ds_node:
-            return []
-        cols = ds_node.get("schema:variableMeasured") or ds_node.get("https://schema.org/variableMeasured", [])
-        if isinstance(cols, str):
-            cols = [cols]
-        return [c for c in cols if isinstance(c, str)]
+        for node in graph:
+            if "Distribution" not in "".join(node_types(node)):
+                continue
+            if distribution_id and distribution_id not in dist_keys(node):
+                continue
+            mt = node.get("dcat:mediaType") or node.get("http://www.w3.org/ns/dcat#mediaType")
+            if mt:
+                return _scalar(mt)
+        return ""
+    except Exception as exc:
+        print(f"[dali] could not fetch distribution media type: {exc}")
+        return ""
+
+
+def _variable_measured_of(node: dict) -> list[str]:
+    vm = node.get("schema:variableMeasured") or node.get("https://schema.org/variableMeasured") or []
+    if isinstance(vm, (str, dict)):
+        vm = [vm]
+    return [c for c in (_scalar(v) for v in vm) if c]
+
+
+def fetch_columns_from_piveau(dataset_id: str) -> list[str]:
+    """Fetch schema:variableMeasured column names from piveau for a dataset.
+
+    The application profile places this on the dataset node, but some
+    records (e.g. harvested/externally-sourced ones) carry it on a
+    dcat:Distribution node instead — both are checked and merged so either
+    placement works, deduped while preserving first-seen order.
+    """
+    url = f"{PIVEAU_DATASETS_URL}/{dataset_id}"
+    req = urllib.request.Request(url, headers={"Accept": "application/ld+json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        graph = data.get("@graph", [])
+
+        cols: list[str] = []
+        for node in graph:
+            types = [node.get("@type")] if isinstance(node.get("@type"), str) else node.get("@type", [])
+            if any("Dataset" in t or "Distribution" in t for t in types):
+                cols.extend(_variable_measured_of(node))
+
+        seen: set[str] = set()
+        deduped = []
+        for c in cols:
+            if c not in seen:
+                seen.add(c)
+                deduped.append(c)
+        return deduped
     except Exception as exc:
         print(f"[dali] could not fetch columns from piveau: {exc}")
         return []

@@ -21,10 +21,10 @@ from dali.utils import (
 
 
 @task
-def run_expectations(csv_content: str) -> dict:
+def run_expectations(csv_content: str, asset_title: str) -> dict:
     params = get_current_context()["params"]
     dataset_id = params["dataset_id"]
-    input_key = f"{dataset_id}/{params['asset_title']}"
+    input_key = f"{dataset_id}/{asset_title}"
     expectations = parse_expectations(params["expectations"])
 
     df = pd.read_csv(io.StringIO(csv_content))
