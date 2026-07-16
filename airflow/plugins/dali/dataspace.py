@@ -12,26 +12,33 @@ from dali.utils import (
     PIVEAU_DATASETS_URL,
     dist_keys,
     extension_for_media_type,
-    fetch_distribution_media_type,
+    fetch_distribution_info,
     node_types,
 )
 
 
 @task
 def resolve_asset_title() -> str:
-    """Derive the distribution's S3 object filename from distribution_id and
-    its dcat:mediaType (fetched from piveau), instead of taking it as a DAG
-    param — keeps it in sync with how dataops-orchestrator names the object
-    at upload time (see piveau_dataset_client.py's FIRST_DISTRIBUTION_ID and
-    routers/datasets.py's submit_dataset)."""
+    """Derive the distribution's S3 object filename from its dali:assetId and
+    dcat:mediaType (fetched from piveau), instead of taking it as a DAG param
+    — keeps it in sync with how dataops-orchestrator names the object at
+    upload time (see piveau_dataset_client.py's FIRST_DISTRIBUTION_ID and
+    routers/datasets.py's submit_dataset).
+
+    distribution_id only locates the right dcat:Distribution node — it is
+    piveau's own node identifier, not necessarily the same as dali:assetId,
+    which is what actually identifies the file and is what gets prefixed
+    with the extension here. Falls back to distribution_id when a
+    distribution has no dali:assetId (e.g. older/foreign records)."""
     params = get_current_context()["params"]
     dataset_id      = params["dataset_id"]
     distribution_id = params.get("distribution_id", "")
-    media_type = fetch_distribution_media_type(dataset_id, distribution_id)
+    asset_id, media_type = fetch_distribution_info(dataset_id, distribution_id)
     ext = extension_for_media_type(media_type)
-    asset_title = f"{distribution_id}.{ext}" if distribution_id else f"data.{ext}"
-    print(f"[dali] resolved asset_title={asset_title!r} from distribution_id={distribution_id!r} "
-          f"media_type={media_type!r}")
+    basename = asset_id or distribution_id or "data"
+    asset_title = f"{basename}.{ext}"
+    print(f"[dali] resolved asset_title={asset_title!r} from asset_id={asset_id!r} "
+          f"distribution_id={distribution_id!r} media_type={media_type!r}")
     return asset_title
 
 
