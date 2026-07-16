@@ -132,13 +132,17 @@ def _variable_measured_of(node: dict) -> list[str]:
     return [c for c in (_scalar(v) for v in vm) if c]
 
 
-def fetch_columns_from_piveau(dataset_id: str) -> list[str]:
+def fetch_columns_from_piveau(dataset_id: str, distribution_id: str = "") -> list[str]:
     """Fetch schema:variableMeasured column names from piveau for a dataset.
 
     The application profile places this on the dataset node, but some
-    records (e.g. harvested/externally-sourced ones) carry it on a
-    dcat:Distribution node instead — both are checked and merged so either
-    placement works, deduped while preserving first-seen order.
+    records (e.g. harvested/externally-sourced ones) carry it on the
+    dcat:Distribution node instead — both are checked. Critically, only the
+    *targeted* distribution (matched via distribution_id, see dist_keys) is
+    considered, never every distribution on the dataset — a multi-distribution
+    dataset can have a different column list per distribution, and mixing
+    them in would generate expectations for columns that don't exist in the
+    file actually being validated.
     """
     url = f"{PIVEAU_DATASETS_URL}/{dataset_id}"
     req = urllib.request.Request(url, headers={"Accept": "application/ld+json"})
@@ -149,8 +153,13 @@ def fetch_columns_from_piveau(dataset_id: str) -> list[str]:
 
         cols: list[str] = []
         for node in graph:
-            types = [node.get("@type")] if isinstance(node.get("@type"), str) else node.get("@type", [])
-            if any("Dataset" in t or "Distribution" in t for t in types):
+            types = node_types(node)
+            is_dataset = any("Dataset" in t for t in types)
+            is_target_distribution = (
+                any("Distribution" in t for t in types)
+                and (not distribution_id or distribution_id in dist_keys(node))
+            )
+            if is_dataset or is_target_distribution:
                 cols.extend(_variable_measured_of(node))
 
         seen: set[str] = set()
