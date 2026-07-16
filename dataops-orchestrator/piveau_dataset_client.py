@@ -77,6 +77,13 @@ def _dataset_uri(dataset_id: str) -> str:
     return f"{DSPACE_BASE}/set/data/{dataset_id}"
 
 
+def _distribution_uri(asset_id: str) -> str:
+    """piveau represents distributions as flat resources — /set/distribution/{id},
+    not nested under the dataset's own URI — confirmed against production records
+    (e.g. https://dspace.sparkworks.net/set/distribution/<uuid>)."""
+    return f"{DSPACE_BASE}/set/distribution/{asset_id}"
+
+
 def _require_piveau_config() -> None:
     if not PIVEAU_HUB_URL or not PIVEAU_API_KEY:
         raise HTTPException(status_code=503, detail="PIVEAU_HUB_URL or PIVEAU_API_KEY not configured")
@@ -286,11 +293,21 @@ async def add_distribution(
     within the dataset's graph."""
     graph = await _fetch_dataset_graph(dataset_id, catalogue_id)
     nodes = graph.get("@graph", [])
-    uri = _dataset_uri(dataset_id)
 
-    ds_node = next((n for n in nodes if n.get("@id") == uri), None)
+    # Match by rdf:type, not by comparing @id to a locally-computed
+    # _dataset_uri(dataset_id) — piveau-hub-repo canonicalizes the dataset's
+    # own resource URI itself on PUT, so an exact-URI comparison here
+    # silently found no match against production records, which meant the
+    # new distribution was appended as an orphan node with no
+    # dcat:distribution link back to the dataset (confirmed against a real
+    # dataset record: its existing distributions never showed up as a match).
+    ds_node = next((n for n in nodes if any("Dataset" in t for t in _node_types(n))), None)
 
-    dist_uri = f"{uri}/distribution/{distribution_id}"
+    # piveau represents distributions as flat resources (.../set/distribution/{id}),
+    # not nested under the dataset's own URI — also confirmed against production
+    # records, which is why dist_uri is built from _distribution_uri, independent
+    # of whatever the dataset's own (possibly rewritten) @id turned out to be.
+    dist_uri = _distribution_uri(asset_id)
 
     dist_node: dict = {
         "@id": dist_uri,
@@ -323,8 +340,8 @@ async def add_distribution(
         refs.append({"@id": dist_uri})
         ds_node["dcat:distribution"] = refs
     else:
-        log.warning("[piveau] dataset node %s not found in its own fetched graph — "
-                    "dcat:distribution link not added, only the distribution node itself", uri)
+        log.warning("[piveau] no dcat:Dataset node found in the fetched graph for %s — "
+                    "dcat:distribution link not added, only the distribution node itself", dataset_id)
 
     graph["@graph"] = nodes
 
