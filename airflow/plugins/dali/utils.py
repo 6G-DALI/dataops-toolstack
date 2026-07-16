@@ -101,10 +101,16 @@ def extension_for_media_type(media_type: str) -> str:
     return EXTENSION_BY_MEDIA_TYPE.get((media_type or "").lower().strip(), "dat")
 
 
-def fetch_distribution_media_type(dataset_id: str, distribution_id: str) -> str:
-    """Fetch a specific distribution's dcat:mediaType from piveau, matching it
-    by distribution_id (see dist_keys) rather than assuming it's the only/first
-    distribution on the dataset."""
+def fetch_distribution_info(dataset_id: str, distribution_id: str) -> tuple[str, str]:
+    """Fetch a specific distribution's dali:assetId and dcat:mediaType from piveau.
+
+    `distribution_id` (see dist_keys) only locates the right dcat:Distribution
+    node in the graph — it's piveau's own node identifier, not necessarily the
+    same value as dali:assetId, which is what actually identifies the
+    underlying file in the Data Lake and is what the S3 object name is
+    derived from (see resolve_asset_title). Returns (asset_id, media_type),
+    either of which may be "" if the distribution or property isn't found.
+    """
     url = f"{PIVEAU_DATASETS_URL}/{dataset_id}"
     req = urllib.request.Request(url, headers={"Accept": "application/ld+json"})
     try:
@@ -116,13 +122,13 @@ def fetch_distribution_media_type(dataset_id: str, distribution_id: str) -> str:
                 continue
             if distribution_id and distribution_id not in dist_keys(node):
                 continue
+            asset_id = _scalar(node.get(f"{DALI_NS}assetId"))
             mt = node.get("dcat:mediaType") or node.get("http://www.w3.org/ns/dcat#mediaType")
-            if mt:
-                return _scalar(mt)
-        return ""
+            return asset_id, (_scalar(mt) if mt else "")
+        return "", ""
     except Exception as exc:
-        print(f"[dali] could not fetch distribution media type: {exc}")
-        return ""
+        print(f"[dali] could not fetch distribution info: {exc}")
+        return "", ""
 
 
 def _variable_measured_of(node: dict) -> list[str]:
