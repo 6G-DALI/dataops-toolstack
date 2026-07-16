@@ -17,7 +17,6 @@ Trigger via dag_run.conf:
 {
     "catalogue_id":    "6g-dali-staging-eur",
     "dataset_id":      "6g-dali-staging-eur-exp-0004",
-    "asset_title":     "part-00000.csv",
     "distribution_id": "1",                             # optional but recommended
     "expectations": [                                   # optional
         {"type": "expect_table_row_count_to_be_between", "min_value": 1},
@@ -26,14 +25,18 @@ Trigger via dag_run.conf:
     ]
 }
 
-`asset_title` is the distribution's filename, used purely to address the S3
-object — it is unrelated to the distribution's dct:title in piveau (a
-human-readable label), so it cannot be used to identify the distribution
-node in piveau's graph. `distribution_id` is piveau's own distribution
-identifier (its @id's last path segment, or dct:identifier) and is what's
-used for that lookup. When omitted, publish_quality_to_piveau falls back to
-the first dcat:Distribution node found — correct only when the dataset has
-a single distribution.
+There is no `asset_title` param — the distribution's S3 object filename is
+resolved by dali.dataspace.resolve_asset_title from `distribution_id` and
+that distribution's dcat:mediaType (fetched from piveau), as
+`{distribution_id}.{extension}`. This is the same rule
+dataops-orchestrator's submit_dataset applies when it first uploads the
+file (see piveau_dataset_client.py's FIRST_DISTRIBUTION_ID), so a freshly
+submitted dataset's object key and this DAG's resolved asset_title always
+agree without needing to pass the filename around as a separate value.
+`distribution_id` is piveau's own distribution identifier (its @id's last
+path segment, or dct:identifier). When omitted, both resolve_asset_title
+and publish_quality_to_piveau fall back to the first dcat:Distribution node
+found — correct only when the dataset has a single distribution.
 
 The source object is read from  <dataset_id>/<asset_title>  and results are
 written back to  <dataset_id>/<asset_title_without_extension>_<timestamp>.gx
@@ -56,7 +59,7 @@ from datetime import datetime
 from airflow.decorators import dag
 from airflow.models.param import Param
 
-from dali.dataspace import publish_quality_to_piveau
+from dali.dataspace import publish_quality_to_piveau, resolve_asset_title
 from dali.datalake import download_dataset, upload_results
 from dali.validation import report_outcome, run_expectations
 
@@ -71,14 +74,14 @@ from dali.validation import report_outcome, run_expectations
     params={
         "catalogue_id":    Param("", type="string", description="Catalogue ID"),
         "dataset_id":      Param("", type="string", description="Dataset ID"),
-        "asset_title":     Param("", type="string", description="Distribution's filename (S3 object key component)"),
-        "distribution_id": Param("", type="string", description="Piveau distribution ID — identifies which distribution's dcat:Distribution node quality results are published to"),
+        "distribution_id": Param("", type="string", description="Piveau distribution ID — identifies which distribution to validate and which dcat:Distribution node quality results are published to"),
         "expectations":    Param([], type="array",  description="List of GX expectation configs"),
     },
 )
 def dali_dataspace_validate_dataset():
-    csv_content = download_dataset()
-    report      = run_expectations(csv_content=csv_content)
+    asset_title = resolve_asset_title()
+    csv_content = download_dataset(asset_title=asset_title)
+    report      = run_expectations(csv_content=csv_content, asset_title=asset_title)
     output_key  = upload_results(report=report)
     publish_quality_to_piveau(report=report)
     report_outcome(output_key=output_key, report=report)

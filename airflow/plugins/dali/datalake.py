@@ -23,7 +23,7 @@ EDC_POLL_TIMEOUT  = int(os.getenv("EDC_POLL_TIMEOUT", "120"))
 
 
 @task
-def download_dataset() -> str:
+def download_dataset(asset_title: str) -> str:
     params = get_current_context()["params"]
     hook = S3Hook(aws_conn_id=DATASPACE_S3_CONN_ID)
 
@@ -33,8 +33,8 @@ def download_dataset() -> str:
     print(f"[dali] resolved endpoint_url={client.meta.endpoint_url!r} region={client.meta.region_name!r} "
           f"addressing_style={client.meta.config.s3.get('addressing_style') if client.meta.config.s3 else None!r}")
 
-    input_key = f"{params['dataset_id']}/{params['asset_title']}"
-    print(f"[dali] dataset_id={params['dataset_id']} asset_title={params['asset_title']}")
+    input_key = f"{params['dataset_id']}/{asset_title}"
+    print(f"[dali] dataset_id={params['dataset_id']} asset_title={asset_title}")
     print(f"[dali] bucket={params['catalogue_id']!r} key={input_key!r}")
 
     obj = hook.get_key(key=input_key, bucket_name=params["catalogue_id"])
@@ -254,7 +254,7 @@ def download_dataset_edc() -> str:
 def upload_results(report: dict) -> str:
     params = get_current_context()["params"]
     catalogue_id = params["catalogue_id"]
-    input_key    = f"{params['dataset_id']}/{params['asset_title']}"
+    input_key    = report["input_key"]
 
     base = os.path.splitext(input_key)[0]
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
