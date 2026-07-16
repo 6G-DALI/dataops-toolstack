@@ -78,10 +78,11 @@ async def submit_dataset(file: UploadFile, metadata: str = Form(...), expectatio
     piveau_result = await pdc.submit_dataset(dataset_id, catalogue_id, sub, distribution_url, file.content_type)
 
     dag_result = await af.trigger_dag(VALIDATION_DAG_ID, {
-        "catalogue_id": catalogue_id,
-        "dataset_id":   dataset_id,
-        "asset_title":  file.filename,
-        "expectations": exp_list,
+        "catalogue_id":    catalogue_id,
+        "dataset_id":      dataset_id,
+        "asset_title":     file.filename,
+        "distribution_id": pdc.FIRST_DISTRIBUTION_ID,
+        "expectations":    exp_list,
     })
 
     return {

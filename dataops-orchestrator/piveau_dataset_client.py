@@ -27,6 +27,12 @@ DSPACE_BASE            = os.getenv("DSPACE_BASE_URL", "https://dataspace.6gdali.
 PUBLISHER_NAME_DEFAULT = os.getenv("PUBLISHER_NAME", "6G-DALI")
 DATASPACE_S3_ENDPOINT_URL = os.getenv("DATASPACE_S3_ENDPOINT_URL", "")
 
+# Every submission creates exactly one distribution, always numbered "1" —
+# this is also the distribution_id the validate DAG is triggered with right
+# after submission (see routers/datasets.py:submit_dataset), so the two stay
+# in sync without hardcoding "1" in two places.
+FIRST_DISTRIBUTION_ID = "1"
+
 _ACCESS_RIGHTS = {
     "PUBLIC":     "http://publications.europa.eu/resource/authority/access-right/PUBLIC",
     "RESTRICTED": "http://publications.europa.eu/resource/authority/access-right/RESTRICTED",
@@ -170,7 +176,7 @@ def build_turtle(dataset_id: str, sub: DatasetSubmission, distribution_url: str 
         lines.append("    ] ;")
 
     if distribution_url:
-        dist_uri = f"{uri}/distribution/1"
+        dist_uri = f"{uri}/distribution/{FIRST_DISTRIBUTION_ID}"
         lines.append(f"    dcat:distribution       <{dist_uri}> ;")
 
     # close the dataset resource

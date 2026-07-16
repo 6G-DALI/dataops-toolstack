@@ -136,6 +136,11 @@ def _normalize_distribution(
         "name": _title(ds.get("title")),
         "uri": _dist_uri(dist),
         "sns_project_name": sns,
+        # Piveau's own distribution identifier (not our composite "id" above) —
+        # what the validate DAG's distribution_id param expects, so it can find
+        # this exact dcat:Distribution node rather than defaulting to the first
+        # one found on a multi-distribution dataset.
+        "distribution_id":  dist_id,
         "asset_id":         detail.get("asset_id", ""),
         "asset_title":      asset_title,
         "dataset_id":       ds["id"],
@@ -170,6 +175,7 @@ def _fallback_distribution(ds: dict, sns: str, variable_measured: list[str], raw
         "name":             _title(ds.get("title")),
         "uri":              uri,
         "sns_project_name": sns,
+        "distribution_id":  "",
         "asset_id":         "",
         "asset_title":      "",
         "dataset_id":       ds["id"],
