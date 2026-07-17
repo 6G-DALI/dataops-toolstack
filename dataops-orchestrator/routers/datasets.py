@@ -146,7 +146,7 @@ async def add_distribution(
     # doesn't need to know about the EDC asset, or vice versa). Best-effort:
     # the S3 upload above already succeeded, so an EDC hiccup is reported,
     # not raised as a 5xx, and doesn't block the piveau publish that follows.
-    edc_result = await edc.register_asset(catalogue_id, object_key, media_type, file.filename)
+    edc_result = await edc.register_asset(catalogue_id, asset_id, object_key, media_type, file.filename)
 
     # Step 3: publish the distribution to piveau.
     piveau_result = await pdc.add_distribution(

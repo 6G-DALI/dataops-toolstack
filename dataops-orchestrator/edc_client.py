@@ -1,9 +1,16 @@
 """
 Registers newly submitted distributions as EDC (Eclipse Dataspace Connector)
 assets in our own provider connector's Management API, so they become
-discoverable/negotiable by EDC consumers — mirroring the shape
-dali.datalake.download_dataset_edc (Airflow, consumer side) expects when it
-later negotiates and pulls one of these assets from *some* provider.
+discoverable/negotiable by EDC consumers.
+
+The asset's @id is the distribution's dali:assetId — the same identifier
+written into its piveau description (see piveau_dataset_client.add_distribution)
+— so piveau and EDC agree on one identifier per distribution. Note this is
+NOT the same convention dali.datalake.download_dataset_edc (Airflow, consumer
+side) currently filters a provider's catalogue by (it queries
+"https://w3id.org/edc/v0.0.1/ns/id" = "{dataset_id}/{asset_title}"); that
+consumer-side lookup would need updating separately to match assets
+registered by this module.
 
 Registration is best-effort and happens *after* a distribution is already
 fully registered in piveau and uploaded to the Data Lake (see
@@ -64,16 +71,17 @@ async def _ensure_policy_and_contract_definition(client: httpx.AsyncClient) -> N
 
 
 async def register_asset(
-    catalogue_id: str, object_key: str, media_type: str | None = None, title: str | None = None
+    catalogue_id: str, asset_id: str, object_key: str, media_type: str | None = None, title: str | None = None
 ) -> dict:
     """Register one distribution's uploaded object as an EDC asset.
 
-    `object_key` (e.g. "{dataset_id}/{asset_id}.{ext}", see
-    datalake_client.upload_dataset_file) becomes the asset's own @id — this
-    exact string is what dali.datalake.download_dataset_edc (the consumer
-    side) filters a provider's catalogue by
-    (https://w3id.org/edc/v0.0.1/ns/id = input_key), so it must match that
-    convention exactly for a distribution to later be pulled via EDC.
+    `asset_id` — the same dali:assetId value written into the distribution's
+    piveau description (see piveau_dataset_client.add_distribution) — becomes
+    the EDC asset's own @id, so the two systems agree on one identifier for
+    the same distribution. `object_key` (e.g. "{dataset_id}/{asset_id}.{ext}",
+    see datalake_client.upload_dataset_file) is only used to locate the
+    object within the bucket (dataAddress.prefix) — a separate concern from
+    the asset's identifier.
 
     Returns {"status": "registered" | "already_registered" | "skipped" | "failed", ...}
     — never raises; callers get a result they can surface without the whole
@@ -92,10 +100,10 @@ async def register_asset(
 
     asset = {
         "@context": _EDC_CONTEXT,
-        "@id": object_key,
+        "@id": asset_id,
         "properties": properties,
         "dataAddress": {
-            "type":       "MinioFiles",
+            "type":       "MinioAsset",
             "endpoint":   DATASPACE_S3_ENDPOINT_URL,
             "bucketName": catalogue_id,
             "accessKey":  DATASPACE_S3_ACCESS_KEY,
@@ -109,12 +117,12 @@ async def register_asset(
             await _ensure_policy_and_contract_definition(client)
             r = await _post(client, "/v3/assets", asset)
             if r.status_code == 409:
-                return {"status": "already_registered", "asset_id": object_key}
+                return {"status": "already_registered", "asset_id": asset_id}
             r.raise_for_status()
-        return {"status": "registered", "asset_id": object_key, "edc_response": r.json()}
+        return {"status": "registered", "asset_id": asset_id, "edc_response": r.json()}
     except httpx.HTTPStatusError as e:
-        log.warning("[edc] asset registration failed for %s: %s %s", object_key, e.response.status_code, e.response.text[:500])
-        return {"status": "failed", "asset_id": object_key, "error": f"{e.response.status_code} {e.response.text[:500]}"}
+        log.warning("[edc] asset registration failed for %s: %s %s", asset_id, e.response.status_code, e.response.text[:500])
+        return {"status": "failed", "asset_id": asset_id, "error": f"{e.response.status_code} {e.response.text[:500]}"}
     except httpx.RequestError as e:
         log.warning("[edc] could not reach provider connector at %s: %s", EDC_PROVIDER_MANAGEMENT_URL, e)
-        return {"status": "failed", "asset_id": object_key, "error": f"Could not reach EDC provider connector: {e}"}
+        return {"status": "failed", "asset_id": asset_id, "error": f"Could not reach EDC provider connector: {e}"}

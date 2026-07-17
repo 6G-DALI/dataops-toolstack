@@ -42,6 +42,13 @@ PUBLISHER_NAME_DEFAULT = os.getenv("PUBLISHER_NAME", "6G-DALI")
 DATASPACE_S3_ENDPOINT_URL = os.getenv("DATASPACE_S3_ENDPOINT_URL", "")
 DALI_NS                = "https://dali-project.eu/ns#"
 
+# Every distribution submitted through add_distribution is also registered
+# as an EDC asset (see edc_client.register_asset) — this is the connector's
+# own public base URL, used as dcat:accessURL (the negotiation entrypoint,
+# distinct from EDC_PROVIDER_MANAGEMENT_URL's internal Management API and
+# from the raw S3 object URL, which goes in dcat:downloadURL instead).
+EDC_CONNECTOR_URL = os.getenv("EDC_CONNECTOR_URL", "http://edc.6gdali.sparkworks.net")
+
 # Fallback for when the uploaded filename itself has no extension (see
 # routers/datasets.py, which prefers the original filename's own extension —
 # more reliable than content-type, since browsers/clients often send generic
@@ -365,7 +372,11 @@ async def add_distribution(
         "@id": dist_uri,
         "@type": "dcat:Distribution",
         "dct:title": {"@value": original_filename or f"Distribution {distribution_id}"},
-        "dcat:accessURL": {"@id": distribution_url},
+        # accessURL points at the EDC connector's negotiation entrypoint
+        # (this distribution is registered there under dali:assetId — see
+        # edc_client.register_asset), not the raw file — that's downloadURL.
+        "dcat:accessURL": {"@id": EDC_CONNECTOR_URL},
+        "dcat:downloadURL": {"@id": distribution_url},
         # Identifies the underlying file — a UUID generated at upload time
         # (routers/datasets.py), independent of distribution_id (which only
         # locates this node within the dataset's graph). This, not
@@ -374,6 +385,13 @@ async def add_distribution(
         # dali/datalake.py). Must match the object's actual uploaded
         # basename (routers/datasets.py).
         "dali:assetId": asset_id,
+        # Every distribution submitted through this endpoint is also
+        # registered as an EDC asset under this same asset_id (see
+        # edc_client.register_asset, called from routers/datasets.py before
+        # this) — connectorType flags that to consumers (e.g. the vanilla
+        # frontend's download-button logic), matching the "dspaceconnector"
+        # value used elsewhere for EDC-served distributions.
+        "dali:connectorType": "dspaceconnector",
     }
     if media_type:
         dist_node["dcat:mediaType"] = media_type
