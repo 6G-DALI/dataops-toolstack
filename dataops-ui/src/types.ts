@@ -12,6 +12,7 @@ export type View =
   | 'dag-builder'
   | 'task-creator'
   | 'datasets'
+  | 'dataset-creator'
   | 'services'
 
 export interface NavParams {
@@ -136,6 +137,32 @@ export interface DagRef {
 export interface Dataset {
   id: string
   name?: string
+  sns_project_name?: string
+  catalog_id?: string
+  catalog_title?: string
+  catalog_url?: string
+  dataset_id?: string
+  distribution_count?: number
+  updated_at?: string | null
+  extra?: {
+    formats?: string[]
+    publisher?: string
+    [key: string]: unknown
+  }
+  variable_measured?: string[]
+  producing_dags?: DagRef[]
+  consuming_dags?: DagRef[]
+  raw?: unknown
+}
+
+export interface DatasetsResponse {
+  datasets: Dataset[]
+}
+
+export interface Distribution {
+  id: string
+  name?: string
+  distribution_id?: string
   asset_id?: string
   asset_title?: string
   sns_project_name?: string
@@ -156,8 +183,152 @@ export interface Dataset {
   raw?: unknown
 }
 
-export interface DatasetsResponse {
-  datasets: Dataset[]
+export interface DistributionsResponse {
+  distributions: Distribution[]
+}
+
+export interface Catalogue {
+  id: string
+  title: string
+}
+
+export interface CataloguesResponse {
+  catalogues: Catalogue[]
+}
+
+// ── Dataset submission (Create Dataset page) ────────────────────────────────
+// Mirrors dataops-orchestrator/dataset_models.py exactly (snake_case field
+// names, since the JSON is sent as-is to the backend Pydantic model).
+export interface DatasetIdentityInput {
+  title: string
+  description: string
+  sns_project_name: string
+  publisher_name: string
+  contact_email: string
+  contributors: string[]
+  keywords: string[]
+  related_publications: string[]
+  language: string
+  spatial: string
+  temporal_start: string
+  temporal_end: string
+  version: string
+}
+
+export interface DatasetObjectInput {
+  license: string
+  access_rights: 'PUBLIC' | 'RESTRICTED' | 'NON_PUBLIC'
+  gdpr_compliant: boolean
+  fair_compliant: boolean
+  contains_pii: boolean
+  produced_by: string
+}
+
+// Includes the CMT Content-C fields (observation points, measurement
+// family/tools) — these describe the dataset as a whole and are submitted
+// at dataset-creation time. The per-file column list and technique
+// (variable_measured / measurement_technique) are NOT here — see
+// DistributionMetricsInput, submitted per distribution instead (MAP §5.3.E).
+export interface TestbedContextInput {
+  underlay_platform: string
+  environment: string
+  network_domain: string
+  ran_3gpp_release: string
+  ran_new_radio_type: string
+  ran_split: string
+  ran_focused_technology: string
+  ran_coverage_type: string
+  ran_frequency_band: string
+  ran_bandwidth_mhz: string
+  ran_max_end_devices: string
+  ran_mobility_model: string
+  core_release: string
+  core_solution: string
+  transport_type: string
+  compute_orchestrator_type: string
+  compute_gpu_use: boolean
+  compute_virtualization_type: string
+  compute_infrastructure_type: string
+  traffic_origin: string
+  traffic_pattern: string
+  slice_type: string
+  reference_plane: string
+  related_vertical: string
+  observation_point_horizontal: string
+  observation_point_vertical: string
+  measurement_family: string[]
+  measurement_tool: string[]
+}
+
+// Describes one distribution's file — submitted with that distribution via
+// POST /datasets/{dataset_id}/distributions, not with the dataset itself.
+export interface DistributionMetricsInput {
+  variable_measured: string[]
+  measurement_technique: string
+}
+
+// dataset_id and catalogue_id are NOT sent by the client — dataset_id is a
+// server-generated UUID, and catalogue_id is the fixed contributed-datasets
+// catalogue, both assigned by the orchestrator (see routers/datasets.py).
+// Step 1 of submission: POST /datasets.
+export interface DatasetCreateRequest {
+  identity: DatasetIdentityInput
+  object: DatasetObjectInput
+  testbed_context: TestbedContextInput
+}
+
+// A single Great Expectations config, forwarded as-is to the validation DAG
+// (see dali_dataspace_validate_dataset's `expectations` param).
+export interface GreatExpectation {
+  type: string
+  column?: string
+  min_value?: number
+  max_value?: number
+  [key: string]: unknown
+}
+
+export interface DatasetCreateResponse {
+  dataset_id: string
+  catalogue_id: string
+  piveau: { dataset_id: string; dataset_uri: string; status: string; piveau_url: string }
+}
+
+// Result of registering a distribution as an EDC asset on our own provider
+// connector (see dataops-orchestrator/edc_client.py) — best-effort, so
+// "skipped" (EDC not configured) and "failed" are expected outcomes, not
+// errors thrown back at the caller.
+export interface EdcRegistrationResult {
+  status: 'registered' | 'already_registered' | 'skipped' | 'failed'
+  asset_id?: string
+  reason?: string
+  error?: string
+}
+
+// Step 2 of submission: POST /datasets/{dataset_id}/distributions.
+export interface DistributionSubmitResponse {
+  dataset_id: string
+  catalogue_id: string
+  distribution_id: string
+  object_key: string
+  distribution_url: string | null
+  piveau: { dataset_id: string; distribution_id: string; distribution_uri: string; status: string; piveau_url: string }
+  validation_run: DagRun
+  edc: EdcRegistrationResult
+}
+
+// Result of DELETE /datasets/{dataset_id} or
+// DELETE /datasets/{dataset_id}/distributions/{asset_id} (see
+// dataops-orchestrator/routers/datasets.py) — one entry per cleaned-up
+// system; edc is a single result for a distribution delete, an array (one
+// per distribution) for a whole-dataset delete.
+export interface DeleteResult {
+  dataset_id: string
+  catalogue_id: string
+  asset_id?: string
+  distribution_count?: number
+  piveau: { status: string; [key: string]: unknown }
+  edc: EdcRegistrationResult | EdcRegistrationResult[]
+  s3_deleted_keys: string[]
 }
 
 // ── Services ─────────────────────────────────────────────────────────────────

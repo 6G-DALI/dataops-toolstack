@@ -1,0 +1,58 @@
+.wizard-progress {
+  display: flex;
+  margin-bottom: 24px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--dali-gray);
+}
+
+.wizard-progress-step {
+  flex: 1;
+  padding: 12px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  background: #fff;
+  color: #8898aa;
+  border: none;
+  border-right: 1px solid var(--dali-gray);
+  cursor: pointer;
+  user-select: none;
+}
+
+.wizard-progress-step:last-child {
+  border-right: none;
+}
+
+.wizard-progress-step.active {
+  background: var(--dali-navy);
+  color: #fff;
+}
+
+.wizard-progress-step.done {
+  background: #e8eaf6;
+  color: var(--dali-navy);
+}
+
+.wizard-progress-num {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--dali-gray);
+  color: #5a6a84;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  margin-right: 6px;
+}
+
+.wizard-progress-step.active .wizard-progress-num {
+  background: var(--dali-blue);
+  color: var(--dali-navy);
+}
+
+.wizard-progress-step.done .wizard-progress-num {
+  background: var(--dali-navy);
+  color: #fff;
+}

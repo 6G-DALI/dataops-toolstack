@@ -8,6 +8,7 @@ import DagTaskList from './components/DagTaskList'
 import AllTaskList from './components/AllTaskList'
 import DagBuilder from './components/DagBuilder'
 import DatasetList from './components/DatasetList'
+import DatasetCreator from './components/DatasetCreator'
 import ServiceList from './components/ServiceList'
 import TaskCreator from './components/TaskCreator'
 import HomePage from './components/HomePage'
@@ -95,7 +96,10 @@ export default function App() {
         <TaskCreator editTaskId={dagId || null} onNavigate={navigate} />
       )}
       {view === 'datasets' && (
-        <DatasetList />
+        <DatasetList onNavigate={navigate} />
+      )}
+      {view === 'dataset-creator' && (
+        <DatasetCreator onNavigate={navigate} />
       )}
       {view === 'services' && (
         <ServiceList />

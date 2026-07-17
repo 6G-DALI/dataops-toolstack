@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { FiMenu, FiHome, FiGrid, FiList, FiDatabase, FiSettings, FiUser, FiLogOut } from 'react-icons/fi'
+import { FiMenu, FiHome, FiGrid, FiList, FiDatabase, FiPlusCircle, FiSettings, FiUser, FiLogOut } from 'react-icons/fi'
 import type { IconType } from 'react-icons'
 import type { NavigateFn, NavParams, View } from '../types'
 import keycloak, { redirectUri } from '../auth/keycloak'
@@ -16,6 +16,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'DAGs',     view: 'dags',      icon: FiGrid },
   { label: 'Tasks',    view: 'all-tasks', icon: FiList },
   { label: 'Datasets', view: 'datasets',  icon: FiDatabase },
+  { label: 'Add Dataset', view: 'dataset-creator', icon: FiPlusCircle },
   { label: 'Services', view: 'services',  icon: FiSettings },
 ]
 
@@ -36,6 +37,9 @@ function buildCrumbs(view: View, dagId: string | null, runId: string | null, tas
     crumbs.push({ label: 'Home', view: 'home', params: {} })
   } else if (view === 'datasets') {
     crumbs.push({ label: 'Datasets', view: 'datasets', params: {} })
+  } else if (view === 'dataset-creator') {
+    crumbs.push({ label: 'Datasets', view: 'datasets', params: {} })
+    crumbs.push({ label: 'Add Dataset', view: 'dataset-creator', params: {} })
   } else if (view === 'services') {
     crumbs.push({ label: 'Services', view: 'services', params: {} })
   } else if (view === 'all-tasks') {
@@ -77,6 +81,7 @@ export default function Layout({ view, dagId, runId, taskId, onNavigate, childre
   const activeTopView: View =
     view === 'home' ? 'home'
     : ['all-tasks', 'dag-builder', 'task-creator'].includes(view) ? 'all-tasks'
+    : view === 'dataset-creator' ? 'dataset-creator'
     : view === 'datasets' ? 'datasets'
     : view === 'services' ? 'services'
     : 'dags'

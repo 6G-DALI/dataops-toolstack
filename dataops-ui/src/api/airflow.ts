@@ -10,7 +10,15 @@ import type {
   DagRunsResponse,
   DagsResponse,
   DagTasksResponse,
+  DatasetCreateRequest,
+  DatasetCreateResponse,
+  DeleteResult,
+  DistributionMetricsInput,
+  DistributionSubmitResponse,
   DatasetsResponse,
+  DistributionsResponse,
+  CataloguesResponse,
+  GreatExpectation,
   RegisterAllResponse,
   ServicesResponse,
   Stats,
@@ -42,10 +50,14 @@ async function authHeader(): Promise<Record<string, string>> {
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { rawText, headers: optionHeaders, ...init } = options
+  // FormData bodies must not carry a manual Content-Type — the browser sets
+  // its own `multipart/form-data; boundary=...` header, which a fixed
+  // 'application/json' default would otherwise clobber.
+  const isFormData = init.body instanceof FormData
   const response = await fetch(`${BASE_URL}${path}`, {
     ...init,
     headers: {
-      ...headers,
+      ...(isFormData ? {} : headers),
       ...(await authHeader()),
       ...(optionHeaders as Record<string, string> | undefined),
     },
@@ -118,8 +130,51 @@ export function createDag(body: CreateDagBody): Promise<unknown> {
   })
 }
 
-export function getDatasets(): Promise<DatasetsResponse> {
-  return request<DatasetsResponse>('/datasets')
+export function getDatasets(catalogueId?: string): Promise<DatasetsResponse> {
+  const qs = catalogueId ? `?catalogue_id=${encodeURIComponent(catalogueId)}` : ''
+  return request<DatasetsResponse>(`/datasets${qs}`)
+}
+
+export function getCatalogues(): Promise<CataloguesResponse> {
+  return request<CataloguesResponse>('/datasets/catalogues')
+}
+
+export function getDistributions(datasetId: string, catalogueId?: string): Promise<DistributionsResponse> {
+  const qs = catalogueId ? `?catalogue_id=${encodeURIComponent(catalogueId)}` : ''
+  return request<DistributionsResponse>(`/datasets/${encodeURIComponent(datasetId)}/distributions${qs}`)
+}
+
+/** Step 1: register the dataset's own metadata. No file yet. */
+export function createDataset(payload: DatasetCreateRequest): Promise<DatasetCreateResponse> {
+  return request<DatasetCreateResponse>('/datasets', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+/** Step 2: upload a file as a new distribution of an already-created dataset. */
+export function addDistribution(
+  datasetId: string,
+  catalogueId: string,
+  file: File,
+  metrics: DistributionMetricsInput,
+  expectations: GreatExpectation[] = []
+): Promise<DistributionSubmitResponse> {
+  const body = new FormData()
+  body.append('file', file)
+  body.append('catalogue_id', catalogueId)
+  body.append('metrics', JSON.stringify(metrics))
+  body.append('expectations', JSON.stringify(expectations))
+  return request<DistributionSubmitResponse>(`/datasets/${encodeURIComponent(datasetId)}/distributions`, { method: 'POST', body })
+}
+
+/** Deletes one distribution — cleans up piveau, the EDC asset, and its S3 object(s). */
+export function deleteDistribution(datasetId: string, catalogueId: string, assetId: string): Promise<DeleteResult> {
+  const qs = `?catalogue_id=${encodeURIComponent(catalogueId)}`
+  return request<DeleteResult>(`/datasets/${encodeURIComponent(datasetId)}/distributions/${encodeURIComponent(assetId)}${qs}`, { method: 'DELETE' })
+}
+
+/** Deletes a dataset entirely, including all of its distributions (piveau, EDC, S3). */
+export function deleteDataset(datasetId: string, catalogueId: string): Promise<DeleteResult> {
+  const qs = `?catalogue_id=${encodeURIComponent(catalogueId)}`
+  return request<DeleteResult>(`/datasets/${encodeURIComponent(datasetId)}${qs}`, { method: 'DELETE' })
 }
 
 export function getServices(): Promise<ServicesResponse> {
