@@ -130,11 +130,26 @@ async def _fetch_dataset_detail(
     return "", [], {}, {}
 
 
+def _format_of(dist: dict) -> str:
+    """dct:format's label if piveau indexed one, else the raw media_type
+    field — distributions submitted through our own upload flow only ever
+    set dcat:mediaType (see piveau_dataset_client.add_distribution), never
+    dct:format, so relying on "format" alone left every self-submitted
+    distribution showing no format at all. media_type is a full MIME type
+    ("text/csv"), not a short label like dct:format's ("CSV"), so it's
+    shortened to just the subtype for display consistency."""
+    label = (dist.get("format") or {}).get("label", "")
+    if label:
+        return label
+    media_type = dist.get("media_type") or ""
+    return media_type.rsplit("/", 1)[-1] if "/" in media_type else media_type
+
+
 def _normalize_distribution(
     ds: dict, dist: dict, sns: str,
     variable_measured: list[str], dist_details: dict[str, dict], raw: dict
 ) -> dict:
-    fmt = (dist.get("format") or {}).get("label", "")
+    fmt = _format_of(dist)
     dist_id = dist.get("id", "")
     detail = {}
     for key in _dist_keys(dist_id):
@@ -151,10 +166,9 @@ def _normalize_distribution(
         "name": _title(ds.get("title")),
         "uri": _dist_uri(dist),
         "sns_project_name": sns,
-        # Piveau's own distribution identifier (not our composite "id" above) —
-        # what the validate DAG's distribution_id param expects, so it can find
-        # this exact dcat:Distribution node rather than defaulting to the first
-        # one found on a multi-distribution dataset.
+        # Piveau's own distribution identifier (not our composite "id" above,
+        # and not the validate DAG's asset_id param either — see dali:assetId
+        # below, which is what that DAG actually matches on).
         "distribution_id":  dist_id,
         "asset_id":         detail.get("asset_id", ""),
         "asset_title":      asset_title,
@@ -233,10 +247,7 @@ def _normalize_dataset(ds: dict, sns: str, variable_measured: list[str], raw: di
     catalog = ds.get("catalog") or {}
     catalog_id = catalog.get("id", "")
     dists = ds.get("distributions") or []
-    formats = sorted({
-        fmt for d in dists
-        if (fmt := (d.get("format") or {}).get("label", ""))
-    })
+    formats = sorted({fmt for d in dists if (fmt := _format_of(d))})
     return {
         "id":                 ds["id"],
         "name":               _title(ds.get("title")),
