@@ -125,6 +125,9 @@ async def add_distribution(
         else pdc.extension_for_media_type(file.content_type)
     )
     object_filename = f"{asset_id}.{ext}"
+    # Step 1: upload the file to the Data Lake (S3) first — everything below
+    # (the EDC asset's dataAddress, piveau's dcat:accessURL) points at this
+    # object, so it has to exist before either is registered.
     object_key = dlc.upload_dataset_file(catalogue_id, dataset_id, object_filename, content)
     distribution_url = f"{DATASPACE_S3_ENDPOINT_URL.rstrip('/')}/{catalogue_id}/{object_key}"
 
@@ -135,34 +138,37 @@ async def add_distribution(
     # actually resolved above instead.
     media_type = pdc.resolve_media_type(file.content_type, ext)
 
+    # Step 2: register this distribution as an EDC asset on our own provider
+    # connector, using the exact same object_key convention the consumer
+    # side (dali.datalake.download_dataset_edc) later filters a provider's
+    # catalogue by — so it becomes discoverable/negotiable over EDC. Runs
+    # before the piveau publish below since it's independent of it (piveau
+    # doesn't need to know about the EDC asset, or vice versa). Best-effort:
+    # the S3 upload above already succeeded, so an EDC hiccup is reported,
+    # not raised as a 5xx, and doesn't block the piveau publish that follows.
+    edc_result = await edc.register_asset(catalogue_id, object_key, media_type, file.filename)
+
+    # Step 3: publish the distribution to piveau.
     piveau_result = await pdc.add_distribution(
         dataset_id, catalogue_id, distribution_id, asset_id,
         distribution_url, file.filename, media_type, dist_metrics
     )
 
-    # The DAG's `asset_id` param is used both to resolve the distribution's
-    # S3 object (dali.datalake.download_dataset lists the bucket for
-    # "{dataset_id}/{asset_id}.*") and to locate its dcat:Distribution node
-    # in piveau (dali.dataspace.publish_quality_to_piveau, via dist_keys) —
-    # asset_id works for the latter because it's embedded as the last path
-    # segment of dct:identifier (see piveau_dataset_client.add_distribution),
-    # which is stable, unlike the node's own @id (piveau mints its own UUID
-    # for that on write). Passing asset_id directly means neither step needs
-    # a round trip through piveau's own (unpredictable) distribution id.
+    # Step 4: trigger the validation DAG now that the distribution is fully
+    # registered. The DAG's `asset_id` param is used both to resolve the
+    # distribution's S3 object (dali.datalake.download_dataset lists the
+    # bucket for "{dataset_id}/{asset_id}.*") and to locate its
+    # dcat:Distribution node in piveau (dali.dataspace.publish_quality_to_piveau,
+    # via dist_keys) — asset_id works for the latter because it's embedded
+    # as the last path segment of dct:identifier (see
+    # piveau_dataset_client.add_distribution), which is stable, unlike the
+    # node's own @id (piveau mints its own UUID for that on write).
     dag_result = await af.trigger_dag(VALIDATION_DAG_ID, {
         "catalogue_id": catalogue_id,
         "dataset_id":   dataset_id,
         "asset_id":     asset_id,
         "expectations": exp_list,
     })
-
-    # Registers this distribution as an EDC asset on our own provider
-    # connector, using the exact same object_key convention the consumer
-    # side (dali.datalake.download_dataset_edc) later filters a provider's
-    # catalogue by — so it becomes discoverable/negotiable over EDC, not
-    # just piveau. Best-effort: piveau + S3 registration above already
-    # succeeded, so an EDC hiccup is reported, not raised as a 5xx.
-    edc_result = await edc.register_asset(catalogue_id, object_key, media_type, file.filename)
 
     return {
         "dataset_id":       dataset_id,
