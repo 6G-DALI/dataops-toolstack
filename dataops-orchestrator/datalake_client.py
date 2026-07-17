@@ -46,3 +46,25 @@ def upload_dataset_file(catalogue_id: str, dataset_id: str, filename: str, conte
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not upload to Data Lake bucket '{catalogue_id}': {e}")
     return key
+
+
+def delete_objects_by_prefix(catalogue_id: str, prefix: str) -> list[str]:
+    """Delete every object under `prefix` in the Data Lake bucket. Used both
+    for a single distribution (prefix "{dataset_id}/{asset_id}." — matches
+    the exact object regardless of extension, mirroring
+    dali.datalake.download_dataset's own S3 prefix listing) and for a whole
+    dataset (prefix "{dataset_id}/" — also sweeps up GX result files from
+    dali.datalake.upload_results, which aren't tied to any one asset_id).
+    Returns the keys that were actually deleted.
+    """
+    client = _client()
+    try:
+        keys = [obj["Key"] for page in client.get_paginator("list_objects_v2").paginate(
+            Bucket=catalogue_id, Prefix=prefix
+        ) for obj in page.get("Contents", [])]
+        for i in range(0, len(keys), 1000):  # delete_objects caps at 1000 keys per call
+            batch = keys[i:i + 1000]
+            client.delete_objects(Bucket=catalogue_id, Delete={"Objects": [{"Key": k} for k in batch]})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not delete objects under '{prefix}' in bucket '{catalogue_id}': {e}")
+    return keys

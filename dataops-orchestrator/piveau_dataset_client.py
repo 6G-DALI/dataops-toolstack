@@ -469,3 +469,91 @@ async def add_distribution(
         "status":           "submitted",
         "piveau_url":       url,
     }
+
+
+async def list_asset_ids(dataset_id: str, catalogue_id: str) -> list[str]:
+    """The dali:assetId of every distribution currently on this dataset —
+    used by routers/datasets.py's dataset-delete endpoint to know which S3
+    objects and EDC assets to clean up *before* the piveau record (which is
+    the only place this list is readable from) is deleted."""
+    graph = await _fetch_dataset_graph(dataset_id, catalogue_id)
+    nodes = graph.get("@graph", [])
+    return [
+        asset_id for n in nodes
+        if any("Distribution" in t for t in _node_types(n)) and (asset_id := _asset_id_of(n))
+    ]
+
+
+async def delete_distribution(dataset_id: str, catalogue_id: str, asset_id: str) -> dict:
+    """Remove one dcat:Distribution node (matched by dali:assetId, same
+    stable-handle convention as add_distribution/publish_quality_to_piveau)
+    from a dataset's piveau graph: unlinks it from the dataset's own
+    dcat:distribution list, deletes the node itself and any
+    dqv:QualityMeasurement nodes attached to it (see
+    dali.dataspace.publish_quality_to_piveau, which creates those under
+    "{dist_uri}/quality/..."), then PUTs the graph back."""
+    graph = await _fetch_dataset_graph(dataset_id, catalogue_id)
+    nodes = graph.get("@graph", [])
+
+    dist_node = next(
+        (n for n in nodes if any("Distribution" in t for t in _node_types(n)) and _asset_id_of(n) == asset_id),
+        None,
+    )
+    if dist_node is None:
+        return {"dataset_id": dataset_id, "asset_id": asset_id, "status": "not_found"}
+
+    dist_uri = dist_node["@id"]
+    nodes = [
+        n for n in nodes
+        if n.get("@id") != dist_uri and not str(n.get("@id", "")).startswith(f"{dist_uri}/quality/")
+    ]
+
+    ds_node = next((n for n in nodes if any("Dataset" in t for t in _node_types(n))), None)
+    if ds_node is not None:
+        existing = ds_node.get("dcat:distribution")
+        refs = [] if existing is None else (existing if isinstance(existing, list) else [existing])
+        refs = [r for r in refs if r.get("@id") != dist_uri]
+        if refs:
+            ds_node["dcat:distribution"] = refs
+        else:
+            ds_node.pop("dcat:distribution", None)
+
+    graph["@graph"] = nodes
+    url = f"{PIVEAU_HUB_URL}/datasets/{dataset_id}?catalogue={catalogue_id}"
+    headers = {"X-API-Key": PIVEAU_API_KEY, "Content-Type": "application/ld+json"}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.put(url, content=json.dumps(graph).encode(), headers=headers)
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"piveau error for {dataset_id}: {e.response.status_code} {e.response.text[:500]}",
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach piveau at {PIVEAU_HUB_URL}: {e}")
+
+    return {"dataset_id": dataset_id, "asset_id": asset_id, "distribution_uri": dist_uri, "status": "deleted"}
+
+
+async def delete_dataset(dataset_id: str, catalogue_id: str) -> dict:
+    """DELETE the whole dataset record from piveau — its distribution nodes
+    live inside the same record (see add_distribution), so this removes them
+    too. Mirrors piveau_service_client.deregister_service's DELETE pattern."""
+    _require_piveau_config()
+    url = f"{PIVEAU_HUB_URL}/datasets/{dataset_id}?catalogue={catalogue_id}"
+    headers = {"X-API-Key": PIVEAU_API_KEY}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.delete(url, headers=headers)
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return {"dataset_id": dataset_id, "status": "not_found"}
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"piveau error for {dataset_id}: {e.response.status_code} {e.response.text[:500]}",
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach piveau at {PIVEAU_HUB_URL}: {e}")
+    return {"dataset_id": dataset_id, "status": "deleted"}

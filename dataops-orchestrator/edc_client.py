@@ -126,3 +126,27 @@ async def register_asset(
     except httpx.RequestError as e:
         log.warning("[edc] could not reach provider connector at %s: %s", EDC_PROVIDER_MANAGEMENT_URL, e)
         return {"status": "failed", "asset_id": asset_id, "error": f"Could not reach EDC provider connector: {e}"}
+
+
+async def delete_asset(asset_id: str) -> dict:
+    """Delete one EDC asset by id (see register_asset — asset_id is the
+    distribution's dali:assetId). Best-effort like register_asset: never
+    raises, so a delete request's other cleanup steps (piveau, S3 — see
+    routers/datasets.py) still happen even if the connector is unreachable.
+    """
+    if not _configured():
+        return {"status": "skipped", "reason": "EDC_PROVIDER_MANAGEMENT_URL not configured"}
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.delete(f"{EDC_PROVIDER_MANAGEMENT_URL.rstrip('/')}/v3/assets/{asset_id}")
+            if r.status_code == 404:
+                return {"status": "not_found", "asset_id": asset_id}
+            r.raise_for_status()
+        return {"status": "deleted", "asset_id": asset_id}
+    except httpx.HTTPStatusError as e:
+        log.warning("[edc] asset deletion failed for %s: %s %s", asset_id, e.response.status_code, e.response.text[:500])
+        return {"status": "failed", "asset_id": asset_id, "error": f"{e.response.status_code} {e.response.text[:500]}"}
+    except httpx.RequestError as e:
+        log.warning("[edc] could not reach provider connector at %s: %s", EDC_PROVIDER_MANAGEMENT_URL, e)
+        return {"status": "failed", "asset_id": asset_id, "error": f"Could not reach EDC provider connector: {e}"}

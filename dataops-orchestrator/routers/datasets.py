@@ -1,7 +1,7 @@
 import json
 import uuid
 
-from fastapi import APIRouter, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Form, HTTPException, Query, UploadFile
 import airflow_client as af
 
 import datalake_client as dlc
@@ -179,4 +179,56 @@ async def add_distribution(
         "piveau":           piveau_result,
         "validation_run":   dag_result,
         "edc":              edc_result,
+    }
+
+
+@router.delete("/{dataset_id}/distributions/{asset_id}")
+async def delete_distribution(dataset_id: str, asset_id: str, catalogue_id: str = Query(...)):
+    """
+    Delete a single distribution — the reverse of POST
+    .../distributions, in reverse order (piveau -> EDC -> S3, mirroring that
+    endpoint's S3 -> EDC -> piveau creation order): unlink/remove its
+    dcat:Distribution node from piveau first (stops it being discoverable
+    immediately), then its EDC asset, then its S3 object(s). `asset_id` (not
+    the sequential distribution_id) is required — it's the one stable
+    identifier shared across all three systems (see piveau_dataset_client.add_distribution).
+    """
+    piveau_result = await pdc.delete_distribution(dataset_id, catalogue_id, asset_id)
+    edc_result = await edc.delete_asset(asset_id)
+    s3_deleted = dlc.delete_objects_by_prefix(catalogue_id, f"{dataset_id}/{asset_id}.")
+
+    return {
+        "dataset_id":     dataset_id,
+        "catalogue_id":   catalogue_id,
+        "asset_id":       asset_id,
+        "piveau":         piveau_result,
+        "edc":            edc_result,
+        "s3_deleted_keys": s3_deleted,
+    }
+
+
+@router.delete("/{dataset_id}")
+async def delete_dataset(dataset_id: str, catalogue_id: str = Query(...)):
+    """
+    Delete a dataset entirely, including all of its distributions. The
+    distributions' asset_ids have to be read from piveau *before* the
+    dataset record is deleted (that's the only place they're listed), so the
+    order here is: list -> delete each EDC asset -> delete the piveau
+    record (removes every dcat:Distribution node at once, since they live
+    inside the same record) -> delete every S3 object under this dataset's
+    prefix (covers each distribution's file plus any GX result files, which
+    aren't tied to one specific asset_id).
+    """
+    asset_ids = await pdc.list_asset_ids(dataset_id, catalogue_id)
+    edc_results = [await edc.delete_asset(asset_id) for asset_id in asset_ids]
+    piveau_result = await pdc.delete_dataset(dataset_id, catalogue_id)
+    s3_deleted = dlc.delete_objects_by_prefix(catalogue_id, f"{dataset_id}/")
+
+    return {
+        "dataset_id":         dataset_id,
+        "catalogue_id":       catalogue_id,
+        "distribution_count": len(asset_ids),
+        "piveau":             piveau_result,
+        "edc":                edc_results,
+        "s3_deleted_keys":    s3_deleted,
     }
