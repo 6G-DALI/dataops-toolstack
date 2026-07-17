@@ -5,6 +5,7 @@ from fastapi import APIRouter, Form, HTTPException, UploadFile
 import airflow_client as af
 
 import datalake_client as dlc
+import edc_client as edc
 import piveau_dataset_client as pdc
 from config import CONTRIBUTED_DATASETS_CATALOGUE, DATASPACE_S3_ENDPOINT_URL, VALIDATION_DAG_ID
 from dataset_models import DatasetCreateRequest, DistributionMetrics
@@ -155,6 +156,14 @@ async def add_distribution(
         "expectations": exp_list,
     })
 
+    # Registers this distribution as an EDC asset on our own provider
+    # connector, using the exact same object_key convention the consumer
+    # side (dali.datalake.download_dataset_edc) later filters a provider's
+    # catalogue by — so it becomes discoverable/negotiable over EDC, not
+    # just piveau. Best-effort: piveau + S3 registration above already
+    # succeeded, so an EDC hiccup is reported, not raised as a 5xx.
+    edc_result = await edc.register_asset(catalogue_id, object_key, media_type, file.filename)
+
     return {
         "dataset_id":       dataset_id,
         "catalogue_id":     catalogue_id,
@@ -163,4 +172,5 @@ async def add_distribution(
         "distribution_url": distribution_url,
         "piveau":           piveau_result,
         "validation_run":   dag_result,
+        "edc":              edc_result,
     }

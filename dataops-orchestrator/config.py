@@ -44,3 +44,13 @@ CONTRIBUTED_DATASETS_CATALOGUE = os.getenv("CONTRIBUTED_DATASETS_CATALOGUE", "6g
 # directly. The consumer is disabled unless RABBITMQ_URL is set.
 RABBITMQ_URL   = os.getenv("RABBITMQ_URL", "")  # e.g. amqp://user:pass@host:5672/vhost
 RABBITMQ_QUEUE = os.getenv("RABBITMQ_QUEUE", "dataops.dag-triggers")
+
+# --- EDC (Eclipse Dataspace Connector) provider — registers each newly
+# submitted distribution as an EDC asset (see edc_client.py), so it becomes
+# discoverable/negotiable the same way dali.datalake.download_dataset_edc
+# already consumes assets from *other* providers. This is our own provider
+# connector's Management API (distinct from EDC_PROVIDER_* in
+# airflow/plugins/dali/utils.py, which points at whichever provider a
+# consumer DAG run happens to be pulling from). Registration is skipped
+# (with a log message, not an error) when left unset.
+EDC_PROVIDER_MANAGEMENT_URL = os.getenv("EDC_PROVIDER_MANAGEMENT_URL", "")
