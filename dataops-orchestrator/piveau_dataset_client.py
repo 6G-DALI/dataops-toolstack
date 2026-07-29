@@ -95,6 +95,35 @@ CANONICAL_MEDIA_TYPE_BY_EXTENSION = {
 # (the uploaded filename's own extension) is available.
 _GENERIC_MEDIA_TYPES = {"", "application/octet-stream", "binary/octet-stream"}
 
+# dct:format on a dcat:Distribution must be an IRI from the EU file-type
+# authority vocabulary (dali:DistributionShape requires sh:nodeKind sh:IRI),
+# not a media-type string — that's dcat:mediaType's job. JSON Lines has no
+# dedicated authority entry, so it maps to JSON, matching how the reference
+# records catalogue the IMEC .jsonl scenario files.
+_FILE_TYPE_BASE = "http://publications.europa.eu/resource/authority/file-type"
+FILE_TYPE_IRI_BY_EXTENSION = {
+    "csv":     f"{_FILE_TYPE_BASE}/CSV",
+    "tsv":     f"{_FILE_TYPE_BASE}/TSV",
+    "json":    f"{_FILE_TYPE_BASE}/JSON",
+    "jsonl":   f"{_FILE_TYPE_BASE}/JSON",
+    "ndjson":  f"{_FILE_TYPE_BASE}/JSON",
+    "jsonld":  f"{_FILE_TYPE_BASE}/JSON_LD",
+    "txt":     f"{_FILE_TYPE_BASE}/TXT",
+    "xml":     f"{_FILE_TYPE_BASE}/XML",
+    "parquet": f"{_FILE_TYPE_BASE}/PARQUET",
+    "tar":     f"{_FILE_TYPE_BASE}/TAR",
+    "zip":     f"{_FILE_TYPE_BASE}/ZIP",
+    "gz":      f"{_FILE_TYPE_BASE}/GZIP",
+}
+
+
+def file_type_iri(ext: str) -> str | None:
+    """The EU file-type authority IRI for a resolved extension, or None when
+    the extension isn't in the vocabulary — in which case dct:format is left
+    off rather than filled with a non-authority IRI (a Warning, not a
+    Violation, per dali:DistributionShape)."""
+    return FILE_TYPE_IRI_BY_EXTENSION.get(ext.lower().strip())
+
 
 def resolve_media_type(content_type: str | None, ext: str) -> str | None:
     """Prefer the client-supplied content-type unless it's missing/generic,
@@ -106,6 +135,19 @@ def resolve_media_type(content_type: str | None, ext: str) -> str | None:
     return CANONICAL_MEDIA_TYPE_BY_EXTENSION.get(ext.lower(), content_type)
 
 
+# --- Sentinels for the RDF-first submission path (POST /datasets/rdf) --------
+# A client that builds its own Turtle cannot know either identifier: dataset_id
+# is minted here, and DSPACE_BASE is server configuration. So it emits these two
+# placeholders and create_dataset_from_turtle substitutes them. Keeping the
+# minting server-side matters for more than tidiness — a client-chosen
+# dataset_id would let a submitter PUT over an existing dataset's record, since
+# piveau writes are keyed by id.
+#
+# These must stay byte-identical to the constants in dataops-ui/src/map/datasetTurtle.ts.
+DATASET_URI_SENTINEL = "urn:6gdali:dataset:self"   # the dataset's subject IRI
+DATASET_ID_SENTINEL  = "urn:6gdali:dataset:id"     # the bare id, as dct:identifier
+
+
 _ACCESS_RIGHTS = {
     "PUBLIC":     "http://publications.europa.eu/resource/authority/access-right/PUBLIC",
     "RESTRICTED": "http://publications.europa.eu/resource/authority/access-right/RESTRICTED",
@@ -114,7 +156,17 @@ _ACCESS_RIGHTS = {
 
 
 def _esc(s: str) -> str:
-    return s.replace("\\", "\\\\").replace('"', '\\"')
+    """Escape a value for a Turtle single-quoted string literal. Newlines and
+    tabs need escaping as much as quotes do: dct:description is submitted from a
+    textarea, and a raw newline inside "..." is a Turtle syntax error, so an
+    unescaped one made piveau reject the whole record."""
+    return (
+        s.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
 
 
 def _dataset_uri(dataset_id: str) -> str:
@@ -144,7 +196,6 @@ def _testbed_context_block(tc: TestbedContext) -> list[str]:
         ("dali:ranSplit",               tc.ran_split,               "str"),
         ("dali:ranFocusedTechnology",   tc.ran_focused_technology,  "str"),
         ("dali:ranCoverageType",        tc.ran_coverage_type,       "str"),
-        ("dali:ranFrequencyBand",       tc.ran_frequency_band,      "str"),
         ("dali:ranBandwidthMHz",        tc.ran_bandwidth_mhz,       "num"),
         ("dali:ranMaxEndDevices",       tc.ran_max_end_devices,     "num"),
         ("dali:ranMobilityModel",       tc.ran_mobility_model,      "str"),
@@ -176,10 +227,21 @@ def _testbed_context_block(tc: TestbedContext) -> list[str]:
             lines.append(f"        {pred} {num} ;")
         else:
             lines.append(f'        {pred} "{_esc(str(value))}" ;')
-    for fam in tc.measurement_family:
-        lines.append(f'        dali:measurementFamily "{_esc(fam)}" ;')
-    for tool in tc.measurement_tool:
-        lines.append(f'        dali:measurementTool "{_esc(tool)}" ;')
+    # Repeatable testbed properties — emitted one triple per value rather than
+    # as a single joined literal, so a multi-band or multi-tool setup stays
+    # queryable per value. Blank entries are skipped: the UI's append-able
+    # lists can submit an unfilled row, which would otherwise be published as
+    # an empty literal.
+    repeatable = [
+        ("dali:ranFrequencyBand",  tc.ran_frequency_band),
+        ("dali:measurementFamily", tc.measurement_family),
+        ("dali:measurementTool",   tc.measurement_tool),
+    ]
+    for pred, values in repeatable:
+        for value in values:
+            if not value or not value.strip():
+                continue
+            lines.append(f'        {pred} "{_esc(value.strip())}" ;')
     return lines
 
 
@@ -187,7 +249,10 @@ def build_dataset_turtle(dataset_id: str, ident: DatasetIdentity, obj: DatasetOb
     """Dataset-only Turtle — no dcat:Distribution, no dcat:distribution link.
     Distributions are added afterwards, one at a time, via add_distribution."""
     uri = _dataset_uri(dataset_id)
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # dct:issued is the dataset's *first publication* date. For a harvested
+    # record that's the upstream one (e.g. the Zenodo record's), so prefer the
+    # submitted value and only fall back to today when none was given.
+    issued = ident.issued or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     access_rights_uri = _ACCESS_RIGHTS.get(obj.access_rights, _ACCESS_RIGHTS["PUBLIC"])
 
@@ -209,7 +274,7 @@ def build_dataset_turtle(dataset_id: str, ident: DatasetIdentity, obj: DatasetOb
         f'    dct:title               "{_esc(ident.title)}"@en ;',
         f'    dct:description         "{_esc(ident.description)}"@en ;',
         f'    dct:identifier          "{_esc(dataset_id)}" ;',
-        f'    dct:issued              "{now}"^^xsd:date ;',
+        f'    dct:issued              "{issued}"^^xsd:date ;',
         f"    dct:accessRights        <{access_rights_uri}> ;",
         f"    dct:license             <{obj.license}> ;",
         f'    dali:snsProjectName     "{_esc(ident.sns_project_name)}" ;',
@@ -226,6 +291,23 @@ def build_dataset_turtle(dataset_id: str, ident: DatasetIdentity, obj: DatasetOb
         lines.append(f'    dct:publisher           [ rdf:type foaf:Organization ; foaf:name "{_esc(ident.publisher_name)}" ] ;')
     if ident.contact_email:
         lines.append(f'    dcat:contactPoint       [ rdf:type vcard:Organization ; vcard:hasEmail <mailto:{ident.contact_email}> ] ;')
+    for creator in ident.creators:
+        if not creator.name:
+            continue
+        # foaf:Person for named researchers, foaf:Organization when the
+        # institution itself is credited — the MAP uses both. ORCID goes in
+        # schema:identifier as an IRI (matching the reference records), so a
+        # bare "0000-0002-..." is expanded to its resolvable orcid.org form.
+        node_type = "foaf:Organization" if creator.kind == "Organization" else "foaf:Person"
+        parts = [f"rdf:type {node_type}", f'foaf:name "{_esc(creator.name)}"']
+        if creator.orcid:
+            orcid = creator.orcid.strip()
+            if not orcid.startswith("http"):
+                orcid = f"https://orcid.org/{orcid}"
+            parts.append(f"schema:identifier <{orcid}>")
+        if creator.affiliation:
+            parts.append(f'schema:affiliation "{_esc(creator.affiliation)}"')
+        lines.append(f'    dct:creator             [ {" ; ".join(parts)} ] ;')
     for c in ident.contributors:
         lines.append(f'    dct:contributor         [ rdf:type foaf:Agent ; foaf:name "{_esc(c)}" ] ;')
     for kw in ident.keywords:
@@ -257,14 +339,12 @@ def build_dataset_turtle(dataset_id: str, ident: DatasetIdentity, obj: DatasetOb
     return "\n".join(lines)
 
 
-async def create_dataset(
-    dataset_id: str, catalogue_id: str, ident: DatasetIdentity, obj: DatasetObject, testbed_context: TestbedContext
-) -> dict:
-    """Step 1: register the dataset's own metadata in piveau. No file, no
-    distribution yet — call add_distribution afterwards for that."""
+async def _put_dataset_turtle(dataset_id: str, catalogue_id: str, turtle: str) -> dict:
+    """PUT a complete Turtle dataset record to piveau. Shared by both submission
+    paths — the JSON one (create_dataset, which builds the Turtle here) and the
+    RDF one (create_dataset_from_turtle, which receives it already built)."""
     _require_piveau_config()
 
-    turtle = build_dataset_turtle(dataset_id, ident, obj, testbed_context)
     log.info("[piveau] dataset Turtle for %s:\n%s", dataset_id, turtle)
 
     url = f"{PIVEAU_HUB_URL}/datasets/{dataset_id}?catalogue={catalogue_id}"
@@ -282,6 +362,50 @@ async def create_dataset(
         raise HTTPException(status_code=502, detail=f"Could not reach piveau at {PIVEAU_HUB_URL}: {e}")
 
     return {"dataset_id": dataset_id, "dataset_uri": _dataset_uri(dataset_id), "status": "created", "piveau_url": url}
+
+
+async def create_dataset(
+    dataset_id: str, catalogue_id: str, ident: DatasetIdentity, obj: DatasetObject, testbed_context: TestbedContext
+) -> dict:
+    """Step 1: register the dataset's own metadata in piveau. No file, no
+    distribution yet — call add_distribution afterwards for that."""
+    turtle = build_dataset_turtle(dataset_id, ident, obj, testbed_context)
+    return await _put_dataset_turtle(dataset_id, catalogue_id, turtle)
+
+
+def resolve_sentinels(turtle: str, dataset_id: str) -> str:
+    """Replace the client-side placeholders with the identifiers this server
+    owns (see DATASET_URI_SENTINEL). Plain substitution rather than an RDF
+    rewrite: the orchestrator has no RDF library, and piveau is the parser —
+    keeping this a passthrough means the graph piveau stores is byte-for-byte
+    the graph the submitter was shown, apart from these two tokens."""
+    return (
+        turtle
+        .replace(DATASET_URI_SENTINEL, _dataset_uri(dataset_id))
+        .replace(DATASET_ID_SENTINEL, dataset_id)
+    )
+
+
+async def create_dataset_from_turtle(dataset_id: str, catalogue_id: str, turtle: str) -> dict:
+    """Step 1, RDF-first variant: register a dataset from a Turtle record the
+    client built itself (see POST /datasets/rdf), rather than from the JSON
+    field groups build_dataset_turtle renders.
+
+    The record must reference the dataset by DATASET_URI_SENTINEL — without it
+    the graph would describe some other subject, and piveau would happily store
+    a record that no dataset_id resolves to."""
+    if not turtle or not turtle.strip():
+        raise HTTPException(status_code=422, detail="Empty Turtle body")
+    if DATASET_URI_SENTINEL not in turtle:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Turtle body must identify the dataset by the sentinel IRI "
+                f"<{DATASET_URI_SENTINEL}>, which is replaced with the "
+                f"server-minted dataset URI."
+            ),
+        )
+    return await _put_dataset_turtle(dataset_id, catalogue_id, resolve_sentinels(turtle, dataset_id))
 
 
 async def _fetch_dataset_graph(dataset_id: str, catalogue_id: str) -> dict:
@@ -322,6 +446,29 @@ def _asset_id_of(node: dict) -> str:
     return _scalar(node.get("dali:assetId") or node.get(f"{DALI_NS}assetId"))
 
 
+def _iri_of(val) -> str:
+    """The IRI out of a JSON-LD value that may be a list, an {"@id": ...}
+    node reference, or a bare string."""
+    if isinstance(val, list):
+        val = val[0] if val else ""
+    if isinstance(val, dict):
+        return val.get("@id", "")
+    return str(val) if val else ""
+
+
+def _dataset_license(ds_node: dict | None) -> str:
+    """The dataset's own dct:license IRI, to be inherited by a distribution
+    that doesn't carry one of its own. dali:DistributionShape makes
+    dct:license a *Violation*-severity mandatory IRI, and the submission UI
+    only ever collects a single dataset-level license, so every distribution
+    is published under it. Keyed by either the compact term or the full IRI,
+    since piveau doesn't guarantee which form it serializes back (same reason
+    as _asset_id_of)."""
+    if not ds_node:
+        return ""
+    return _iri_of(ds_node.get("dct:license") or ds_node.get("http://purl.org/dc/terms/license"))
+
+
 def _count_distributions(graph: dict) -> int:
     nodes = graph.get("@graph", [])
     return sum(1 for n in nodes if any("Distribution" in t for t in _node_types(n)))
@@ -338,7 +485,7 @@ async def next_distribution_id(dataset_id: str, catalogue_id: str) -> str:
 async def add_distribution(
     dataset_id: str, catalogue_id: str, distribution_id: str, asset_id: str,
     distribution_url: str, original_filename: str | None, media_type: str | None,
-    metrics: DistributionMetrics,
+    metrics: DistributionMetrics, byte_size: int | None = None, ext: str | None = None,
 ) -> dict:
     """Step 2: append a new dcat:Distribution to an existing dataset's piveau
     record — fetch the current JSON-LD graph, add the node (+ link it from
@@ -349,7 +496,11 @@ async def add_distribution(
     `asset_id` is a UUID generated by the caller (routers/datasets.py) — it,
     not `distribution_id`, is written as dali:assetId and is what the S3
     object is named after. `distribution_id` only numbers/locates this node
-    within the dataset's graph."""
+    within the dataset's graph.
+
+    `byte_size` is the uploaded file's size in bytes and `ext` its resolved
+    extension — both are known only to the caller, and both are needed to
+    satisfy dali:DistributionShape (dcat:byteSize, dct:format)."""
     graph = await _fetch_dataset_graph(dataset_id, catalogue_id)
     nodes = graph.get("@graph", [])
 
@@ -371,7 +522,12 @@ async def add_distribution(
     dist_node: dict = {
         "@id": dist_uri,
         "@type": "dcat:Distribution",
-        "dct:title": {"@value": original_filename or f"Distribution {distribution_id}"},
+        # Language-tagged: dali:DistributionShape requires dct:title to be an
+        # rdf:langString, so a plain literal here is a Violation.
+        "dct:title": {
+            "@value": original_filename or f"Distribution {distribution_id}",
+            "@language": "en",
+        },
         # accessURL points at the EDC connector's negotiation entrypoint
         # (this distribution is registered there under dali:assetId — see
         # edc_client.register_asset), not the raw file — that's downloadURL.
@@ -395,6 +551,32 @@ async def add_distribution(
     }
     if media_type:
         dist_node["dcat:mediaType"] = media_type
+
+    # dct:license is mandatory on a distribution at Violation severity, and the
+    # submission flow only collects one license, at dataset level — so inherit
+    # it. Without this every distribution registered through the UI fails SHACL
+    # validation, independently of which dataset it belongs to.
+    license_iri = _dataset_license(ds_node)
+    if license_iri:
+        dist_node["dct:license"] = {"@id": license_iri}
+    else:
+        log.warning("[piveau] dataset %s has no readable dct:license — the new distribution "
+                    "(asset_id=%s) will fail dali:DistributionShape's mandatory dct:license",
+                    dataset_id, asset_id)
+
+    # dct:format (an EU file-type authority IRI, distinct from dcat:mediaType)
+    # and dcat:byteSize — both recommended by dali:DistributionShape. byteSize
+    # is explicitly typed: the shape constrains it to xsd:nonNegativeInteger,
+    # which a bare JSON number would not satisfy.
+    format_iri = file_type_iri(ext) if ext else None
+    if format_iri:
+        dist_node["dct:format"] = {"@id": format_iri}
+    if byte_size is not None:
+        dist_node["dcat:byteSize"] = {
+            "@value": str(byte_size),
+            "@type": "http://www.w3.org/2001/XMLSchema#nonNegativeInteger",
+        }
+
     # Measured variables/technique describe this distribution's file
     # specifically, not the dataset as a whole (see MAP §5.3.E/§5.6).
     if metrics.variable_measured:

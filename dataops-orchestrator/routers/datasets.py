@@ -1,7 +1,7 @@
 import json
 import uuid
 
-from fastapi import APIRouter, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Form, HTTPException, Query, Request, UploadFile
 import airflow_client as af
 
 import datalake_client as dlc
@@ -53,6 +53,42 @@ async def create_dataset(payload: DatasetCreateRequest):
     piveau_result = await pdc.create_dataset(
         dataset_id, catalogue_id, payload.identity, payload.object, payload.testbed_context
     )
+
+    return {
+        "dataset_id":   dataset_id,
+        "catalogue_id": catalogue_id,
+        "piveau":       piveau_result,
+    }
+
+
+@router.post("/rdf")
+async def create_dataset_rdf(request: Request):
+    """
+    Step 1 of dataset submission, RDF-first variant: register a dataset from a
+    Turtle record the client built itself, instead of from the JSON field groups
+    POST /datasets accepts. Same result — a dataset in the Staging Catalogue with
+    no distributions yet — and the same next step
+    (POST /datasets/{dataset_id}/distributions).
+
+    This exists alongside POST /datasets, which is unchanged: JSON remains the
+    stable API for programmatic clients, while the submission UI generates the
+    MAP graph locally so the submitter can review the exact RDF before it is
+    published, and the orchestrator forwards it to piveau essentially untouched.
+
+    The body is `text/turtle`. Because dataset_id is minted here and the
+    dataspace base URI is server configuration, the record must refer to the
+    dataset as <urn:6gdali:dataset:self> and use "urn:6gdali:dataset:id" for
+    dct:identifier; both are substituted on receipt (see
+    piveau_dataset_client.resolve_sentinels). Nothing else in the graph is
+    rewritten, so anything the MAP allows can be submitted this way — including
+    properties the JSON models don't model.
+    """
+    turtle = (await request.body()).decode("utf-8", errors="replace")
+
+    dataset_id = str(uuid.uuid4())
+    catalogue_id = CONTRIBUTED_DATASETS_CATALOGUE
+
+    piveau_result = await pdc.create_dataset_from_turtle(dataset_id, catalogue_id, turtle)
 
     return {
         "dataset_id":   dataset_id,
@@ -149,9 +185,13 @@ async def add_distribution(
     edc_result = await edc.register_asset(catalogue_id, asset_id, object_key, media_type, file.filename)
 
     # Step 3: publish the distribution to piveau.
+    # byte_size/ext are passed through for dcat:byteSize and dct:format (the EU
+    # file-type IRI) on the new distribution node — both required by
+    # dali:DistributionShape and knowable only here, from the upload itself.
     piveau_result = await pdc.add_distribution(
         dataset_id, catalogue_id, distribution_id, asset_id,
-        distribution_url, file.filename, media_type, dist_metrics
+        distribution_url, file.filename, media_type, dist_metrics,
+        byte_size=len(content), ext=ext,
     )
 
     # Step 4: trigger the validation DAG now that the distribution is fully

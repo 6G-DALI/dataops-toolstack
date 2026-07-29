@@ -17,17 +17,35 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+class DatasetAgent(BaseModel):
+    """One dct:creator. `kind` selects the rdf:type of the emitted blank node —
+    the MAP credits either named researchers (foaf:Person, usually with an
+    ORCID) or the producing institution itself (foaf:Organization)."""
+    kind: str = "Person"  # Person | Organization
+    name: str
+    orcid: Optional[str] = None
+    affiliation: Optional[str] = None
+
+
 class DatasetIdentity(BaseModel):
     title: str
     description: str
     sns_project_name: str = "6G-DALI"
     publisher_name: Optional[str] = None
     contact_email: Optional[str] = None
+    # dct:creator (who produced the data) — distinct from `contributors`,
+    # which maps to dct:contributor. Only creator satisfies the MAP's
+    # recommended dct:creator on dali:DatasetShape.
+    creators: list[DatasetAgent] = Field(default_factory=list)
     contributors: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     related_publications: list[str] = Field(default_factory=list)
     language: Optional[str] = None
     spatial: Optional[str] = None
+    # dct:issued — first-publication date. For a harvested record that's the
+    # upstream date, not the day it was registered here; None falls back to
+    # today (see build_dataset_turtle).
+    issued: Optional[str] = None
     temporal_start: Optional[str] = None
     temporal_end: Optional[str] = None
     version: Optional[str] = None
@@ -51,7 +69,9 @@ class TestbedContext(BaseModel):
     ran_split: Optional[str] = None
     ran_focused_technology: Optional[str] = None
     ran_coverage_type: Optional[str] = None
-    ran_frequency_band: Optional[str] = None
+    # Repeatable — a testbed can operate on several bands at once (e.g. Wi-Fi
+    # MLO across 2.4 GHz and 5 GHz); dali:ranFrequencyBand has no maxCount.
+    ran_frequency_band: list[str] = Field(default_factory=list)
     ran_bandwidth_mhz: Optional[float] = None
     ran_max_end_devices: Optional[int] = None
     ran_mobility_model: Optional[str] = None
