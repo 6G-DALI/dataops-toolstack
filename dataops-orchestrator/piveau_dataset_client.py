@@ -23,6 +23,7 @@ DAG already assumes (see dali_dataspace_validate_dataset's `catalogue_id`
 param).
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -454,6 +455,36 @@ async def _fetch_dataset_graph(dataset_id: str, catalogue_id: str) -> dict:
     return r.json()
 
 
+async def _fetch_dataset_graph_with_dataset(dataset_id: str, catalogue_id: str) -> dict:
+    """Fetch a dataset's graph, waiting briefly for its dcat:Dataset node to be
+    there.
+
+    piveau-hub acknowledges a write before the record is necessarily readable
+    back, so a distribution added immediately after the dataset was created could
+    fetch a document with no dataset node in it — and then be appended to nothing
+    and silently lost. Retries a few times with a short backoff, and logs the
+    document's actual shape so a persistent failure is diagnosable rather than
+    just absent."""
+    delays = (0.0, 0.5, 1.0, 2.0)
+    doc: dict = {}
+    for attempt, delay in enumerate(delays, start=1):
+        if delay:
+            await asyncio.sleep(delay)
+        doc = await _fetch_dataset_graph(dataset_id, catalogue_id)
+        nodes = _graph_nodes(doc)
+        if _find_dataset_node(nodes) is not None:
+            if attempt > 1:
+                log.info("[piveau] dataset %s became readable on attempt %d", dataset_id, attempt)
+            return doc
+        log.warning(
+            "[piveau] dataset %s not readable yet (attempt %d/%d) — top-level keys=%s, "
+            "%d node(s), types=%s",
+            dataset_id, attempt, len(delays), sorted(doc.keys()), len(nodes),
+            [t for n in nodes for t in _node_types(n)],
+        )
+    return doc
+
+
 def _node_types(node: dict) -> list[str]:
     t = node.get("@type", [])
     return t if isinstance(t, list) else [t]
@@ -497,9 +528,64 @@ def _dataset_license(ds_node: dict | None) -> str:
     return _iri_of(ds_node.get("dct:license") or ds_node.get("http://purl.org/dc/terms/license"))
 
 
+def _graph_nodes(doc: dict) -> list[dict]:
+    """The node list of a fetched piveau record, whichever shape it came back in.
+
+    piveau does not always wrap a record in @graph. A single-subject document —
+    exactly what a freshly created dataset is, before it has any distributions —
+    can come back as a flat JSON-LD node with its properties at the top level.
+    Reading doc["@graph"] then yields nothing, which is what left the first
+    distribution both unlinked and unstored ("no dcat:Dataset node found in the
+    fetched graph")."""
+    graph = doc.get("@graph")
+    if isinstance(graph, list):
+        return graph
+    if isinstance(graph, dict):
+        return [graph]
+    node = {k: v for k, v in doc.items() if k != "@context"}
+    return [node] if node else []
+
+
+def _with_graph_nodes(doc: dict, nodes: list[dict]) -> dict:
+    """Rebuild a fetched record around a new node list.
+
+    Rebuilt rather than mutated so a flat document's top-level properties are
+    dropped: leaving them alongside a new @graph would describe the same subject
+    twice, once inline and once in the graph."""
+    rebuilt: dict = {"@graph": nodes}
+    ctx = doc.get("@context")
+    if ctx is not None:
+        rebuilt["@context"] = ctx
+    return rebuilt
+
+
+def _merge_context(doc: dict, terms: dict) -> None:
+    """Ensure `terms` are bound in the document's @context.
+
+    A fetched @context is usually an object, but JSON-LD also allows a string
+    (a remote context) or an array. In those cases the terms are appended as an
+    extra context rather than skipped — previously a non-object context meant
+    the compact keys on an appended node had nothing to resolve against."""
+    ctx = doc.get("@context")
+    if isinstance(ctx, dict):
+        for prefix, iri in terms.items():
+            ctx.setdefault(prefix, iri)
+        doc["@context"] = ctx
+    elif ctx is None:
+        doc["@context"] = dict(terms)
+    elif isinstance(ctx, list):
+        if not any(isinstance(entry, dict) and terms.keys() <= entry.keys() for entry in ctx):
+            doc["@context"] = [*ctx, dict(terms)]
+    else:
+        doc["@context"] = [ctx, dict(terms)]
+
+
+def _find_dataset_node(nodes: list[dict]) -> dict | None:
+    return next((n for n in nodes if any("Dataset" in t for t in _node_types(n))), None)
+
+
 def _count_distributions(graph: dict) -> int:
-    nodes = graph.get("@graph", [])
-    return sum(1 for n in nodes if any("Distribution" in t for t in _node_types(n)))
+    return sum(1 for n in _graph_nodes(graph) if any("Distribution" in t for t in _node_types(n)))
 
 
 async def next_distribution_id(dataset_id: str, catalogue_id: str) -> str:
@@ -529,8 +615,8 @@ async def add_distribution(
     `byte_size` is the uploaded file's size in bytes and `ext` its resolved
     extension — both are known only to the caller, and both are needed to
     satisfy dali:DistributionShape (dcat:byteSize, dct:format)."""
-    graph = await _fetch_dataset_graph(dataset_id, catalogue_id)
-    nodes = graph.get("@graph", [])
+    graph = await _fetch_dataset_graph_with_dataset(dataset_id, catalogue_id)
+    nodes = _graph_nodes(graph)
 
     # Match by rdf:type, not by comparing @id to a locally-computed
     # _dataset_uri(dataset_id) — piveau-hub-repo canonicalizes the dataset's
@@ -539,7 +625,7 @@ async def add_distribution(
     # new distribution was appended as an orphan node with no
     # dcat:distribution link back to the dataset (confirmed against a real
     # dataset record: its existing distributions never showed up as a match).
-    ds_node = next((n for n in nodes if any("Dataset" in t for t in _node_types(n))), None)
+    ds_node = _find_dataset_node(nodes)
 
     # piveau represents distributions as flat resources (.../set/distribution/{id}),
     # not nested under the dataset's own URI — also confirmed against production
@@ -623,15 +709,8 @@ async def add_distribution(
         log.warning("[piveau] no dcat:Dataset node found in the fetched graph for %s — "
                     "dcat:distribution link not added, only the distribution node itself", dataset_id)
 
-    graph["@graph"] = nodes
-
-    ctx = graph.get("@context", {})
-    if isinstance(ctx, dict):
-        ctx.setdefault("dct",    "http://purl.org/dc/terms/")
-        ctx.setdefault("dcat",   "http://www.w3.org/ns/dcat#")
-        ctx.setdefault("dali",   "https://dali-project.eu/ns#")
-        ctx.setdefault("schema", "https://schema.org/")
-        graph["@context"] = ctx
+    graph = _with_graph_nodes(graph, nodes)
+    _merge_context(graph, _JSONLD_CONTEXT)
 
     return await _put_dataset_graph(dataset_id, catalogue_id, graph, asset_id, distribution_id)
 
@@ -668,7 +747,7 @@ async def _put_dataset_graph(
     refetched = await _fetch_dataset_graph(dataset_id, catalogue_id)
     real_node = next(
         (
-            n for n in refetched.get("@graph", [])
+            n for n in _graph_nodes(refetched)
             if any("Distribution" in t for t in _node_types(n)) and _asset_id_of(n) == asset_id
         ),
         None,
@@ -793,11 +872,11 @@ async def add_distribution_from_turtle(
     dist_uri = _distribution_uri(asset_id)
     new_nodes = distribution_nodes_from_turtle(resolved, dist_uri)
 
-    graph = await _fetch_dataset_graph(dataset_id, catalogue_id)
-    nodes = graph.get("@graph", [])
-    ds_node = next((n for n in nodes if any("Dataset" in t for t in _node_types(n))), None)
+    graph = await _fetch_dataset_graph_with_dataset(dataset_id, catalogue_id)
+    nodes = _graph_nodes(graph)
+    ds_node = _find_dataset_node(nodes)
 
-    nodes.extend(new_nodes)
+    nodes = [*nodes, *new_nodes]
 
     # The dataset's side of the link. The submitted body describes only the
     # distribution (its own dcat:distribution statement, if any, was filtered
@@ -811,12 +890,8 @@ async def add_distribution_from_turtle(
         log.warning("[piveau] no dcat:Dataset node found in the fetched graph for %s — "
                     "dcat:distribution link not added, only the distribution node itself", dataset_id)
 
-    graph["@graph"] = nodes
-    ctx = graph.get("@context", {})
-    if isinstance(ctx, dict):
-        for prefix, iri in _JSONLD_CONTEXT.items():
-            ctx.setdefault(prefix, iri)
-        graph["@context"] = ctx
+    graph = _with_graph_nodes(graph, nodes)
+    _merge_context(graph, _JSONLD_CONTEXT)
 
     piveau_result = await _put_dataset_graph(dataset_id, catalogue_id, graph, asset_id)
     piveau_result["turtle"] = resolved
@@ -829,7 +904,7 @@ async def list_asset_ids(dataset_id: str, catalogue_id: str) -> list[str]:
     objects and EDC assets to clean up *before* the piveau record (which is
     the only place this list is readable from) is deleted."""
     graph = await _fetch_dataset_graph(dataset_id, catalogue_id)
-    nodes = graph.get("@graph", [])
+    nodes = _graph_nodes(graph)
     return [
         asset_id for n in nodes
         if any("Distribution" in t for t in _node_types(n)) and (asset_id := _asset_id_of(n))
@@ -845,7 +920,7 @@ async def delete_distribution(dataset_id: str, catalogue_id: str, asset_id: str)
     dali.dataspace.publish_quality_to_piveau, which creates those under
     "{dist_uri}/quality/..."), then PUTs the graph back."""
     graph = await _fetch_dataset_graph(dataset_id, catalogue_id)
-    nodes = graph.get("@graph", [])
+    nodes = _graph_nodes(graph)
 
     dist_node = next(
         (n for n in nodes if any("Distribution" in t for t in _node_types(n)) and _asset_id_of(n) == asset_id),
@@ -860,7 +935,7 @@ async def delete_distribution(dataset_id: str, catalogue_id: str, asset_id: str)
         if n.get("@id") != dist_uri and not str(n.get("@id", "")).startswith(f"{dist_uri}/quality/")
     ]
 
-    ds_node = next((n for n in nodes if any("Dataset" in t for t in _node_types(n))), None)
+    ds_node = _find_dataset_node(nodes)
     if ds_node is not None:
         existing = ds_node.get("dcat:distribution")
         refs = [] if existing is None else (existing if isinstance(existing, list) else [existing])
@@ -870,7 +945,7 @@ async def delete_distribution(dataset_id: str, catalogue_id: str, asset_id: str)
         else:
             ds_node.pop("dcat:distribution", None)
 
-    graph["@graph"] = nodes
+    graph = _with_graph_nodes(graph, nodes)
     url = f"{PIVEAU_HUB_URL}/datasets/{dataset_id}?catalogue={catalogue_id}"
     headers = {"X-API-Key": PIVEAU_API_KEY, "Content-Type": "application/ld+json"}
     try:
