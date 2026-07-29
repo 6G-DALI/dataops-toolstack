@@ -1,4 +1,8 @@
 fastapi==0.115.0
+# Parses the client-supplied Turtle accepted by
+# POST /datasets/{id}/distributions/rdf, so a submitted distribution can be
+# merged into the dataset's existing JSON-LD record. Pure Python, no build deps.
+rdflib==7.1.1
 uvicorn[standard]==0.30.6
 httpx==0.27.2
 python-dotenv==1.0.1

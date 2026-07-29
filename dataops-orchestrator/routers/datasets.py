@@ -97,29 +97,24 @@ async def create_dataset_rdf(request: Request):
     }
 
 
-@router.post("/{dataset_id}/distributions")
-async def add_distribution(
+async def _register_distribution(
     dataset_id: str,
     file: UploadFile,
-    catalogue_id: str = Form(...),
-    metrics: str = Form("{}"),
-    expectations: str = Form("[]"),
-):
+    catalogue_id: str,
+    metrics: str,
+    expectations: str,
+    turtle: str | None = None,
+) -> dict:
     """
-    Step 2 of dataset submission: upload a file as a new distribution of an
-    already-created dataset (see POST /datasets), register the distribution
-    in piveau, and trigger the data quality validation DAG against it.
+    Shared body of both step-2 endpoints: upload the file to the Data Lake,
+    register it as an EDC asset, publish the distribution to piveau, and trigger
+    validation. Identical either way — only how the dcat:Distribution node is
+    composed differs.
 
-    Can be called more than once per dataset to add further distributions —
-    each gets the next sequential distribution_id.
-
-    `metrics` is a JSON-encoded DistributionMetrics (see dataset_models.py) —
-    the column list (`schema:variableMeasured`) and measurement technique for
-    *this* distribution's file, not the dataset as a whole.
-    `expectations` is a JSON-encoded list of Great Expectations configs, e.g.
-    [{"type": "expect_table_row_count_to_be_between", "min_value": 1},
-     {"type": "expect_column_to_exist", "column": "timestamp"}] — passed
-    straight through to the validation DAG (see dali_dataspace_validate_dataset).
+    `turtle`, when given, is a client-built distribution document whose
+    placeholders this server resolves (see
+    piveau_dataset_client.add_distribution_from_turtle). When None, the node is
+    built here from the upload's own metadata (the original behaviour).
     """
     try:
         dist_metrics = DistributionMetrics.model_validate(json.loads(metrics))
@@ -184,15 +179,23 @@ async def add_distribution(
     # not raised as a 5xx, and doesn't block the piveau publish that follows.
     edc_result = await edc.register_asset(catalogue_id, asset_id, object_key, media_type, file.filename)
 
-    # Step 3: publish the distribution to piveau.
+    # Step 3: publish the distribution to piveau — either from the submitted
+    # RDF, or (the original path) built here from the upload's own metadata.
     # byte_size/ext are passed through for dcat:byteSize and dct:format (the EU
-    # file-type IRI) on the new distribution node — both required by
-    # dali:DistributionShape and knowable only here, from the upload itself.
-    piveau_result = await pdc.add_distribution(
-        dataset_id, catalogue_id, distribution_id, asset_id,
-        distribution_url, file.filename, media_type, dist_metrics,
-        byte_size=len(content), ext=ext,
-    )
+    # file-type IRI) on the built node — both required by dali:DistributionShape
+    # and knowable only here, from the upload itself. A submitted document
+    # carries its own, so it needs neither.
+    if turtle is not None:
+        piveau_result = await pdc.add_distribution_from_turtle(
+            dataset_id, catalogue_id, asset_id, turtle,
+            distribution_url=distribution_url, access_url=pdc.EDC_CONNECTOR_URL,
+        )
+    else:
+        piveau_result = await pdc.add_distribution(
+            dataset_id, catalogue_id, distribution_id, asset_id,
+            distribution_url, file.filename, media_type, dist_metrics,
+            byte_size=len(content), ext=ext,
+        )
 
     # Step 4: trigger the validation DAG now that the distribution is fully
     # registered. The DAG's `asset_id` param is used both to resolve the
@@ -220,6 +223,64 @@ async def add_distribution(
         "validation_run":   dag_result,
         "edc":              edc_result,
     }
+
+
+@router.post("/{dataset_id}/distributions")
+async def add_distribution(
+    dataset_id: str,
+    file: UploadFile,
+    catalogue_id: str = Form(...),
+    metrics: str = Form("{}"),
+    expectations: str = Form("[]"),
+):
+    """
+    Step 2 of dataset submission: upload a file as a new distribution of an
+    already-created dataset (see POST /datasets), register the distribution in
+    piveau, and trigger the data quality validation DAG against it.
+
+    The dcat:Distribution node is composed here from the upload's own metadata.
+    See POST /datasets/{dataset_id}/distributions/rdf for the variant that
+    registers a distribution the client described itself. Unchanged: this remains
+    the stable API for programmatic clients.
+    """
+    return await _register_distribution(dataset_id, file, catalogue_id, metrics, expectations)
+
+
+@router.post("/{dataset_id}/distributions/rdf")
+async def add_distribution_rdf(
+    dataset_id: str,
+    file: UploadFile,
+    catalogue_id: str = Form(...),
+    turtle: str = Form(...),
+    metrics: str = Form("{}"),
+    expectations: str = Form("[]"),
+):
+    """
+    Step 2 of dataset submission, RDF-first variant: upload a file *together with
+    the dcat:Distribution document describing it*, rather than having this server
+    compose that node from form fields.
+
+    Same multipart shape as POST /datasets/{dataset_id}/distributions (the file
+    still has to be uploaded), plus a `turtle` field holding the distribution's
+    own statements. Three of its values cannot be known before the upload — the
+    asset id is minted here, the Data Lake object URL only exists afterwards, and
+    the connector URL is server configuration — so the document refers to them as
+    <urn:6gdali:distribution:self>, "urn:6gdali:distribution:asset-id",
+    <urn:6gdali:datalake:object-url> and <urn:6gdali:edc:connector-url>, all
+    substituted on receipt (see
+    piveau_dataset_client.resolve_distribution_sentinels).
+
+    `metrics` is still accepted but is not used to build the node — the submitted
+    document already carries schema:variableMeasured/measurementTechnique. It is
+    kept in the signature so the two endpoints take the same form fields.
+
+    The response's `piveau.turtle` is the document as actually stored, with the
+    sentinels resolved, so a caller can replace the placeholders it sent with the
+    final graph.
+    """
+    return await _register_distribution(
+        dataset_id, file, catalogue_id, metrics, expectations, turtle=turtle
+    )
 
 
 @router.delete("/{dataset_id}/distributions/{asset_id}")

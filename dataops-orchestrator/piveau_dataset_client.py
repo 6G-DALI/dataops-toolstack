@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import HTTPException
+from rdflib import Graph, URIRef
 
 from dataset_models import DatasetIdentity, DatasetObject, DistributionMetrics, TestbedContext
 
@@ -146,6 +147,33 @@ def resolve_media_type(content_type: str | None, ext: str) -> str | None:
 # These must stay byte-identical to the constants in dataops-ui/src/map/datasetTurtle.ts.
 DATASET_URI_SENTINEL = "urn:6gdali:dataset:self"   # the dataset's subject IRI
 DATASET_ID_SENTINEL  = "urn:6gdali:dataset:id"     # the bare id, as dct:identifier
+
+# The same idea for a submitted distribution (POST /datasets/{id}/distributions/rdf).
+# A client can describe the distribution but cannot know any of these: the asset
+# id is minted here, the object URL only exists after the upload, and the
+# connector URL is server configuration. The subject and the dali:assetId literal
+# need separate tokens because one resolves to a full IRI and the other to the
+# bare UUID.
+DISTRIBUTION_URI_SENTINEL = "urn:6gdali:distribution:self"
+ASSET_ID_SENTINEL         = "urn:6gdali:distribution:asset-id"
+DOWNLOAD_URL_SENTINEL     = "urn:6gdali:datalake:object-url"
+ACCESS_URL_SENTINEL       = "urn:6gdali:edc:connector-url"
+
+# Compact terms for serializing a submitted distribution back to JSON-LD, so the
+# node merges into the dataset record in the same shape add_distribution writes.
+_JSONLD_CONTEXT = {
+    "rdf":    "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs":   "http://www.w3.org/2000/01/rdf-schema#",
+    "dcat":   "http://www.w3.org/ns/dcat#",
+    "dct":    "http://purl.org/dc/terms/",
+    "adms":   "http://www.w3.org/ns/adms#",
+    "foaf":   "http://xmlns.com/foaf/0.1/",
+    "vcard":  "http://www.w3.org/2006/vcard/ns#",
+    "schema": "https://schema.org/",
+    "spdx":   "http://spdx.org/rdf/terms#",
+    "dali":   DALI_NS,
+    "gax":    "https://registry.lab.gaia-x.eu/v1/api/trusted-shape-registry/v1/shapes/jsonld/trustframework#",
+}
 
 
 _ACCESS_RIGHTS = {
@@ -605,6 +633,16 @@ async def add_distribution(
         ctx.setdefault("schema", "https://schema.org/")
         graph["@context"] = ctx
 
+    return await _put_dataset_graph(dataset_id, catalogue_id, graph, asset_id, distribution_id)
+
+
+async def _put_dataset_graph(
+    dataset_id: str, catalogue_id: str, graph: dict, asset_id: str, fallback_distribution_id: str = "1"
+) -> dict:
+    """PUT a dataset's whole JSON-LD graph back to piveau and report the id piveau
+    actually assigned the distribution identified by `asset_id`. Shared by both
+    ways of adding a distribution — the metadata-built one (add_distribution) and
+    the client-submitted one (add_distribution_from_turtle)."""
     url = f"{PIVEAU_HUB_URL}/datasets/{dataset_id}?catalogue={catalogue_id}"
     headers = {"X-API-Key": PIVEAU_API_KEY, "Content-Type": "application/ld+json"}
     try:
@@ -635,6 +673,7 @@ async def add_distribution(
         ),
         None,
     )
+    dist_uri = _distribution_uri(asset_id)
     if real_node is not None:
         real_uri = real_node.get("@id") or dist_uri
         piveau_distribution_id = real_uri.rstrip("/").rsplit("/", 1)[-1]
@@ -642,7 +681,7 @@ async def add_distribution(
         log.warning("[piveau] could not find the just-added distribution (asset_id=%s) in the "
                     "re-fetched graph for %s — falling back to the locally-guessed id", asset_id, dataset_id)
         real_uri = dist_uri
-        piveau_distribution_id = distribution_id
+        piveau_distribution_id = fallback_distribution_id
 
     return {
         "dataset_id":       dataset_id,
@@ -651,6 +690,137 @@ async def add_distribution(
         "status":           "submitted",
         "piveau_url":       url,
     }
+
+
+def resolve_distribution_sentinels(
+    turtle: str, asset_id: str, distribution_url: str, access_url: str
+) -> str:
+    """Replace a submitted distribution's placeholders with the values only this
+    server can supply. Same passthrough approach as resolve_sentinels: the graph
+    stored is the one the submitter was shown, apart from these four tokens."""
+    return (
+        turtle
+        .replace(DISTRIBUTION_URI_SENTINEL, _distribution_uri(asset_id))
+        .replace(DOWNLOAD_URL_SENTINEL, distribution_url)
+        .replace(ACCESS_URL_SENTINEL, access_url)
+        # Last: the asset-id token is a substring of nothing else, but resolving
+        # it after the subject keeps the ordering obvious.
+        .replace(ASSET_ID_SENTINEL, asset_id)
+    )
+
+
+def distribution_nodes_from_turtle(turtle: str, dist_uri: str) -> list[dict]:
+    """Parse a submitted distribution document into JSON-LD node dicts, ready to
+    append to the dataset's existing record.
+
+    Only the distribution itself and its blank nodes (e.g. an spdx:Checksum) are
+    kept. Anything else a client sends — statements about the dataset, about some
+    other dataset, about a different distribution — is dropped rather than
+    merged: this endpoint's contract is "describe THIS distribution", and without
+    the filter a submitter could rewrite arbitrary parts of the catalogue by
+    including extra subjects in the body.
+    """
+    try:
+        graph = Graph().parse(data=turtle, format="turtle")
+    # Deliberately broad: this is untrusted input, and rdflib surfaces malformed
+    # Turtle as any of BadSyntax, ParserError, ValueError or a pyparsing error
+    # depending on how it fails. All of them mean the same thing to the caller.
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Body is not valid Turtle: {e}")
+
+    if (URIRef(dist_uri), None, None) not in graph:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Turtle body must describe the distribution as "
+                f"<{DISTRIBUTION_URI_SENTINEL}>, which is replaced with the "
+                f"server-assigned distribution URI."
+            ),
+        )
+
+    try:
+        doc = json.loads(graph.serialize(format="json-ld", context=_JSONLD_CONTEXT, auto_compact=True))
+    # Broad for the same reason, but a 500 rather than a 422: the Turtle already
+    # parsed, so a failure here is ours, not the submitter's.
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Could not serialize submitted distribution: {e}")
+
+    nodes = doc.get("@graph") or ([doc] if "@id" in doc or "@type" in doc else [])
+    # Blank nodes carry no stable @id, so they are kept by virtue of not being a
+    # named subject other than the distribution.
+    kept, dropped = [], []
+    for node in nodes:
+        node_id = node.get("@id", "")
+        if node_id == dist_uri or not node_id or node_id.startswith("_:"):
+            node.pop("@context", None)
+            kept.append(node)
+        else:
+            dropped.append(node_id)
+    if dropped:
+        log.warning("[piveau] ignoring %d non-distribution subject(s) in a submitted "
+                    "distribution document: %s", len(dropped), dropped)
+    if not kept:
+        raise HTTPException(status_code=422, detail="No distribution statements found in the body")
+    return kept
+
+
+async def add_distribution_from_turtle(
+    dataset_id: str, catalogue_id: str, asset_id: str, turtle: str,
+    distribution_url: str, access_url: str,
+) -> dict:
+    """Step 2, RDF-first variant: append a client-supplied dcat:Distribution to
+    an existing dataset's piveau record, instead of building the node here from
+    the upload's metadata (see add_distribution).
+
+    The write path is the same one add_distribution uses — fetch the dataset's
+    JSON-LD graph, append the node, link it from the dataset, PUT the whole graph
+    back — because that is what has been proven against production records. Only
+    the node's *contents* come from the submitter.
+
+    Returns the usual result plus `turtle`: the document as actually stored, with
+    the sentinels resolved, so the caller can show the final graph rather than
+    the placeholder one it sent.
+    """
+    if not turtle or not turtle.strip():
+        raise HTTPException(status_code=422, detail="Empty Turtle body")
+    if DISTRIBUTION_URI_SENTINEL not in turtle:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Turtle body must identify the distribution by <{DISTRIBUTION_URI_SENTINEL}>",
+        )
+
+    resolved = resolve_distribution_sentinels(turtle, asset_id, distribution_url, access_url)
+    dist_uri = _distribution_uri(asset_id)
+    new_nodes = distribution_nodes_from_turtle(resolved, dist_uri)
+
+    graph = await _fetch_dataset_graph(dataset_id, catalogue_id)
+    nodes = graph.get("@graph", [])
+    ds_node = next((n for n in nodes if any("Dataset" in t for t in _node_types(n))), None)
+
+    nodes.extend(new_nodes)
+
+    # The dataset's side of the link. The submitted body describes only the
+    # distribution (its own dcat:distribution statement, if any, was filtered
+    # out above), so the link is added here exactly as add_distribution does.
+    if ds_node is not None:
+        existing = ds_node.get("dcat:distribution")
+        refs = [] if existing is None else (existing if isinstance(existing, list) else [existing])
+        refs.append({"@id": dist_uri})
+        ds_node["dcat:distribution"] = refs
+    else:
+        log.warning("[piveau] no dcat:Dataset node found in the fetched graph for %s — "
+                    "dcat:distribution link not added, only the distribution node itself", dataset_id)
+
+    graph["@graph"] = nodes
+    ctx = graph.get("@context", {})
+    if isinstance(ctx, dict):
+        for prefix, iri in _JSONLD_CONTEXT.items():
+            ctx.setdefault(prefix, iri)
+        graph["@context"] = ctx
+
+    piveau_result = await _put_dataset_graph(dataset_id, catalogue_id, graph, asset_id)
+    piveau_result["turtle"] = resolved
+    return piveau_result
 
 
 async def list_asset_ids(dataset_id: str, catalogue_id: str) -> list[str]:
