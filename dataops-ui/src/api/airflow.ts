@@ -144,9 +144,41 @@ export function getDistributions(datasetId: string, catalogueId?: string): Promi
   return request<DistributionsResponse>(`/datasets/${encodeURIComponent(datasetId)}/distributions${qs}`)
 }
 
+/** Empty string → null; otherwise the parsed number (or null if unparseable).
+ *  The form keeps these testbed fields as strings, but the backend expects
+ *  Optional[float]/Optional[int] — an empty "" would 422 as unparseable. */
+function numericOrNull(value: string, integer = false): number | null {
+  const trimmed = value.trim()
+  if (trimmed === '') return null
+  const n = integer ? parseInt(trimmed, 10) : Number(trimmed)
+  return Number.isFinite(n) ? n : null
+}
+
 /** Step 1: register the dataset's own metadata. No file yet. */
 export function createDataset(payload: DatasetCreateRequest): Promise<DatasetCreateResponse> {
-  return request<DatasetCreateResponse>('/datasets', { method: 'POST', body: JSON.stringify(payload) })
+  const tc = payload.testbed_context
+  const body = {
+    ...payload,
+    testbed_context: {
+      ...tc,
+      ran_bandwidth_mhz: numericOrNull(tc.ran_bandwidth_mhz),
+      ran_max_end_devices: numericOrNull(tc.ran_max_end_devices, true),
+    },
+  }
+  return request<DatasetCreateResponse>('/datasets', { method: 'POST', body: JSON.stringify(body) })
+}
+
+/** Step 1, RDF-first: submit the MAP record the UI generated itself as Turtle
+ *  (see map/datasetTurtle.ts). Counterpart to createDataset above, which stays
+ *  available as the JSON API for programmatic clients — the orchestrator serves
+ *  both. The body carries sentinel identifiers that the orchestrator replaces
+ *  with the dataset_id it mints. */
+export function createDatasetRdf(turtle: string): Promise<DatasetCreateResponse> {
+  return request<DatasetCreateResponse>('/datasets/rdf', {
+    method: 'POST',
+    body: turtle,
+    headers: { 'Content-Type': 'text/turtle' },
+  })
 }
 
 /** Step 2: upload a file as a new distribution of an already-created dataset. */
@@ -163,6 +195,32 @@ export function addDistribution(
   body.append('metrics', JSON.stringify(metrics))
   body.append('expectations', JSON.stringify(expectations))
   return request<DistributionSubmitResponse>(`/datasets/${encodeURIComponent(datasetId)}/distributions`, { method: 'POST', body })
+}
+
+/** Step 2, RDF-first: upload the file together with the dcat:Distribution
+ *  document describing it (see map/datasetTurtle.ts), instead of having the
+ *  orchestrator compose that node from form fields. Still multipart — the file
+ *  has to be uploaded either way — with the Turtle as one more field.
+ *
+ *  The response's `piveau.turtle` is the document as stored, with the
+ *  placeholders resolved to the values assigned during the upload. */
+export function addDistributionRdf(
+  datasetId: string,
+  catalogueId: string,
+  file: File,
+  turtle: string,
+  metrics: DistributionMetricsInput,
+  expectations: GreatExpectation[] = []
+): Promise<DistributionSubmitResponse> {
+  const body = new FormData()
+  body.append('file', file)
+  body.append('catalogue_id', catalogueId)
+  body.append('turtle', turtle)
+  body.append('metrics', JSON.stringify(metrics))
+  body.append('expectations', JSON.stringify(expectations))
+  return request<DistributionSubmitResponse>(
+    `/datasets/${encodeURIComponent(datasetId)}/distributions/rdf`, { method: 'POST', body }
+  )
 }
 
 /** Deletes one distribution — cleans up piveau, the EDC asset, and its S3 object(s). */

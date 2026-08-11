@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react'
-import { FiMenu, FiHome, FiGrid, FiList, FiDatabase, FiPlusCircle, FiSettings, FiUser, FiLogOut } from 'react-icons/fi'
+import {
+  FiMenu, FiHome, FiGrid, FiList, FiDatabase, FiPlusCircle, FiSettings, FiUser, FiLogOut,
+} from 'react-icons/fi'
 import type { IconType } from 'react-icons'
 import type { NavigateFn, NavParams, View } from '../types'
 import keycloak, { redirectUri } from '../auth/keycloak'
@@ -19,6 +21,95 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Add Dataset', view: 'dataset-creator', icon: FiPlusCircle },
   { label: 'Services', view: 'services',  icon: FiSettings },
 ]
+
+// AdminLTE's own sidebar state, reimplemented here because its JS binds the
+// toggle with a one-shot `document.querySelectorAll('[data-lte-toggle="sidebar"]')`
+// on DOMContentLoaded. React renders this navbar *after* that runs, so the
+// element never receives AdminLTE's listener — and since that listener is also
+// what calls preventDefault(), an <a href="#"> toggle silently cleared the hash
+// instead, which App.tsx resolves to its default view ('dags'). Hence a real
+// <button> plus these class manipulations, which mirror AdminLTE's PushMenu
+// (classes X/Y and the 992px sidebarBreakpoint in adminlte.min.js).
+const SIDEBAR_COLLAPSE_CLASS = 'sidebar-collapse'
+const SIDEBAR_OPEN_CLASS = 'sidebar-open'
+const SIDEBAR_BREAKPOINT = 992
+
+function toggleSidebar() {
+  const body = document.body
+  if (body.classList.contains(SIDEBAR_COLLAPSE_CLASS)) {
+    // expand
+    body.classList.remove(SIDEBAR_COLLAPSE_CLASS)
+    // On small screens the sidebar is an overlay that needs opening explicitly.
+    if (globalThis.innerWidth <= SIDEBAR_BREAKPOINT) body.classList.add(SIDEBAR_OPEN_CLASS)
+  } else {
+    // collapse
+    body.classList.remove(SIDEBAR_OPEN_CLASS)
+    body.classList.add(SIDEBAR_COLLAPSE_CLASS)
+  }
+}
+
+interface ExternalTool {
+  label: string
+  url: string | undefined
+  title: string
+}
+
+/** The 6G-DALI tool suite, linked from the navbar so the same set is reachable
+ *  from every app. Each entry is dropped when its URL is unset rather than
+ *  pointing somewhere that doesn't exist, so a partially configured deployment
+ *  simply shows fewer links. */
+const EXTERNAL_TOOLS: ExternalTool[] = [
+  {
+    label: '6G-DALI',
+    url: import.meta.env.VITE_DALI_URL,
+    title: 'The 6G-DALI project site',
+  },
+  {
+    label: 'Data Space',
+    url: import.meta.env.VITE_DATASPACE_URL,
+    title: 'Browse and search the 6G-DALI Data Space catalogue',
+  },
+  {
+    label: 'Data Ops',
+    url: import.meta.env.VITE_DATAOPS_URL,
+    title: 'Data Ops — pipelines, datasets and data quality',
+  },
+  {
+    label: 'ML Ops',
+    url: import.meta.env.VITE_MLOPS_URL,
+    title: 'ML Ops — model training and serving',
+  },
+]
+
+function ExternalToolLinks() {
+  const tools = EXTERNAL_TOOLS.filter((tool): tool is ExternalTool & { url: string } =>
+    Boolean(tool.url && tool.url.trim()))
+  if (tools.length === 0) return null
+
+  return (
+    <>
+      {tools.map(tool => (
+        <li className="nav-item" key={tool.label}>
+          {/* Text only. The label is always rendered — with no icon beside it,
+              hiding it on narrow screens would leave an empty clickable box. */}
+          <a
+            className="nav-link external-tool-link"
+            href={tool.url}
+            // Separate tab: these are other applications, and the wizard may
+            // hold unsaved form state. noreferrer alongside noopener so the
+            // target can't reach back through window.opener.
+            target="_blank"
+            rel="noopener noreferrer"
+            title={tool.title}
+          >
+            {tool.label}
+          </a>
+        </li>
+      ))}
+      <li className="nav-item external-tool-divider" aria-hidden="true" />
+    </>
+  )
+}
 
 interface Crumb {
   label: string
@@ -96,12 +187,22 @@ export default function Layout({ view, dagId, runId, taskId, onNavigate, childre
         <div className="container-fluid">
           <ul className="navbar-nav">
             <li className="nav-item">
-              <a className="nav-link" data-lte-toggle="sidebar" href="#" role="button" aria-label="Toggle sidebar">
+              {/* A <button>, not an <a href="#">: the anchor's default action
+                  cleared the location hash and navigated away (see
+                  toggleSidebar). data-lte-toggle is deliberately omitted so
+                  AdminLTE cannot also bind here and double-toggle. */}
+              <button
+                type="button"
+                className="nav-link border-0 bg-transparent"
+                onClick={toggleSidebar}
+                aria-label="Toggle sidebar"
+              >
                 <FiMenu />
-              </a>
+              </button>
             </li>
           </ul>
           <ul className="navbar-nav ms-auto align-items-center">
+            <ExternalToolLinks />
             <li className="nav-item">
               <span className="navbar-text text-muted small d-inline-flex align-items-center gap-1 me-2">
                 <FiUser />

@@ -199,17 +199,36 @@ export interface CataloguesResponse {
 // ── Dataset submission (Create Dataset page) ────────────────────────────────
 // Mirrors dataops-orchestrator/dataset_models.py exactly (snake_case field
 // names, since the JSON is sent as-is to the backend Pydantic model).
+// One dct:creator entry. `kind` picks the rdf:type of the emitted blank node
+// (foaf:Person vs foaf:Organization) — the MAP uses both, depending on whether
+// a dataset credits named researchers (IMEC) or the institution itself (UC3M).
+// orcid/affiliation are Person-shaped extras and are simply omitted when blank.
+export interface DatasetAgentInput {
+  kind: 'Person' | 'Organization'
+  name: string
+  orcid: string
+  affiliation: string
+}
+
 export interface DatasetIdentityInput {
   title: string
   description: string
   sns_project_name: string
   publisher_name: string
   contact_email: string
+  // dct:creator — who produced the dataset. Distinct from `contributors`,
+  // which maps to dct:contributor; only creator satisfies the MAP's
+  // recommended dct:creator (dali:DatasetShape).
+  creators: DatasetAgentInput[]
   contributors: string[]
   keywords: string[]
   related_publications: string[]
   language: string
   spatial: string
+  // dct:issued — the date the dataset was *first published*, which for a
+  // harvested record is its upstream publication date, not the day it was
+  // registered here. Blank falls back to today server-side.
+  issued: string
   temporal_start: string
   temporal_end: string
   version: string
@@ -238,7 +257,9 @@ export interface TestbedContextInput {
   ran_split: string
   ran_focused_technology: string
   ran_coverage_type: string
-  ran_frequency_band: string
+  // Repeatable — a testbed can operate on several bands at once (e.g. Wi-Fi
+  // MLO across 2.4 GHz and 5 GHz), and dali:ranFrequencyBand has no maxCount.
+  ran_frequency_band: string[]
   ran_bandwidth_mhz: string
   ran_max_end_devices: string
   ran_mobility_model: string
@@ -311,7 +332,10 @@ export interface DistributionSubmitResponse {
   distribution_id: string
   object_key: string
   distribution_url: string | null
-  piveau: { dataset_id: string; distribution_id: string; distribution_uri: string; status: string; piveau_url: string }
+  // `turtle` is present only for the RDF-first path
+  // (POST /datasets/{id}/distributions/rdf): the distribution document as
+  // actually stored, with the upload-time placeholders resolved.
+  piveau: { dataset_id: string; distribution_id: string; distribution_uri: string; status: string; piveau_url: string; turtle?: string }
   validation_run: DagRun
   edc: EdcRegistrationResult
 }

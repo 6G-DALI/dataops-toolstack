@@ -19,3 +19,28 @@
   display: inline-flex;
   align-items: center;
 }
+
+/* Text links out to the sibling 6G-DALI tools. Sized down from the navbar's
+   icon-button default, which is set for 1.2rem glyphs and would make these
+   dominate the bar. */
+.app-header .external-tool-link {
+  font-size: 0.85rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 4px;
+  color: #5a6a84;
+  white-space: nowrap;
+}
+
+.app-header .external-tool-link:hover,
+.app-header .external-tool-link:focus-visible {
+  color: var(--dali-navy, #1b2a4a);
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* Separates the tool links from the user/logout controls beside them. */
+.app-header .external-tool-divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 0.4rem 0.6rem;
+  background: var(--dali-gray, #dfe3ea);
+}

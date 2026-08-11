@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { addDistribution } from '../api/airflow'
+import CommaListInput from './CommaListInput'
 import ErrorMessage from './ErrorMessage'
 import Modal from './Modal'
 import type { Dataset, DistributionMetricsInput, DistributionSubmitResponse, GreatExpectation, NavigateFn } from '../types'
@@ -18,10 +19,6 @@ interface AddDistributionModalProps {
 }
 
 const emptyMetrics: DistributionMetricsInput = { variable_measured: [], measurement_technique: '' }
-
-function splitList(value: string): string[] {
-  return value.split(',').map(s => s.trim()).filter(Boolean)
-}
 
 export default function AddDistributionModal({ dataset, onClose, onSubmitted, onNavigate }: AddDistributionModalProps) {
   const [file, setFile] = useState<File | null>(null)
@@ -172,8 +169,8 @@ export default function AddDistributionModal({ dataset, onClose, onSubmitted, on
 
       <div className="mb-3">
         <label className="form-label small">Dataset columns / measured variables</label>
-        <input className="form-control" value={metrics.variable_measured.join(', ')}
-          onChange={e => setMetrics({ ...metrics, variable_measured: splitList(e.target.value) })} />
+        <CommaListInput values={metrics.variable_measured}
+          onChange={variable_measured => setMetrics({ ...metrics, variable_measured })} />
         <div className="form-text">Comma-separated. Auto-filled from the file above if left empty.</div>
       </div>
       <div className="mb-3">

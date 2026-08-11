@@ -32,6 +32,25 @@ function TagRow({ label, children }: TagRowProps) {
   )
 }
 
+interface CataloguePillProps {
+  label: string
+  active: boolean
+  onClick: () => void
+}
+
+function CataloguePill({ label, active, onClick }: CataloguePillProps) {
+  return (
+    <button
+      type="button"
+      className={`btn btn-sm rounded-pill ${active ? 'btn-primary' : 'btn-outline-secondary'}`}
+      aria-pressed={active}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  )
+}
+
 interface ExpandedRowProps {
   ds: Dataset
   distributions: Distribution[] | undefined
@@ -134,13 +153,19 @@ interface DatasetListProps {
 }
 
 const ALL_CATALOGUES = '__all__'
+// Persist the picked catalogue so a page refresh keeps the current view
+// instead of dropping back to "Select a catalogue…".
+const CATALOGUE_STORAGE_KEY = 'dali.datasetList.selectedCatalogue'
 
 export default function DatasetList({ onNavigate }: DatasetListProps) {
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [catalogues, setCatalogues] = useState<Catalogue[]>([])
   // '' means "nothing picked yet" — no dataset fetch happens until the user
   // explicitly chooses a catalogue (or ALL_CATALOGUES) from the selector.
-  const [selectedCatalogue, setSelectedCatalogue] = useState('')
+  // Restored from localStorage so a refresh keeps the previous selection.
+  const [selectedCatalogue, setSelectedCatalogue] = useState(
+    () => localStorage.getItem(CATALOGUE_STORAGE_KEY) ?? ''
+  )
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [inspecting, setInspecting] = useState<Dataset | null>(null)
@@ -155,6 +180,14 @@ export default function DatasetList({ onNavigate }: DatasetListProps) {
   const [loadingDistIds, setLoadingDistIds] = useState<Set<string>>(new Set())
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
+
+  // Clicking the active pill toggles the selection back off ('' → the
+  // "select a catalogue" prompt); any other click switches to it.
+  function selectCatalogue(catalogueId: string) {
+    const next = selectedCatalogue === catalogueId ? '' : catalogueId
+    setSelectedCatalogue(next)
+    localStorage.setItem(CATALOGUE_STORAGE_KEY, next)
+  }
 
   function loadDatasets(catalogueId: string) {
     setLoading(true)
@@ -346,35 +379,40 @@ export default function DatasetList({ onNavigate }: DatasetListProps) {
 
   return (
     <div>
-      <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-        <span className="text-muted small">
-          {filtered.length}{filtered.length !== datasets.length ? ` of ${datasets.length}` : ''} dataset{datasets.length !== 1 ? 's' : ''}
-        </span>
-        <div className="d-flex align-items-center gap-2">
-          <select
-            className="form-select form-select-sm"
-            style={{ width: 200 }}
-            value={selectedCatalogue}
-            onChange={e => setSelectedCatalogue(e.target.value)}
-          >
-            <option value="" disabled>Select a catalogue…</option>
-            <option value={ALL_CATALOGUES}>All catalogues</option>
-            {catalogues.map(c => <option key={c.id} value={c.id}>{c.title || c.id}</option>)}
-          </select>
-          <div className="input-group input-group-sm" style={{ width: 260 }}>
-            <span className="input-group-text"><FiSearch /></span>
-            <input
-              type="text"
-              className="form-control"
-              placeholder="Search datasets…"
-              value={search}
-              onChange={e => { setSearch(e.target.value); setPage(1) }}
-            />
-          </div>
-          <button className="btn btn-sm btn-primary" onClick={() => onNavigate('dataset-creator', {})}>
-            + Add Dataset
-          </button>
+      <div className="d-flex flex-wrap align-items-center justify-content-end gap-2 mb-2">
+        <div className="input-group input-group-sm" style={{ width: 260 }}>
+          <span className="input-group-text"><FiSearch /></span>
+          <input
+            type="text"
+            className="form-control"
+            placeholder="Search datasets…"
+            value={search}
+            onChange={e => { setSearch(e.target.value); setPage(1) }}
+          />
         </div>
+        <button className="btn btn-sm btn-primary" onClick={() => onNavigate('dataset-creator', {})}>
+          + Add Dataset
+        </button>
+      </div>
+
+      <div className="d-flex flex-wrap align-items-center gap-1 mb-3">
+        <CataloguePill
+          label="All catalogues"
+          active={selectedCatalogue === ALL_CATALOGUES}
+          onClick={() => selectCatalogue(ALL_CATALOGUES)}
+        />
+        {catalogues.map(c => (
+          <CataloguePill
+            key={c.id}
+            label={c.title || c.id}
+            active={selectedCatalogue === c.id}
+            onClick={() => selectCatalogue(c.id)}
+          />
+        ))}
+      </div>
+
+      <div className="text-muted small mb-2">
+        {filtered.length}{filtered.length !== datasets.length ? ` of ${datasets.length}` : ''} dataset{datasets.length !== 1 ? 's' : ''}
       </div>
 
       {!selectedCatalogue ? (

@@ -1,0 +1,91 @@
+/* Vertical timeline of the submission's three operations. */
+.submit-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.submit-step {
+  display: flex;
+  gap: 12px;
+  position: relative;
+  padding-bottom: 18px;
+}
+
+/* Connector between markers. Drawn on the step rather than between steps so it
+   inherits the step's own state colour, and suppressed on the last one. */
+.submit-step:not(.last)::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 24px;
+  bottom: 0;
+  width: 2px;
+  background: var(--dali-gray, #dfe3ea);
+}
+
+.submit-step.submit-step-done:not(.last)::before {
+  background: #2e7d32;
+}
+
+.submit-step-marker {
+  flex: 0 0 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.submit-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.submit-step-icon.done {
+  background: #2e7d32;
+  color: #fff;
+}
+
+.submit-step-icon.failed {
+  background: #c62828;
+  color: #fff;
+}
+
+/* An empty ring: this step hasn't started, so it gets no glyph to read. */
+.submit-step-icon.pending {
+  border: 2px solid var(--dali-gray, #dfe3ea);
+  background: transparent;
+}
+
+.submit-step-body {
+  padding-top: 2px;
+  min-width: 0;
+}
+
+.submit-step-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+/* Steps that haven't started are de-emphasised so the eye lands on the current
+   one without having to re-read the icons. */
+.submit-step-pending .submit-step-title {
+  color: #8898aa;
+  font-weight: 500;
+}
+
+.submit-step-detail {
+  color: #5a6a84;
+  word-break: break-word;
+}
+
+.submit-step-detail code {
+  word-break: break-all;
+}

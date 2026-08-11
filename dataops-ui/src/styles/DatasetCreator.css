@@ -1,3 +1,285 @@
+/* Two-column shell: the wizard on the left, the live semantic view on the right.
+   Collapses to a single stacked column on narrow viewports, where a fixed
+   sidebar this wide would leave the form unusable. */
+:root {
+  --rdf-panel-width: 560px;
+  --rdf-panel-gap: 20px;
+  --rdf-panel-anim: 280ms;
+  /* AdminLTE's .app-header height. The panel sits below it, because the header
+     is position:sticky and would otherwise cover the panel's own header. */
+  --dali-header-height: 3.5rem;
+  --rdf-panel-top: calc(var(--dali-header-height) + 0.75rem);
+  /* Keeps the panel shorter than the viewport it sticks within, so its content
+     scrolls internally instead of the panel outgrowing the screen. */
+  --rdf-panel-max-height: calc(100vh - var(--dali-header-height) - 2.5rem);
+}
+
+/* Hand the sticky panel a scrollport that actually scrolls.
+   .app-main declares `overflow: auto`, which makes it a scroll *port* even though
+   it never scrolls: .app-wrapper only sets `min-height: 100vh`, so the grid grows
+   with its content and the document is what scrolls — which is exactly why
+   AdminLTE makes .app-header `position: sticky`. A sticky element resolves
+   against its nearest scrollport, so the panel was pinned to a box that never
+   moved and slid away with the page instead of following it.
+   Scoped with :has() so this only applies on the dataset-creator page. */
+.app-main:has(.creator-layout) {
+  /* !important is load-bearing, not laziness: AdminLTE sets this from
+     `.sidebar-expand-lg.layout-fixed .app-main` (three classes, 0-3-0) and
+     `:has()` only contributes its argument's specificity, so this selector is
+     0-2-0 and loses on specificity however late it appears in the bundle.
+     AdminLTE overrides its own .app-content the same way. */
+  overflow: visible !important;
+}
+
+.creator-layout {
+  display: flex;
+  align-items: flex-start;
+  /* The gap lives on the panel's margin instead, so it can collapse to zero
+     along with the panel and leave no dead space behind. */
+  gap: 0;
+}
+
+.creator-main {
+  flex: 1 1 auto;
+  /* Without this a wide <pre> or table inside the wizard can force the flex
+     item past its share and squeeze the panel. */
+  min-width: 0;
+}
+
+.rdf-panel {
+  flex: 0 0 var(--rdf-panel-width);
+  width: var(--rdf-panel-width);
+  margin-left: var(--rdf-panel-gap);
+  /* Follows the page as the form is scrolled, holding just below the header. */
+  position: sticky;
+  top: var(--rdf-panel-top);
+  /* Bounded so the record scrolls inside the panel rather than the panel growing
+     past the bottom of the screen — a sticky element taller than its scrollport
+     cannot stay in view. */
+  max-height: var(--rdf-panel-max-height);
+  /* Sticky travels within its parent's box; the flex container stretches items
+     by default, which would make the panel as tall as the form and leave it
+     nothing to travel through. */
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  /* Clips the fixed-width inner card while the outer box animates shut, so the
+     content slides out of view instead of reflowing to ever-narrower widths. */
+  overflow: hidden;
+  visibility: visible;
+  transition:
+    flex-basis var(--rdf-panel-anim) ease,
+    width var(--rdf-panel-anim) ease,
+    margin-left var(--rdf-panel-anim) ease,
+    opacity calc(var(--rdf-panel-anim) - 60ms) ease,
+    visibility 0s;
+}
+
+.rdf-panel-collapsed {
+  flex-basis: 0;
+  width: 0;
+  margin-left: 0;
+  opacity: 0;
+  border-width: 0;
+  /* Deferred to the end of the animation so the panel stays rendered while it
+     slides shut, then drops out of the tab order and the accessibility tree —
+     `visibility: hidden` does both, which a width of 0 alone would not. */
+  visibility: hidden;
+  transition:
+    flex-basis var(--rdf-panel-anim) ease,
+    width var(--rdf-panel-anim) ease,
+    margin-left var(--rdf-panel-anim) ease,
+    opacity calc(var(--rdf-panel-anim) - 60ms) ease,
+    visibility 0s linear var(--rdf-panel-anim);
+}
+
+/* Holds its full width while the outer container animates to zero. */
+.rdf-panel-inner {
+  width: var(--rdf-panel-width);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: var(--rdf-panel-max-height);
+}
+
+.rdf-panel-body {
+  overflow: auto;
+  padding: 0;
+}
+
+/* Chevron on the show/hide toggle: points right ("send it away") while the
+   panel is open, and flips to point left ("bring it in") when it is closed. */
+.rdf-toggle-chevron {
+  display: inline-block;
+  font-size: 1.05em;
+  line-height: 1;
+  transition: transform var(--rdf-panel-anim) ease;
+}
+
+.rdf-toggle-chevron.closed {
+  transform: rotate(180deg);
+}
+
+.rdf-panel pre {
+  margin: 0;
+  padding: 12px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  /* Turtle lines are long; wrap rather than scrolling horizontally in a
+     already-narrow column. */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* The @prefix block, hoisted above the graph and collapsed by default: eleven
+   identical declarations on every submission, which would otherwise fill the
+   panel before the first interesting triple. */
+.rdf-prefixes > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #6c757d;
+  background: rgba(0, 0, 0, 0.02);
+  border-bottom: 1px solid var(--dali-gray);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+/* Suppress the native disclosure triangle in favour of the caret span, so the
+   marker can be rotated with a transition. */
+.rdf-prefixes > summary::-webkit-details-marker,
+.rdf-prefixes > summary::marker {
+  display: none;
+  content: '';
+}
+
+.rdf-prefixes > summary:hover {
+  color: var(--dali-navy);
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.rdf-prefixes-caret {
+  display: inline-block;
+  font-size: 1.15em;
+  line-height: 1;
+  transition: transform 180ms ease;
+}
+
+.rdf-prefixes[open] > summary .rdf-prefixes-caret {
+  transform: rotate(90deg);
+}
+
+.rdf-prefixes > pre {
+  /* Dimmer than the graph itself — present for correctness, not for reading. */
+  opacity: 0.7;
+  border-bottom: 1px solid var(--dali-gray);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rdf-prefixes-caret {
+    transition: none;
+  }
+}
+
+/* One block element per Turtle line, so a changed line can be animated on its
+   own without disturbing the layout of the rest of the document. */
+.rdf-line {
+  display: block;
+  border-radius: 3px;
+  /* Bleed slightly outward so the highlight doesn't hug the glyphs. */
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+
+/* Values the orchestrator fills in on submission (urn:6gdali:…) — visibly not
+   part of the submitted data, so they don't get mistaken for real identifiers. */
+.rdf-placeholder {
+  color: #b3236b;
+  background: rgba(179, 35, 107, 0.09);
+  border-radius: 3px;
+  padding: 0 2px;
+  font-style: italic;
+}
+
+/* Draws the eye to whichever line the keystroke just changed. Applied by
+   remounting the line (see TurtleBlock) rather than by toggling a class, since
+   re-adding a class does not restart an animation that already ran. */
+@keyframes rdf-line-glow {
+  0% {
+    background-color: rgba(255, 214, 0, 0.85);
+    box-shadow: 0 0 0 3px rgba(255, 214, 0, 0.45);
+  }
+  60% {
+    background-color: rgba(255, 214, 0, 0.35);
+    box-shadow: 0 0 0 2px rgba(255, 214, 0, 0.18);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
+.rdf-line-changed {
+  animation: rdf-line-glow 1100ms ease-out 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still mark the change, just hold it briefly instead of animating. */
+  .rdf-line-changed {
+    animation: none;
+    background-color: rgba(255, 214, 0, 0.3);
+  }
+}
+
+/* Stacked below this width — raised along with the panel width, since a 560px
+   sidebar needs more room beside the form than a narrow one did. */
+@media (max-width: 1400px) {
+  .creator-layout {
+    flex-direction: column;
+  }
+
+  .rdf-panel {
+    flex: 1 1 auto;
+    width: 100%;
+    margin-left: 0;
+    position: static;
+    max-height: none;
+    /* No slide to animate when stacked: the panel is full-width, so it just
+       goes away. */
+    transition: none;
+  }
+
+  .rdf-panel-collapsed {
+    display: none;
+  }
+
+  .rdf-panel-inner {
+    width: 100%;
+    max-height: none;
+  }
+
+  .rdf-panel {
+    align-self: auto;
+  }
+
+  .rdf-panel pre {
+    max-height: 50vh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rdf-panel,
+  .rdf-panel-collapsed,
+  .rdf-toggle-chevron {
+    transition: none;
+  }
+}
+
 .wizard-progress {
   display: flex;
   margin-bottom: 24px;
