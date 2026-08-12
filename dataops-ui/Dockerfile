@@ -17,8 +17,12 @@ FROM nginx:1.27-alpine
 COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
 
 # Restrict envsubst to our own variables so nginx's $uri, $host etc. survive.
-ENV NGINX_ENVSUBST_FILTER='KEYCLOAK_ORIGIN|ORCHESTRATOR_ORIGIN'
+ENV NGINX_ENVSUBST_FILTER='KEYCLOAK_ORIGIN|ORCHESTRATOR_ORIGIN|ORCHESTRATOR_UPSTREAM'
 ENV KEYCLOAK_ORIGIN=https://auth.dspace.sparkworks.net
+# Internal address of the orchestrator, used by the /api reverse proxy. Not
+# reachable from outside the compose network — that is the point.
+ENV ORCHESTRATOR_UPSTREAM=http://dataops-orchestrator:8000
+# Only needed if the browser calls the API cross-origin instead of via /api.
 ENV ORCHESTRATOR_ORIGIN=''
 
 # Renders config.js from VITE_* environment variables at start-up, so URLs are

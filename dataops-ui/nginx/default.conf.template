@@ -24,6 +24,45 @@ server {
         return 301 https://$host$request_uri;
     }
 
+    # Reverse-proxy the DataOps Orchestrator API under this origin.
+    #
+    # The UI is a static bundle, so the *browser* calls the API — which means
+    # the API has to be reachable from the user's machine. Proxying it here
+    # instead of exposing it means the orchestrator stays on the internal
+    # network, never published and never in public DNS, and the browser only
+    # ever talks to one origin. That removes three problems at once:
+    #   - mixed content: an https page cannot call an http:// API;
+    #   - CORS: same origin, so the orchestrator needs no CORS_ORIGINS entry;
+    #   - a second tunnel hostname and Keycloak origin for the API.
+    #
+    # This is guidelines §27 option 3 ("proxy API requests through Nginx and use
+    # a relative /api base URL"), so set VITE_ORCHESTRATOR_URL=/api.
+    location /api/ {
+        # Docker's embedded DNS. Resolving through a *variable* upstream is
+        # deliberate: with a literal proxy_pass hostname, nginx resolves it at
+        # start-up and refuses to boot with "host not found in upstream" if the
+        # orchestrator is not running yet.
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $orchestrator "${ORCHESTRATOR_UPSTREAM}";
+
+        # The trailing slash on both sides strips the /api prefix, so
+        # /api/dags reaches the orchestrator as /dags.
+        proxy_pass $orchestrator/;
+
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+        # The Authorization header must survive: the API is Keycloak-protected.
+        proxy_pass_request_headers on;
+
+        # Uploads: dataset files go through this path.
+        client_max_body_size 512m;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
     # Single page app.
     location / {
         try_files $uri $uri/ /index.html;
@@ -45,8 +84,11 @@ server {
     #
     # ${KEYCLOAK_ORIGIN} is substituted at container start (see the Dockerfile's
     # /etc/nginx/templates mechanism). It must be present in BOTH:
-    #   connect-src — keycloak-js fetches the token endpoint, and the app calls
-    #                 the DataOps Orchestrator API (${ORCHESTRATOR_ORIGIN});
+    #   connect-src — keycloak-js fetches the token endpoint. The orchestrator
+    #                 API is same-origin when proxied via /api above, so it
+    #                 needs no entry; ${ORCHESTRATOR_ORIGIN} is kept only for
+    #                 deployments that still call it cross-origin (leave empty
+    #                 otherwise).
     #   frame-src   — `check-sso` loads a hidden Keycloak iframe to detect an
     #                 existing session.
     # With a bare `default-src 'self'` both are blocked and login fails, which
