@@ -66,6 +66,13 @@ const EXTERNAL_TOOLS: ExternalTool[] = [
     title: 'The 6G-DALI project site',
   },
   {
+    // The portal is the entry point to the whole suite, so it leads the apps.
+    // Same config value the username link uses, so one variable covers both.
+    label: 'Portal',
+    url: config.portalUrl,
+    title: 'The 6G-DALI Portal — all services and documentation',
+  },
+  {
     label: 'Data Space',
     url: config.dataspaceUrl,
     title: 'Browse and search the 6G-DALI Data Space catalogue',
