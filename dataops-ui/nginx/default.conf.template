@@ -45,9 +45,21 @@ server {
         resolver 127.0.0.11 valid=10s ipv6=off;
         set $orchestrator "${ORCHESTRATOR_UPSTREAM}";
 
-        # The trailing slash on both sides strips the /api prefix, so
-        # /api/dags reaches the orchestrator as /dags.
-        proxy_pass $orchestrator/;
+        # Strip the /api prefix with an explicit rewrite rather than relying on
+        # proxy_pass's trailing slash.
+        #
+        # That trailing-slash substitution ONLY works when proxy_pass has a
+        # literal URI. With a variable upstream (needed above so nginx does not
+        # resolve the host at start-up), nginx sends the proxy_pass URI verbatim
+        # and discards the request path — so `proxy_pass $orchestrator/` sent
+        # every call upstream as `GET /`, which the API answered with 404.
+        #
+        # `rewrite ... break` rewrites $uri to /dags and stops processing;
+        # proxy_pass with no URI part then forwards the rewritten $uri. The
+        # original query string is preserved automatically because the
+        # replacement contains no '?'.
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass $orchestrator;
 
         proxy_http_version 1.1;
         proxy_set_header Host $host;
