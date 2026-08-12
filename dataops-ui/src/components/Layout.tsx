@@ -5,6 +5,7 @@ import {
 import type { IconType } from 'react-icons'
 import type { NavigateFn, NavParams, View } from '../types'
 import keycloak, { redirectUri } from '../auth/keycloak'
+import { config } from '../config'
 import '../styles/Layout.css'
 
 interface NavItem {
@@ -61,25 +62,69 @@ interface ExternalTool {
 const EXTERNAL_TOOLS: ExternalTool[] = [
   {
     label: '6G-DALI',
-    url: import.meta.env.VITE_DALI_URL,
+    url: config.daliUrl,
     title: 'The 6G-DALI project site',
   },
   {
     label: 'Data Space',
-    url: import.meta.env.VITE_DATASPACE_URL,
+    url: config.dataspaceUrl,
     title: 'Browse and search the 6G-DALI Data Space catalogue',
   },
   {
     label: 'Data Ops',
-    url: import.meta.env.VITE_DATAOPS_URL,
+    url: config.dataopsUrl,
     title: 'Data Ops — pipelines, datasets and data quality',
   },
   {
     label: 'ML Ops',
-    url: import.meta.env.VITE_MLOPS_URL,
+    url: config.mlopsUrl,
     title: 'ML Ops — model training and serving',
   },
 ]
+
+/** The portal owns the single account page for the whole DALI SSO environment,
+ *  so the username here links there rather than being inert. Unset PORTAL_URL
+ *  leaves it as plain text instead of a broken link — same rule as the tool
+ *  links above. */
+const PORTAL_ACCOUNT_URL = config.portalUrl
+  ? `${config.portalUrl}/#/account`
+  : undefined
+
+function UserLabel() {
+  const username =
+    keycloak.tokenParsed?.preferred_username ?? keycloak.tokenParsed?.name ?? 'user'
+
+  const content = (
+    <>
+      <FiUser />
+      {username}
+    </>
+  )
+
+  if (!PORTAL_ACCOUNT_URL) {
+    return (
+      <span className="navbar-text text-muted small d-inline-flex align-items-center gap-1 me-2">
+        {content}
+      </span>
+    )
+  }
+
+  return (
+    <a
+      // Deliberately not `.nav-link`: that selector is sized 1.2rem for the
+      // navbar's icon buttons and outranks Bootstrap's `.small`.
+      className="navbar-text text-muted small account-link d-inline-flex align-items-center gap-1 me-2"
+      href={PORTAL_ACCOUNT_URL}
+      // Separate tab, consistent with the other cross-app links: this app's
+      // wizard may hold unsaved form state.
+      target="_blank"
+      rel="noopener noreferrer"
+      title="Account settings — opens the 6G-DALI Portal"
+    >
+      {content}
+    </a>
+  )
+}
 
 function ExternalToolLinks() {
   const tools = EXTERNAL_TOOLS.filter((tool): tool is ExternalTool & { url: string } =>
@@ -204,10 +249,7 @@ export default function Layout({ view, dagId, runId, taskId, onNavigate, childre
           <ul className="navbar-nav ms-auto align-items-center">
             <ExternalToolLinks />
             <li className="nav-item">
-              <span className="navbar-text text-muted small d-inline-flex align-items-center gap-1 me-2">
-                <FiUser />
-                {keycloak.tokenParsed?.preferred_username ?? keycloak.tokenParsed?.name ?? 'user'}
-              </span>
+              <UserLabel />
             </li>
             <li className="nav-item">
               <button

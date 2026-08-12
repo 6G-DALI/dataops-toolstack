@@ -1,0 +1,61 @@
+server {
+    listen 80;
+    # The image's 10-listen-on-ipv6-by-default.sh only patches the *packaged*
+    # default.conf; it skips ours ("differs from the packaged version"), so IPv6
+    # has to be declared here. Without it `localhost` (which resolves to ::1
+    # first) is refused inside the container — which is what made the healthcheck
+    # fail and, in turn, held back cloudflared's depends_on.
+    listen [::]:80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Behind the Cloudflare tunnel nginx always sees plain http, so the
+    # visitor's real scheme arrives in X-Forwarded-Proto. If a proxied request
+    # came in over http, redirect: without HTTPS the browser withholds
+    # crypto.subtle and keycloak-js fails with "Web Crypto API is not
+    # available".
+    #
+    # Deliberately keyed on the header being *present and http* — a direct
+    # request to the loopback publish has no X-Forwarded-Proto and is left
+    # alone, since localhost is already a secure context.
+    if ($http_x_forwarded_proto = "http") {
+        return 301 https://$host$request_uri;
+    }
+
+    # Single page app.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Runtime configuration must never be cached, or a deploy-time URL change
+    # would not reach browsers that already hold the old file.
+    location = /config.js {
+        add_header Cache-Control "no-store, must-revalidate";
+        expires -1;
+    }
+
+    location ~* \.(js|css|png|jpg|jpeg|gif|svg|ico|woff2?)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # §25 hardening.
+    #
+    # ${KEYCLOAK_ORIGIN} is substituted at container start (see the Dockerfile's
+    # /etc/nginx/templates mechanism). It must be present in BOTH:
+    #   connect-src — keycloak-js fetches the token endpoint, and the app calls
+    #                 the DataOps Orchestrator API (${ORCHESTRATOR_ORIGIN});
+    #   frame-src   — `check-sso` loads a hidden Keycloak iframe to detect an
+    #                 existing session.
+    # With a bare `default-src 'self'` both are blocked and login fails, which
+    # is not obvious from the symptom.
+    #
+    # 'unsafe-inline' is needed for style-src only, because of index.html's
+    # pre-paint background block.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' ${KEYCLOAK_ORIGIN} ${ORCHESTRATOR_ORIGIN}; frame-src ${KEYCLOAK_ORIGIN}; frame-ancestors 'none'; base-uri 'self'; form-action 'self' ${KEYCLOAK_ORIGIN}" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Frame-Options "DENY" always;
+}

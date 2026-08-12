@@ -1,4 +1,5 @@
 import Keycloak from 'keycloak-js'
+import { config } from '../config'
 
 /**
  * Single Keycloak adapter instance for the whole app.
@@ -8,9 +9,9 @@ import Keycloak from 'keycloak-js'
  * pointed at a different IdP per deployment.
  */
 const keycloak = new Keycloak({
-  url: import.meta.env.VITE_KEYCLOAK_URL ?? 'https://auth.dspace.sparkworks.net/auth',
-  realm: import.meta.env.VITE_KEYCLOAK_REALM ?? 'dspace',
-  clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID ?? 'dataops-ui',
+  url: config.keycloakUrl,
+  realm: config.keycloakRealm,
+  clientId: config.keycloakClientId,
 })
 
 /** Clean base URL (no hash) used as the OAuth redirect target. */

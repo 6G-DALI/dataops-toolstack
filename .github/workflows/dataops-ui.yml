@@ -1,0 +1,60 @@
+name: Build dataops-ui
+
+# Same shape as dataops-orchestrator.yml: this app is a subdirectory of the
+# repo, so the build context is scoped to it and a paths filter keeps unrelated
+# pushes from rebuilding the image.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "dataops-ui/**"
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/dataops-ui
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Required by the GHA cache below: the runner's default buildx driver is
+      # `docker`, which cannot export a cache. Drop this step if you also drop
+      # cache-from/cache-to.
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      # The Dockerfile runs `npm run build`, which is `tsc --noEmit && vite build`,
+      # so a type error fails the image build — no separate check job needed.
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: dataops-ui
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,11 +1,23 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <!-- Painted before the bundle loads so there is no light flash on first paint. -->
+    <style>
+      html, body { background: #0a0d12; }
+    </style>
+    <!--
+      Runtime configuration (guidelines §27). Loaded before the bundle so a
+      deployment can repoint service URLs and the Keycloak realm/client without
+      rebuilding. Empty values fall back to build-time env, then to the defaults
+      in src/config.ts.
+    -->
+    <script src="/config.js"></script>
     <title>6G-DALI DataOps</title>
   </head>
-  <body class="layout-fixed sidebar-expand-lg bg-body-tertiary">
+  <body class="layout-fixed sidebar-expand-lg">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

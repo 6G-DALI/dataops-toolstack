@@ -9,8 +9,9 @@ import Modal from './Modal'
 import Pagination from './Pagination'
 import { FiExternalLink, FiList, FiSearch, FiChevronRight, FiChevronDown } from 'react-icons/fi'
 import type { Catalogue, Dataset, Distribution, NavigateFn } from '../types'
+import { config } from '../config'
 
-const CATALOGUE_BASE_URL = import.meta.env.VITE_CATALOGUE_BASE_URL
+const CATALOGUE_BASE_URL = config.catalogueBaseUrl
 
 function catalogueDatasetUrl(datasetId: string): string | null {
   return CATALOGUE_BASE_URL ? `${CATALOGUE_BASE_URL.replace(/\/$/, '')}/datasets/${encodeURIComponent(datasetId)}` : null

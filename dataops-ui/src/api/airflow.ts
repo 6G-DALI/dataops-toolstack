@@ -27,8 +27,9 @@ import type {
   TriggerConf,
 } from '../types'
 import keycloak from '../auth/keycloak'
+import { config } from '../config'
 
-const BASE_URL = import.meta.env.VITE_ORCHESTRATOR_URL
+const BASE_URL = config.orchestratorUrl
 
 const headers: Record<string, string> = { 'Content-Type': 'application/json' }
 
