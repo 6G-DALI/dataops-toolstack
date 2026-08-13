@@ -101,14 +101,18 @@ server {
     #                 needs no entry; ${ORCHESTRATOR_ORIGIN} is kept only for
     #                 deployments that still call it cross-origin (leave empty
     #                 otherwise).
-    #   frame-src   — `check-sso` loads a hidden Keycloak iframe to detect an
-    #                 existing session.
+    #   frame-src   — `check-sso` loads a hidden iframe pointed at Keycloak,
+    #                 and Keycloak's prompt=none response REDIRECTS that iframe
+    #                 back to /silent-check-sso.html on this origin. CSP is
+    #                 enforced on the redirect target too, so 'self' is required
+    #                 as well as the IdP — omitting it fails as
+    #                 ERR_BLOCKED_BY_CSP reported against the auth URL.
     # With a bare `default-src 'self'` both are blocked and login fails, which
     # is not obvious from the symptom.
     #
     # 'unsafe-inline' is needed for style-src only, because of index.html's
     # pre-paint background block.
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' ${KEYCLOAK_ORIGIN} ${ORCHESTRATOR_ORIGIN}; frame-src ${KEYCLOAK_ORIGIN}; frame-ancestors 'none'; base-uri 'self'; form-action 'self' ${KEYCLOAK_ORIGIN}" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' ${KEYCLOAK_ORIGIN} ${ORCHESTRATOR_ORIGIN}; frame-src 'self' ${KEYCLOAK_ORIGIN}; frame-ancestors 'none'; base-uri 'self'; form-action 'self' ${KEYCLOAK_ORIGIN}" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header X-Frame-Options "DENY" always;
