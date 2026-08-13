@@ -1,49 +1,3 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
-#
-
-# Basic Airflow cluster configuration for CeleryExecutor with Redis and PostgreSQL.
-#
-# WARNING: This configuration is for local development. Do not use it in a production deployment.
-#
-# This configuration supports basic configuration using environment variables or an .env file
-# The following variables are supported:
-#
-# AIRFLOW_IMAGE_NAME           - Docker image name used to run Airflow.
-#                                Default: apache/airflow:3.1.8
-# AIRFLOW_UID                  - User ID in Airflow containers
-#                                Default: 50000
-# AIRFLOW_PROJ_DIR             - Base path to which all the files will be volumed.
-#                                Default: .
-# Those configurations are useful mostly in case of standalone testing/running Airflow in test/try-out mode
-#
-# _AIRFLOW_WWW_USER_USERNAME   - Username for the administrator account (if requested).
-#                                Default: airflow
-# _AIRFLOW_WWW_USER_PASSWORD   - Password for the administrator account (if requested).
-#                                Default: airflow
-# _PIP_ADDITIONAL_REQUIREMENTS - Additional PIP requirements to add when starting all containers.
-#                                Use this option ONLY for quick checks. Installing requirements at container
-#                                startup is done EVERY TIME the service is started.
-#                                A better way is to build a custom image or extend the official image
-#                                as described in https://airflow.apache.org/docs/docker-stack/build.html.
-#                                Default: ''
-#
-# Feel free to modify this file to suit your needs.
----
 # Cap container logs so they don't grow unbounded: keep a single 5 MB json-file.
 x-logging: &default-logging
   driver: json-file
@@ -297,7 +251,6 @@ services:
         echo "Files in shared volumes:"
         echo
         ls -la /opt/airflow/{logs,dags,plugins,config}
-
     # yamllint enable rule:line-length
     environment:
       <<: *airflow-common-env
@@ -345,29 +298,159 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-#  dataops-orchestrator:
-#    build:
-#      context: ../dataops-orchestrator
-#    restart: always
-#    ports:
-#      - "19998:8000"
-#    environment:
-#      AIRFLOW_URL: http://airflow-apiserver:8080
-#      AIRFLOW_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
-#      AIRFLOW_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
-#      CORS_ORIGINS: ${DATAOPS_CORS_ORIGINS:-http://localhost:3000}
-#    volumes:
-#      - ${AIRFLOW_PROJ_DIR:-.}/dags:/srv/data/dags:z
-#      - ${AIRFLOW_PROJ_DIR:-.}/dags/tasks:/srv/data/tasks:z
-#    depends_on:
-#      airflow-apiserver:
-#        condition: service_healthy
-#    healthcheck:
-#      test: ["CMD", "curl", "--fail", "http://localhost:8000/health"]
-#      interval: 30s
-#      timeout: 10s
-#      retries: 5
-#      start_period: 10s
+  dataops-orchestrator:
+    image: ghcr.io/6g-dali/dataops-orchestrator:latest
+    restart: always
+    ports:
+      - "19997:8000"
+    environment:
+      # --- Airflow API access ---
+      AIRFLOW_URL: http://airflow-apiserver:8080
+      AIRFLOW_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      AIRFLOW_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+      CORS_ORIGINS: ${DATAOPS_CORS_ORIGINS:-http://localhost:3000}
+      # --- Generated DAG/task/plugin locations (inside the container) ---
+      AIRFLOW_DAGS_FOLDER: /srv/data/dags
+      AIRFLOW_TASKS_FOLDER: /srv/data/tasks
+      AIRFLOW_PLUGINS_FOLDER: /opt/airflow/plugins
+      # --- piveau search / data space discovery ---
+      PIVEAU_URL: ${PIVEAU_URL:-https://search.dspace.sparkworks.net}
+      DSPACE_URL: ${DSPACE_URL:-https://dspace.sparkworks.net/datasets}
+      DSPACE_CATALOGUE_URL: ${DSPACE_CATALOGUE_URL:-https://catalogue.dspace.sparkworks.net}
+      # --- piveau-hub write API (service registration) ---
+      PIVEAU_HUB_URL: ${PIVEAU_HUB_URL:-https://dspace.sparkworks.net}
+      PIVEAU_API_KEY: ${PIVEAU_API_KEY:-}
+      PIVEAU_SERVICES_CATALOGUE: ${PIVEAU_SERVICES_CATALOGUE:-6g-dali-services}
+      DSPACE_BASE_URL: ${DSPACE_BASE_URL:-https://dataspace.6gdali.eu}
+      CODE_REPOSITORY_URL: ${CODE_REPOSITORY_URL:-https://github.com/6G-DALI/6gdali-dataops}
+      PUBLISHER_NAME: ${PUBLISHER_NAME:-6G-DALI}
+      ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:-http://localhost:19997}
+      DATASPACE_S3_ENDPOINT_URL: http://sparks-prod07.sparkworks.net:9000
+      DATASPACE_S3_ACCESS_KEY: zfJrryNaSXUcojp2Ldj6
+      DATASPACE_S3_SECRET_KEY: 0uilHRp2z6CKEqIA98mkY97HUcRIHuQU8xZyvClJ
+      VALIDATION_DAG_ID: dali_dataspace_validate_dataset
+      EDC_PROVIDER_MANAGEMENT_URL: "http://edc.6gdali.sparkworks.net:20001/management"
+      EDC_CONNECTOR_URL: "http://edc.6gdali.sparkworks.net"
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/dags:/srv/data/dags:z
+      - ${AIRFLOW_PROJ_DIR:-.}/dags/tasks:/srv/data/tasks:z
+      - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins:z
+    depends_on:
+      airflow-apiserver:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+
+  dataops-ui:
+    # Image published by .github/workflows/dataops-ui.yml. Uncomment `build` to
+    # use a local checkout instead.
+    image: ghcr.io/6g-dali/dataops-ui:${DATAOPS_UI_TAG:-latest}
+    # build:
+    #   context: ../dataops-ui
+    restart: always
+    logging: *default-logging
+    environment:
+      # Read at container start by 40-dataops-config.sh, which regenerates
+      # config.js — no rebuild needed. Anything left unset keeps the value baked
+      # into the image.
+      #
+      # IMPORTANT: these are consumed by the BROWSER, not by this container, so
+      # they must be reachable from the user's machine. `http://dataops-orchestrator:8000`
+      # would resolve only inside the compose network and fail in the browser.
+      VITE_ORCHESTRATOR_URL: ${DATAOPS_ORCHESTRATOR_URL:-/api}
+      VITE_CATALOGUE_BASE_URL: ${DATAOPS_CATALOGUE_BASE_URL:-}
+      VITE_PORTAL_URL: ${DATAOPS_PORTAL_URL:-}
+      VITE_DALI_URL: ${VITE_DALI_URL:-}
+      VITE_DATASPACE_URL: ${VITE_DATASPACE_URL:-}
+      VITE_DATAOPS_URL: ${VITE_DATAOPS_URL:-}
+      VITE_MLOPS_URL: ${VITE_MLOPS_URL:-}
+      VITE_KEYCLOAK_URL: ${VITE_KEYCLOAK_URL:-}
+      VITE_KEYCLOAK_REALM: ${VITE_KEYCLOAK_REALM:-}
+      VITE_KEYCLOAK_CLIENT_ID: ${VITE_KEYCLOAK_CLIENT_ID:-}
+      # Substituted into the nginx CSP at start-up. Scheme + host, no path.
+      # Both must be set or the browser blocks the calls with only a console
+      # CSP violation to show for it.
+      KEYCLOAK_ORIGIN: ${KEYCLOAK_ORIGIN:-https://auth.dspace.sparkworks.net}
+      # Internal address nginx proxies /api to. Resolved on the compose network,
+      # so the orchestrator needs no published port at all.
+      ORCHESTRATOR_UPSTREAM: ${DATAOPS_ORCHESTRATOR_UPSTREAM:-http://dataops-orchestrator:8000}
+      # Only for deployments that call the API cross-origin instead of via /api.
+      ORCHESTRATOR_ORIGIN: ${DATAOPS_ORCHESTRATOR_ORIGIN:-}
+    networks:
+      - default
+      - dali-edge
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  portal:
+    image: ghcr.io/6g-dali/portal-ui:${PORTAL_UI_TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      # Substituted into the nginx CSP at start-up. Scheme + host, no path.
+      KEYCLOAK_ORIGIN: ${KEYCLOAK_ORIGIN:-https://auth.dspace.sparkworks.net}
+      # Applied at container start by 40-portal-config.sh, which regenerates
+      # config.js. Anything left unset keeps the value baked into the image.
+      VITE_DALI_URL: ${VITE_DALI_URL:-}
+      VITE_PORTAL_URL: ${VITE_PORTAL_URL:-}
+      VITE_DATASPACE_URL: ${VITE_DATASPACE_URL:-}
+      VITE_DATAOPS_URL: ${VITE_DATAOPS_URL:-}
+      VITE_MLOPS_URL: ${VITE_MLOPS_URL:-}
+      VITE_REPO_API_URL: ${VITE_REPO_API_URL:-}
+      VITE_SEARCH_API_URL: ${VITE_SEARCH_API_URL:-}
+      VITE_ORCHESTRATOR_URL: ${VITE_ORCHESTRATOR_URL:-}
+      VITE_NORTHBOUND_API_URL: ${VITE_NORTHBOUND_API_URL:-}
+      VITE_EDC_CONNECTOR_URL: ${VITE_EDC_CONNECTOR_URL:-}
+      VITE_AUTH_URL: ${VITE_AUTH_URL:-}
+      VITE_KEYCLOAK_REALM: ${VITE_KEYCLOAK_REALM:-}
+      # Own variable: the two front ends share a realm but are separate
+      # Keycloak clients, so this must not pick up dataops-ui's client id.
+      VITE_KEYCLOAK_CLIENT_ID: ${PORTAL_KEYCLOAK_CLIENT_ID:-}
+    networks:
+      - default
+      - dali-edge
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    # Opt-in, so the stack still comes up on hosts with no tunnel token:
+    #   docker compose --profile tunnel up -d
+    profiles:
+      - tunnel
+    logging: *default-logging
+    # Token-provisioned tunnels are remotely managed: ingress rules live in the
+    # Cloudflare Zero Trust dashboard. Point the public hostnames at
+    # http://portal:80 and http://dataops-ui:80 there.
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+      TUNNEL_METRICS: 0.0.0.0:2000
+    depends_on:
+      portal:
+        condition: service_healthy
+    networks:
+      - default
+      - dali-edge
+
 
 volumes:
   postgres-db-volume:
+networks:
+  default:
+  dali-edge:
+    external: true
