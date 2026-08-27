@@ -4,3 +4,26 @@
 great_expectations
 pandas
 apache-airflow-providers-amazon
+
+# Required by the WaveStitchPlus DataOps pipeline that dali.processing runs
+# (dataops.validation.pandera_schemas). The rest of that pipeline's imports —
+# pandas, numpy, PyYAML, great_expectations — are already satisfied above or by
+# Airflow itself; its heavy extras (torch, darts, pypots) belong to the
+# imputation apps, which this pipeline never invokes.
+# Pinned to WaveStitchPlus/requirements.txt's version; nothing else here uses
+# pandera, so matching the pipeline that does is free.
+pandera==0.20.4
+
+# WARNING — unresolved Great Expectations version conflict.
+#   dali/validation.py uses the GX 1.x API
+#     (context.data_sources, context.suites.add, gx.ValidationDefinition)
+#   plugins/dataops/ts_checks.py uses the 0.18 API
+#     (ctx.sources.add_pandas, ds.add_dataframe_asset), and WaveStitchPlus
+#     pins great-expectations==0.18.22
+# One image cannot satisfy both. GX is deliberately left unpinned above, which
+# resolves to 1.x and keeps dali_dataspace_validate_dataset working. The cost is
+# that the WaveStitchPlus quality checks fail at runtime with
+#   "Could not find a datasource named 'pipeline_ts_source'"
+# and the report records gx_passed=false with an empty summary — a broken check,
+# not a dirty dataset. Fix by porting ts_checks/tabular_checks to the 1.x API
+# upstream in WaveStitchPlus, or by running that pipeline in its own environment.
