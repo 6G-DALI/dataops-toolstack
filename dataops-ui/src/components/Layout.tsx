@@ -145,13 +145,11 @@ function ExternalToolLinks() {
           {/* Text only. The label is always rendered — with no icon beside it,
               hiding it on narrow screens would leave an empty clickable box. */}
           <a
+            // Same tab: these navigate away from this app rather than opening
+            // alongside it. No rel is needed — noopener/noreferrer only guarded
+            // the window.opener handle a new tab would have created.
             className="nav-link external-tool-link"
             href={tool.url}
-            // Separate tab: these are other applications, and the wizard may
-            // hold unsaved form state. noreferrer alongside noopener so the
-            // target can't reach back through window.opener.
-            target="_blank"
-            rel="noopener noreferrer"
             title={tool.title}
           >
             {tool.label}
