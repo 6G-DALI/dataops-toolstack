@@ -11,13 +11,22 @@
   margin-top: 4px;
 }
 
+/* The run header sits directly on the page, which the shared theme paints dark
+   (--bg-base). The colours below were written for a light page — the value in
+   particular was #111827, near-black on near-black, so run configuration has
+   been invisible rather than merely low-contrast. Tokens, so it follows the
+   theme instead of guessing at it.
+
+   The panels further down (.timeline-log-panel, .timeline-card) deliberately
+   paint their own light surface, so their dark text is correct and is left
+   alone. */
 .run-conf-title {
   display: block;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #9ca3af;
+  color: var(--text-muted);
   margin-bottom: 6px;
 }
 
@@ -39,14 +48,14 @@
 
 .run-conf-key {
   font-weight: 600;
-  color: #4f46e5;
+  color: var(--accent-cyan);
   min-width: 120px;
   flex-shrink: 0;
 }
 
 .run-conf-val {
-  color: #111827;
-  font-family: 'SFMono-Regular', Consolas, monospace;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
   word-break: break-all;
 }
 
@@ -176,7 +185,7 @@
 }
 
 .timeline-empty {
-  color: #888;
+  color: var(--text-muted);
   padding: 24px 0;
 }
 
