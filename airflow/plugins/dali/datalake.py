@@ -63,39 +63,111 @@ def download_dataset() -> dict:
     return {"content": content, "asset_title": asset_title}
 
 
-@task
-def download_dataset_edc() -> str:
+# Media types dataops-orchestrator registers on an EDC asset
+# (piveau_dataset_client.resolve_media_type), mapped back to the extension
+# dali.utils.detect_format keys off. Only the formats validation actually
+# supports are listed — anything else falls through to the .csv default.
+_EXT_BY_MEDIA_TYPE = {
+    "text/csv":                 ".csv",
+    "text/tab-separated-values": ".tsv",
+    "application/jsonl":        ".jsonl",
+    "application/x-ndjson":     ".jsonl",
+    "application/json":         ".json",
+}
+
+
+def _local_part(key: str) -> str:
+    """Local part of a JSON-LD key, dropping any prefix or IRI namespace:
+    'edc:name', 'https://w3id.org/edc/v0.0.1/ns/name' and the dotted flat
+    form 'edc.name' all reduce to 'name'. EDC returns asset properties in
+    whichever of these shapes the response happened to be compacted to, so
+    matching on the local part is the only reliable way to find one."""
+    return key.split(":")[-1].split("/")[-1].split(".")[-1].lower()
+
+
+def _property(entry: dict, name: str) -> str:
+    """An asset property from a catalogue entry, matched by local part and
+    unwrapped from a {"@value": ...} literal if it is expanded."""
+    for key, value in entry.items():
+        if _local_part(key) != name:
+            continue
+        if isinstance(value, dict):
+            value = value.get("@value", "")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def resolve_asset_title(entry: dict, asset_id: str) -> str:
+    """The filename to treat this catalogue entry's distribution as.
+
+    Downstream format detection keys off the extension (see
+    dali.utils.detect_format), so this has to carry the real one rather than
+    a hardcoded guess. In order of preference:
+      1. the asset's `name` property — dataops-orchestrator registers it
+         from the uploaded file's own filename (see edc_client.register_asset),
+         so it is the authoritative title whenever it has an extension;
+      2. an extension derived from the asset's `contenttype` property,
+         appended to the asset_id;
+      3. "{asset_id}.csv", the format the vast majority of distributions are.
     """
-    Retrieve a dataset from the 6G-DALI provider EDC connector into a fixed
-    DataOps S3 destination, then return its content as a string.
+    name = _property(entry, "name")
+    if name and os.path.splitext(name)[1]:
+        print(f"[edc] asset_title {name!r} from the catalogue entry's name property")
+        return name
+
+    media_type = _property(entry, "contenttype").split(";")[0].strip().lower()
+    ext = _EXT_BY_MEDIA_TYPE.get(media_type)
+    if ext:
+        print(f"[edc] asset_title from contenttype {media_type!r} -> {ext}")
+        return f"{asset_id}{ext}"
+
+    print(f"[edc] no usable name/contenttype on asset {asset_id!r} "
+          f"(name={name!r}, contenttype={media_type!r}) — defaulting to .csv")
+    return f"{asset_id}.csv"
+
+
+@task(multiple_outputs=True)
+def download_dataset_edc() -> dict:
+    """
+    Retrieve a distribution from a provider EDC connector into a fixed
+    DataOps S3 staging location, then return its content.
 
     Flow:
         1. Request the provider's catalogue via the DataOps EDC consumer,
-           looking up the asset by "{dataset_id}/{asset_title}"
+           looking the asset up by its dali:assetId
         2. Negotiate a contract for the matched offer
         3. Generate a presigned PUT URL for a freshly, randomly named
-           object in the DataOps S3 destination bucket
+           object in the DataOps S3 staging bucket
         4. Initiate the transfer — the provider EDC PUTs directly to the
            presigned URL (no S3 credentials are shared with the provider)
         5. Poll until the transfer is complete
-        6. Read the file back from the DataOps S3 destination and return
+        6. Read the file back from the DataOps S3 staging bucket and return
            its content
 
     Required params:
-        dataset_id     Folder/prefix of the asset in the provider's catalogue
-        asset_title    Filename of the target object; combined with
-                       dataset_id as "{dataset_id}/{asset_title}" to form
-                       the asset ID used for the catalogue lookup, contract
-                       negotiation, and transfer request
+        asset_id       The distribution's dali:assetId. This is also the EDC
+                       asset's own @id: dataops-orchestrator registers each
+                       uploaded distribution under exactly this identifier
+                       (see edc_client.register_asset), so piveau and EDC
+                       agree on one identifier per distribution.
 
     Optional params:
         provider_id    Connector ID asserted to the provider during
                        contract negotiation and transfer
                        (default: "daliprovider")
 
-    The destination is fixed in code, not derived from DAG params:
+    Returns {"content": ..., "asset_title": ...} — the same shape as
+    download_dataset above, so either can feed the validation chain (see
+    dali.validation.validate_file_format). asset_title is resolved from the
+    catalogue entry's own properties rather than guessed, because downstream
+    format detection keys off its extension (see dali.utils.detect_format):
+    a distribution can be csv, tsv, jsonl or json, and mislabelling it fails
+    the format check before a single expectation runs.
+
+    The staging destination is fixed in code, not derived from DAG params:
         destination_bucket   "6g-dali-dataops"
-        destination_key      a randomly generated "{uuid4}.csv" filename,
+        destination_key      a randomly generated "{uuid4}{ext}" filename,
                               so concurrent runs never collide on the same
                               object
 
@@ -114,20 +186,16 @@ def download_dataset_edc() -> str:
     The DataOps S3 connection is taken from the DATAOPS_S3_CONN_ID env var
     (see dali.utils), not from a DAG param.
     """
-    print("download_dataset_edc()")
     params = get_current_context()["params"]
 
-    # ── Step 1 & 2: catalogue request + contract negotiation ─────────────────
     provider_url = EDC_PROVIDER_PROTOCOL_URL
-    dataset_id   = params["dataset_id"]
     mgmt         = f"{EDC_CONSUMER_URL}/management/v3"
-
-    # ── Step 3: presigned PUT URL generation ─────────────────────────────────
-    asset_title  = params["asset_title"]
-    input_key    = f"{dataset_id}/{asset_title}"
+    asset_id     = params["asset_id"]
+    if not asset_id:
+        raise ValueError("[edc] asset_id is required — it is the EDC asset's @id")
 
     # ── 1. Request the offer for the specific asset from the provider ─────────
-    print(f"[edc] requesting offer for asset '{dataset_id}' from {provider_url}")
+    print(f"[edc] requesting offer for asset '{asset_id}' from {provider_url}")
     cat_resp = requests.post(
         f"{mgmt}/catalog/request",
         json={
@@ -138,7 +206,7 @@ def download_dataset_edc() -> str:
                 "filterExpression": [{
                     "operandLeft": "https://w3id.org/edc/v0.0.1/ns/id",
                     "operator": "=",
-                    "operandRight": input_key,
+                    "operandRight": asset_id,
                 }]
             },
         },
@@ -151,17 +219,20 @@ def download_dataset_edc() -> str:
     if isinstance(datasets, dict):
         datasets = [datasets]
     if not datasets:
-        raise RuntimeError(f"[edc] asset '{dataset_id}' not found in provider catalogue")
+        raise RuntimeError(f"[edc] asset '{asset_id}' not found in provider catalogue")
 
-    offers = datasets[0].get("odrl:hasPolicy", [])
+    entry = datasets[0]
+    asset_title = resolve_asset_title(entry, asset_id)
+
+    offers = entry.get("odrl:hasPolicy", [])
     if isinstance(offers, dict):
         offers = [offers]
     if not offers:
-        raise RuntimeError(f"[edc] no policy offer found for asset '{dataset_id}'")
+        raise RuntimeError(f"[edc] no policy offer found for asset '{asset_id}'")
 
     offer = offers[0]
     offer_id = offer["@id"]
-    print(f"[edc] found offer {offer_id} for asset {dataset_id}")
+    print(f"[edc] found offer {offer_id} for asset {asset_id}")
 
     # ── 2. Initiate contract negotiation ─────────────────────────────────────
     provider_id = params.get("provider_id", "daliprovider")
@@ -182,7 +253,7 @@ def download_dataset_edc() -> str:
                 "odrl:permission":  offer.get("odrl:permission", []),
                 "odrl:prohibition": offer.get("odrl:prohibition", []),
                 "odrl:obligation":  offer.get("odrl:obligation", []),
-                "odrl:target":      {"@id": input_key},
+                "odrl:target":      {"@id": asset_id},
                 "odrl:assigner":    {"@id": provider_id},
             },
         },
@@ -216,15 +287,16 @@ def download_dataset_edc() -> str:
     s3_client = hook.get_conn()
 
     destination_bucket = "6g-dali-dataops"
-    destination_key = f"{uuid.uuid4()}.csv"
+    # Staged under the asset's own extension, so nothing downstream has to
+    # re-guess the format from a hardcoded suffix.
+    ext = os.path.splitext(asset_title)[1] or ".csv"
+    destination_key = f"{uuid.uuid4()}{ext}"
 
     presigned_put_url = s3_client.generate_presigned_url(
         "put_object",
         Params={"Bucket": destination_bucket, "Key": destination_key},
         ExpiresIn=EDC_POLL_TIMEOUT * 2,
     )
-    print(f"presigned_put_url: {presigned_put_url}")
-
     print(f"[edc] presigned PUT URL generated for s3://{destination_bucket}/{destination_key}")
 
     # ── 5. Initiate data transfer — provider PUTs to our presigned URL ────────
@@ -237,7 +309,7 @@ def download_dataset_edc() -> str:
             "connectorId":         provider_id,
             "protocol":            "dataspace-protocol-http",
             "contractId":          agreement_id,
-            "assetId":             input_key,
+            "assetId":             asset_id,
             "transferType":        "PresignedHttpData-PUSH",
             "dataDestination": {
                 "type":    "PresignedHttpData",
@@ -269,7 +341,8 @@ def download_dataset_edc() -> str:
     # ── 7. Retrieve the transferred file from DataOps S3 ─────────────────────
     print(f"[edc] retrieving {destination_key} from bucket {destination_bucket}")
     obj = hook.get_key(key=destination_key, bucket_name=destination_bucket)
-    return obj.get()["Body"].read().decode("utf-8")
+    content = obj.get()["Body"].read().decode("utf-8")
+    return {"content": content, "asset_title": asset_title}
 
 
 @task
@@ -292,3 +365,60 @@ def upload_results(report: dict) -> str:
         replace=True,
     )
     return output_key
+
+
+# The object-key suffix each of a processing run's artifacts is stored under
+# (see dali.processing.run_dataops_pipeline for what produces them). Derived
+# from the artifact's name rather than from its filename, which starts with the
+# dataset's own stem and may itself contain underscores.
+_ARTIFACT_SUFFIXES = {
+    "input_csv":        "_raw.csv",
+    "output_csv":       "_remediated.csv",
+    "report_json":      "_report.json",
+    "soft_cleaned_csv": "_soft_cleaned.csv",
+}
+
+
+@task
+def upload_artifacts(pipeline: dict) -> dict:
+    """Upload a processing run's artifacts next to the distribution they came
+    from, and return {name: object key}.
+
+    Keys follow the same convention as upload_results — the distribution's own
+    prefix plus a run timestamp — so a processing run's outputs sit beside the
+    validation reports for the same distribution and never collide with a
+    concurrent run over a different one:
+
+        <dataset_id>/<asset_id>_<timestamp>_raw.csv
+        <dataset_id>/<asset_id>_<timestamp>_remediated.csv
+        <dataset_id>/<asset_id>_<timestamp>_report.json
+        <dataset_id>/<asset_id>_<timestamp>_soft_cleaned.csv
+
+    Files are uploaded from disk (load_file) rather than read into memory: a
+    remediated CSV can be far larger than the report, and the whole point of
+    the scratch directory is that the frame never has to be held in an XCom.
+    """
+    params = get_current_context()["params"]
+    catalogue_id = params["catalogue_id"]
+    dataset_id   = params["dataset_id"]
+    asset_id     = params["asset_id"]
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    prefix = f"{dataset_id}/{asset_id}_{ts}"
+
+    hook = S3Hook(aws_conn_id=DATASPACE_S3_CONN_ID)
+    uploaded: dict[str, str] = {}
+    for name, path in (pipeline.get("artifacts") or {}).items():
+        key = f"{prefix}{_ARTIFACT_SUFFIXES.get(name, os.path.splitext(path)[1])}"
+        print(f"[dali] uploading {name} -> s3://{catalogue_id}/{key}")
+        hook.load_file(
+            filename=path,
+            key=key,
+            bucket_name=catalogue_id,
+            replace=True,
+            gzip=False,
+        )
+        uploaded[name] = key
+    if not uploaded:
+        print("[dali] the pipeline produced no artifacts to upload")
+    return uploaded
