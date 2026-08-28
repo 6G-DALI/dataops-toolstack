@@ -37,7 +37,7 @@ tmp=$(mktemp)
   echo "/* Generated at container start by 40-dataops-config.sh — do not edit."
   echo " * Values come from the environment; unset keys fall back to the values"
   echo " * compiled into the bundle. */"
-  echo "window.__DATAOPS_CONFIG__ = {"
+  echo "window.__DALI_CONFIG__ = {"
 } > "$tmp"
 
 # key:env-var pairs. Keep in step with the envKeys in src/config.ts.

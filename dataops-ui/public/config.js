@@ -1,16 +1,14 @@
 /*
- * Runtime configuration for the 6G-DALI DataOps UI.
+ * Runtime configuration, read through the shared __DALI_CONFIG__ key.
  *
- * Loaded before the bundle, so a deployment can repoint every URL by replacing
- * this one file — no rebuild. Overridden at container start by
- * docker-entrypoint.d/40-dataops-config.sh when the matching VITE_* variables
- * are set in the environment.
+ * Every 6G-DALI front end reads that one key, so a single generated file can
+ * configure the whole suite and the navbar links cannot disagree between apps.
+ * Each app takes the keys it knows and ignores the rest.
  *
- * Leave a value empty to fall back to the build-time value, then to the default
- * in src/config.ts. An empty tool URL drops its navbar link rather than pointing
- * at nothing.
+ * Served as a static file, so it can be replaced at deploy time by a Docker
+ * volume mount, a ConfigMap, or an entrypoint script — no image rebuild needed.
  */
-window.__DATAOPS_CONFIG__ = {
+window.__DALI_CONFIG__ = {
   // Required for the app to function: the DataOps Orchestrator API.
   orchestratorUrl: '',
 

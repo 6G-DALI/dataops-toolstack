@@ -14,8 +14,9 @@
  *   2. import.meta.env.VITE_*     (build-time, used by `npm run dev`)
  *   3. the fallback below
  *
- * window.__DATAOPS_CONFIG__ is still honoured as a legacy fallback, so an
- * already-deployed container keeps working with the config.js it has.
+ * The entrypoint script emits __DALI_CONFIG__. window.__DATAOPS_CONFIG__ is
+ * still read as a fallback, for a deployment that mounts a config.js written
+ * before the key was unified; drop it once none remain.
  */
 import { resolveConfig, DALI_ENV_KEYS, type DaliBaseConfig } from '@6g-dali/ui-shell'
 
