@@ -549,5 +549,11 @@ export interface RunArtifacts {
 export interface SeriesPoint {
   x: number
   y: number
-  imputed: boolean
+  /**
+   * Remediation changed this cell — it filled a blank, or moved a value
+   * (winsorized an outlier). Not "imputed": in time_series mode the pipeline
+   * deliberately fills nothing and defers gaps to the imputation handoff, so a
+   * run can legitimately have zero filled cells and still have changed points.
+   */
+  changed: boolean
 }

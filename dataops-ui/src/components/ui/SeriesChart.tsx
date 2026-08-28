@@ -4,9 +4,10 @@ import { useId, useMemo, useRef, useState } from 'react'
  * Time-series comparison chart — inline SVG, no charting library.
  *
  * Two series, one measure, one axis: the column's value as the pipeline left it
- * (`observed`) and the points remediation filled in (`imputed`). Imputed points
- * are markers rather than a second line, because they are not a parallel signal
- * — they are the same signal, at positions where the original had nothing.
+ * (`observed`) and the points remediation changed (`markerLabel` names what it
+ * did — filled a blank, or moved an outlier). The changed points are markers
+ * rather than a second line, because they are not a parallel signal — they are
+ * the same signal, at positions the pipeline touched.
  *
  * Colours are the two categorical slots in styles/Chart.css, derived from the
  * theme's cyan and purple and stepped into the dark-mode lightness band. They
@@ -27,6 +28,8 @@ interface Props {
   label: string
   /** Formats an x value for the axis and tooltip. */
   formatX: (x: number) => string
+  /** Names the marker series — what remediation did to these points. */
+  markerLabel: string
   height?: number
 }
 
@@ -42,7 +45,7 @@ function niceNumber(v: number): string {
   return v.toExponential(1)
 }
 
-export default function SeriesChart({ points, label, formatX, height = 260 }: Props) {
+export default function SeriesChart({ points, label, formatX, markerLabel, height = 260 }: Props) {
   const gradientId = useId()
   const svgRef = useRef<SVGSVGElement>(null)
   const [hover, setHover] = useState<number | null>(null)
@@ -80,12 +83,12 @@ export default function SeriesChart({ points, label, formatX, height = 260 }: Pr
 
   const { yMin, yMax, sx, sy } = geom
 
-  // The line is the whole series in order; imputed positions are marked on top
-  // of it rather than breaking it, so the reader sees one signal with filled gaps.
+  // The line is the whole series in order; changed positions are marked on top
+  // of it rather than breaking it, so the reader sees one signal and what moved.
   const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${sx(p.x).toFixed(2)},${sy(p.y).toFixed(2)}`).join(' ')
-  const imputed = points.filter(p => p.imputed)
+  const changed = points.filter(p => p.changed)
   const last = points[points.length - 1]
-  const lastImputed = imputed[imputed.length - 1]
+  const lastChanged = changed[changed.length - 1]
 
   const yTicks = Array.from({ length: Y_TICKS + 1 }, (_, i) => yMin + ((yMax - yMin) * i) / Y_TICKS)
   const hovered = hover === null ? null : points[hover]
@@ -114,7 +117,7 @@ export default function SeriesChart({ points, label, formatX, height = 260 }: Pr
         </span>
         <span className="series-chart-key" role="listitem">
           <span className="series-chart-swatch series-imputed" aria-hidden="true" />
-          Imputed ({imputed.length.toLocaleString()})
+          {markerLabel} ({changed.length.toLocaleString()})
         </span>
         <button
           type="button"
@@ -131,7 +134,7 @@ export default function SeriesChart({ points, label, formatX, height = 260 }: Pr
         className="series-chart-svg"
         viewBox={`0 0 ${W} ${H}`}
         role="img"
-        aria-label={`${label}: ${points.length} points, ${imputed.length} imputed`}
+        aria-label={`${label}: ${points.length} points, ${changed.length} ${markerLabel.toLowerCase()}`}
         onMouseMove={onMove}
         onMouseLeave={() => setHover(null)}
       >
@@ -162,9 +165,9 @@ export default function SeriesChart({ points, label, formatX, height = 260 }: Pr
         <path className="series-chart-area" d={`${path} L${sx(last.x)},${PAD.top + plotH} L${sx(points[0].x)},${PAD.top + plotH} Z`} fill={`url(#${gradientId})`} />
         <path className="series-chart-line series-observed-stroke" d={path} />
 
-        {/* Imputed markers: >=8px, each with a 2px surface ring so overlaps stay
-            readable rather than merging into a blob. */}
-        {imputed.map((p, i) => (
+        {/* Changed-point markers: >=8px, each with a 2px surface ring so overlaps
+            stay readable rather than merging into a blob. */}
+        {changed.map((p, i) => (
           <circle
             key={`${p.x}-${i}`}
             className="series-chart-marker series-imputed-fill"
@@ -176,9 +179,9 @@ export default function SeriesChart({ points, label, formatX, height = 260 }: Pr
         <text className="series-chart-direct series-observed-text" x={sx(last.x) - 6} y={sy(last.y) - 10} textAnchor="end">
           {niceNumber(last.y)}
         </text>
-        {lastImputed && (
-          <text className="series-chart-direct series-imputed-text" x={sx(lastImputed.x) - 6} y={sy(lastImputed.y) + 18} textAnchor="end">
-            imputed
+        {lastChanged && (
+          <text className="series-chart-direct series-imputed-text" x={sx(lastChanged.x) - 6} y={sy(lastChanged.y) + 18} textAnchor="end">
+            {markerLabel.toLowerCase()}
           </text>
         )}
 
@@ -186,7 +189,7 @@ export default function SeriesChart({ points, label, formatX, height = 260 }: Pr
           <g>
             <line className="series-chart-crosshair" x1={sx(hovered.x)} x2={sx(hovered.x)} y1={PAD.top} y2={PAD.top + plotH} />
             <circle
-              className={`series-chart-marker ${hovered.imputed ? 'series-imputed-fill' : 'series-observed-fill'}`}
+              className={`series-chart-marker ${hovered.changed ? 'series-imputed-fill' : 'series-observed-fill'}`}
               cx={sx(hovered.x)} cy={sy(hovered.y)} r={5}
             />
           </g>
@@ -198,7 +201,7 @@ export default function SeriesChart({ points, label, formatX, height = 260 }: Pr
         <p className="series-chart-readout" aria-live="polite">
           <span className="series-chart-readout-x">{formatX(hovered.x)}</span>
           <span className="series-chart-readout-y">{niceNumber(hovered.y)}</span>
-          {hovered.imputed && <span className="series-chart-readout-tag">imputed</span>}
+          {hovered.changed && <span className="series-chart-readout-tag">{markerLabel}</span>}
         </p>
       )}
 
@@ -213,7 +216,7 @@ export default function SeriesChart({ points, label, formatX, height = 260 }: Pr
                 <tr key={`${p.x}-${i}`}>
                   <td>{formatX(p.x)}</td>
                   <td>{niceNumber(p.y)}</td>
-                  <td>{p.imputed ? 'Imputed' : 'Observed'}</td>
+                  <td>{p.changed ? markerLabel : 'Observed'}</td>
                 </tr>
               ))}
             </tbody>

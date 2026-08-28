@@ -175,19 +175,24 @@ export default function RunResults({ dagId, runId }: Props) {
       if (isBlank(raw)) continue
       const y = Number(raw)
       if (Number.isNaN(y)) continue
-      // Blank in the pre-remediation frame and present here is precisely what
-      // "imputed" means for this pipeline. Without that frame nothing is
-      // claimed — every point is simply observed.
-      const wasBlank = beforeCol >= 0 && isBlank(before?.rows[i]?.[beforeCol])
+      // What remediation did to this cell, by comparing against the frame as it
+      // stood before: a blank that now has a value was filled, and a value that
+      // moved was adjusted (an outlier winsorized). Without the earlier frame
+      // nothing is claimed and every point is simply observed.
+      let changed = false
+      if (beforeCol >= 0) {
+        const prev = before?.rows[i]?.[beforeCol]
+        changed = isBlank(prev) || Number(prev) !== y
+      }
       const x = tCol === null ? i : Date.parse(plotFrame.rows[i][tCol])
-      all.push({ x: Number.isNaN(x) ? i : x, y, imputed: wasBlank })
+      all.push({ x: Number.isNaN(x) ? i : x, y, changed })
     }
 
     if (all.length <= MAX_PLOT_POINTS) return { points: all, sampled: false, isTime: tCol !== null }
-    // Stride-sample, but never drop an imputed point — they are the story.
+    // Stride-sample, but never drop a changed point — they are the story.
     const stride = Math.ceil(all.length / MAX_PLOT_POINTS)
     return {
-      points: all.filter((p, i) => p.imputed || i % stride === 0),
+      points: all.filter((p, i) => p.changed || i % stride === 0),
       sampled: true,
       isTime: tCol !== null,
     }
@@ -229,6 +234,15 @@ export default function RunResults({ dagId, runId }: Props) {
   const filled = re?.missing_cells_before !== undefined && re?.missing_cells_after !== undefined
     ? re.missing_cells_before - re.missing_cells_after
     : null
+
+  // What remediation reported doing. In time_series mode it deliberately fills
+  // nothing — gaps and missing values are recorded with
+  // status "deferred_to_imputation" and left for the imputation handoff — so a
+  // run can be entirely successful and still have nothing filled.
+  const actions = report?.remediation?.actions ?? []
+  const deferred = actions.filter(a => a.status === 'deferred_to_imputation')
+  const filledCells = filled ?? 0
+  const markerLabel = filledCells > 0 ? 'Imputed' : 'Adjusted'
 
   const formatX = series.isTime
     ? (x: number) => new Date(x).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
@@ -360,17 +374,45 @@ export default function RunResults({ dagId, runId }: Props) {
               {!frames && !csvError && <LoadingSpinner />}
               {frames && (
                 <>
-                  <SeriesChart points={series.points} label={column} formatX={formatX} />
+                  <SeriesChart
+                    points={series.points}
+                    label={column}
+                    formatX={formatX}
+                    markerLabel={markerLabel}
+                  />
+                  {deferred.length > 0 && (
+                    <div className="alert alert-info mt-3 mb-0">
+                      <strong>No values were imputed, by design.</strong>
+                      <p className="mb-2 mt-2 small">
+                        In <code>{String(report?.validation?.mode ?? 'time_series')}</code> mode the
+                        pipeline clips outliers but leaves gaps and missing values for the
+                        imputation handoff, which this run did not build
+                        (<code>imputation.build_bundle</code> is false). Trigger the DAG with{' '}
+                        <code>{'{"imputation": {"build_bundle": true}}'}</code> to produce a
+                        regularized bundle and have them filled.
+                      </p>
+                      <ul className="mb-0 small">
+                        {deferred.map((a, i) => (
+                          <li key={i}>
+                            <code>{a.issue}</code> — {String(a.action)}
+                            {Array.isArray(a.columns) && a.columns.length > 0
+                              && <> · {(a.columns as string[]).join(', ')}</>}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   {!frames.soft && (
                     <p className="text-muted small mb-0 mt-2">
-                      This run published no soft-cleaned frame, so imputed
-                      positions cannot be identified — every point is shown as observed.
+                      This run published no soft-cleaned frame, so the points
+                      remediation changed cannot be identified — every point is
+                      shown as observed.
                     </p>
                   )}
                   {(frames.truncated || series.sampled) && (
                     <p className="text-muted small mb-0 mt-2">
                       {frames.truncated && 'Only the first part of each frame was fetched. '}
-                      {series.sampled && `Showing ${series.points.length.toLocaleString()} of the fetched rows — every imputed point is kept, observed points are sampled. `}
+                      {series.sampled && `Showing ${series.points.length.toLocaleString()} of the fetched rows — every changed point is kept, observed points are sampled. `}
                       Download the artifact for the complete data.
                     </p>
                   )}
