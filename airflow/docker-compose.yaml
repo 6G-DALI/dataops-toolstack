@@ -369,7 +369,10 @@ services:
       VITE_DATASPACE_URL: ${VITE_DATASPACE_URL:-}
       VITE_DATAOPS_URL: ${VITE_DATAOPS_URL:-}
       VITE_MLOPS_URL: ${VITE_MLOPS_URL:-}
-      VITE_KEYCLOAK_URL: ${VITE_KEYCLOAK_URL:-}
+      # Shared name across every 6G-DALI front end. Was VITE_KEYCLOAK_URL;
+      # dataops-ui stopped reading that in @6g-dali/ui-shell 0.2.0. The
+      # fallback keeps an existing .env working during the switchover.
+      VITE_AUTH_URL: ${VITE_AUTH_URL:-${VITE_KEYCLOAK_URL:-}}
       VITE_KEYCLOAK_REALM: ${VITE_KEYCLOAK_REALM:-}
       VITE_KEYCLOAK_CLIENT_ID: ${VITE_KEYCLOAK_CLIENT_ID:-}
       # Substituted into the nginx CSP at start-up. Scheme + host, no path.
