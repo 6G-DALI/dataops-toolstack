@@ -3,9 +3,15 @@ import ReactDOM from 'react-dom/client'
 import 'bootstrap/dist/css/bootstrap.min.css'
 import 'admin-lte/dist/css/adminlte.min.css'
 import 'admin-lte/dist/js/adminlte.min.js'
+// The shared 6G-DALI theme, after Bootstrap and AdminLTE because it is written
+// to override them. It replaces src/index.css entirely: that file held only the
+// font imports, the four theme stylesheets and the base resets, all of which
+// now live in @6g-dali/ui-theme. The app's own stylesheets are imported by the
+// components that use them.
+import '@6g-dali/ui-theme/fonts.css'
+import '@6g-dali/ui-theme'
 import App from './App'
 import keycloak, { redirectUri } from './auth/keycloak'
-import './index.css'
 
 const RETURN_KEY = 'kc_post_login_hash'
 

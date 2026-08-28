@@ -7,6 +7,13 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
+
+# The commit this image was built from, surfaced in the app footer. Passed in
+# rather than read from git: .dockerignore excludes .git, so the build context
+# has no repository to ask. Unset simply yields an unmarked build.
+ARG GIT_SHA=""
+ENV GIT_SHA=$GIT_SHA
+
 RUN npm run build
 
 FROM nginx:1.27-alpine

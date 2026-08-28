@@ -40,7 +40,13 @@ tmp=$(mktemp)
   echo "window.__DATAOPS_CONFIG__ = {"
 } > "$tmp"
 
-# key:env-var pairs. Keep in step with ENV_KEYS in src/config.ts.
+# key:env-var pairs. Keep in step with the envKeys in src/config.ts.
+#
+# authUrl and keycloakUrl name the same thing: authUrl is the shared 6G-DALI
+# key, keycloakUrl the one this app used before the front ends converged.
+# Both are emitted so an existing deployment that only sets VITE_KEYCLOAK_URL
+# keeps working, while a new one can use VITE_AUTH_URL like the portal does.
+# src/config.ts prefers authUrl and falls back to keycloakUrl.
 for pair in \
   'orchestratorUrl:VITE_ORCHESTRATOR_URL' \
   'catalogueBaseUrl:VITE_CATALOGUE_BASE_URL' \
@@ -49,7 +55,7 @@ for pair in \
   'dataspaceUrl:VITE_DATASPACE_URL' \
   'dataopsUrl:VITE_DATAOPS_URL' \
   'mlopsUrl:VITE_MLOPS_URL' \
-  'keycloakUrl:VITE_KEYCLOAK_URL' \
+  'authUrl:VITE_AUTH_URL'   'keycloakUrl:VITE_KEYCLOAK_URL' \
   'keycloakRealm:VITE_KEYCLOAK_REALM' \
   'keycloakClientId:VITE_KEYCLOAK_CLIENT_ID'
 do

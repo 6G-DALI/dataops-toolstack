@@ -54,6 +54,9 @@ jobs:
         with:
           context: dataops-ui
           push: true
+          # Surfaced in the app footer; see the ARG in the Dockerfile.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

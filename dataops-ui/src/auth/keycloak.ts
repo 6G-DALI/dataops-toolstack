@@ -1,22 +1,18 @@
-import Keycloak from 'keycloak-js'
+import { createKeycloak, redirectUri } from '@6g-dali/ui-shell'
 import { config } from '../config'
 
 /**
  * Single Keycloak adapter instance for the whole app.
  *
- * Defaults point at the DSpace Keycloak (realm `dspace`, client `dataops-ui`);
- * every value can be overridden through Vite env vars so the same build can be
- * pointed at a different IdP per deployment.
+ * Realm and IdP host are shared with every other DALI front end so that one
+ * sign-in carries across the suite; they come from the shared DaliBaseConfig
+ * keys rather than being written out per application. The *client* is this
+ * app's own, since each needs its own redirect URIs.
+ *
+ * The adapter is created here, not in the package: each app owns its own
+ * `init()` policy. main.tsx uses `login-required` — this app has no anonymous
+ * state — where the portal uses `check-sso` to keep its landing page public.
  */
-const keycloak = new Keycloak({
-  url: config.keycloakUrl,
-  realm: config.keycloakRealm,
-  clientId: config.keycloakClientId,
-})
+export { redirectUri }
 
-/** Clean base URL (no hash) used as the OAuth redirect target. */
-export function redirectUri(): string {
-  return window.location.origin + window.location.pathname
-}
-
-export default keycloak
+export default createKeycloak(config)
