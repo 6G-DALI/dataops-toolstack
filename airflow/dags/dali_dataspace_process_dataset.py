@@ -27,7 +27,7 @@ Trigger via dag_run.conf:
     "asset_id":      "ab7f9ca6-4f16-463b-8d0a-d246c4314e31",   # required
     "timestamp_col": "timestamp",                              # optional
     "validation":    {"mode": "auto"},                         # optional
-    "imputation":    {"build_bundle": false}                   # optional
+    "imputation":    {"method": "linear"}                       # optional
 }
 
 `asset_id` is the distribution's dali:assetId — the EDC asset's own @id, the
@@ -45,6 +45,26 @@ column *contents*, in column order, so it can settle on the wrong column or
 discard a step index outright). The guess is refused unless the named column
 actually holds timestamps, in which case detection is left in charge exactly as
 before. Set this param to override both.
+
+The run also *performs* the imputation, which the pipeline itself never does —
+its handoff only regularizes the timeline into a bundle and records which app an
+external orchestrator would invoke ("The pipeline never runs imputation",
+minimal_dataops._build_handoff). dali.processing.impute_prepared_bundle runs
+dataops.imputation_runner over that bundle in-process and uploads the filled
+splits, so a run ends with imputed values rather than an invoke_hint. This
+matters in time_series mode especially: remediation there clips outliers but
+records gaps as "deferred_to_imputation" without filling them, so without this
+step a successful run produced nothing imputed at all.
+
+    <dataset_id>/<asset_id>_<timestamp>_imputed_train.csv
+    <dataset_id>/<asset_id>_<timestamp>_imputed_test.csv
+
+The default is darts/linear via the runner's dependency-free pandas engine,
+which reproduces Darts' MissingValuesFiller exactly. Linear rather than the
+runner's own "nearest" default because pandas implements linear itself while the
+other methods delegate to SciPy, which the Airflow image does not carry. Pass
+`{"imputation": {"impute": false}}` for the bundle without filling it, or
+`{"imputation": {"method": "cubic"}}` once scipy is installed.
 
 `validation` and `imputation` are passed straight through to run_pipeline as
 its validation_config / imputation_config. Omitted, they fall back to

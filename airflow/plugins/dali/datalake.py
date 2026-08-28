@@ -376,6 +376,10 @@ _ARTIFACT_SUFFIXES = {
     "output_csv":       "_remediated.csv",
     "report_json":      "_report.json",
     "soft_cleaned_csv": "_soft_cleaned.csv",
+    # The imputation runs over the handoff's regularized bundle, which is split
+    # into train/test — so its output is per-split rather than one frame.
+    "imputed_train_csv": "_imputed_train.csv",
+    "imputed_test_csv":  "_imputed_test.csv",
 }
 
 

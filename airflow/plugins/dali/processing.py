@@ -50,13 +50,31 @@ DEFAULT_VALIDATION_CONFIG: dict[str, Any] = {
     "outlier_mostly": 0.95,
 }
 
-# The pipeline's imputation handoff only *prepares* a bundle — it never imputes.
-# That bundle is a directory of extra files, so it is off by default here: a DAG
-# run uploads individual artifacts, and nothing downstream consumes the bundle
-# yet. Set build_bundle true (and pick up handoff.prepared_dir from the report)
-# once something does.
+# The pipeline's imputation handoff only *prepares* a bundle — it never imputes
+# ("The pipeline never runs imputation", minimal_dataops._build_handoff). So a
+# DAG run does two things the pipeline will not: it asks for the bundle, and it
+# then runs the imputation itself over that bundle (see impute_prepared_bundle).
+#
+# Something does consume this now — the run results view in dataops-ui — which
+# is why the bundle is on. Without it, remediation in time_series mode clips
+# outliers and records gaps with status "deferred_to_imputation" without ever
+# filling them, so a successful run showed no imputed values at all.
+#
+# `lib`/`method` name a built-in in dataops.imputation_runner, whose pandas
+# engine reproduces Darts' MissingValuesFiller bit-faithfully without importing
+# darts. "linear" specifically, not the runner's own "nearest" default: pandas
+# implements linear interpolation itself, while nearest/cubic/quadratic/slinear/
+# zero all delegate to SciPy, which the Airflow image does not install (see
+# airflow/base/requirements.txt — the heavy imputation extras belong to the
+# imputation apps). With scipy absent, "nearest" raises and impute_prepared_bundle
+# would report a failed imputation on every run.
+#
+# Set `impute: false` to get the bundle without filling it.
 DEFAULT_IMPUTATION_CONFIG: dict[str, Any] = {
-    "build_bundle": False,
+    "build_bundle": True,
+    "impute": True,
+    "lib": "darts",
+    "method": "linear",
 }
 
 
@@ -184,6 +202,54 @@ def _load_run_pipeline():
     return run_pipeline
 
 
+def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict | None:
+    """Run imputation over the handoff's regularized bundle, in-process.
+
+    The pipeline deliberately stops at the handoff: it regularizes the timeline
+    into a prepared-dir bundle and records which (app, method) an external
+    orchestrator *would* invoke, but fills nothing ("The pipeline never runs
+    imputation" — minimal_dataops._build_handoff). This runs that step, so a DAG
+    run ends with imputed values rather than an invoke_hint.
+
+    dataops.imputation_runner's "pandas" engine is used, not the Darts
+    subprocess: it reproduces Darts' MissingValuesFiller exactly for the
+    interpolation family, so the result is bit-faithful without putting darts in
+    the Airflow image.
+
+    Returns the runner's summary, or None when there was nothing to do — no gaps
+    detected, no bundle written, or imputation switched off. Never raises: a
+    failure is recorded and the run still uploads its artifacts, the same way a
+    validation failure is.
+    """
+    if not imputation_config.get("impute", True):
+        return None
+
+    handoff = (report or {}).get("handoff") or {}
+    prepared_dir = handoff.get("prepared_dir")
+    if not handoff.get("bundle_written") or not prepared_dir:
+        # needs_ts_imputation false (no gaps), not a time series, or the bundle
+        # failed to build — handoff.reason / handoff.bundle_error says which.
+        print(f"[dataops] no bundle to impute (reason={handoff.get('reason')!r}, "
+              f"bundle_error={handoff.get('bundle_error')!r})")
+        return None
+
+    lib    = imputation_config.get("lib") or "darts"
+    method = imputation_config.get("method") or "nearest"
+    try:
+        from dataops.imputation_runner import impute_bundle
+
+        summary = impute_bundle(prepared_dir, method=method, lib=lib, engine="pandas")
+    except Exception as exc:  # noqa: BLE001 - recorded, never fails the run
+        print(f"[dataops] imputation failed: {exc.__class__.__name__}: {exc}")
+        return {"lib": lib, "method": method, "engine": "pandas",
+                "error": f"{exc.__class__.__name__}: {exc}", "files": {}}
+
+    filled = sum(f.get("filled", 0) for f in summary.get("files", {}).values())
+    print(f"[dataops] imputed with {lib}/{method}: {filled} cells filled across "
+          f"{len(summary.get('files', {}))} split(s)")
+    return summary
+
+
 @task(multiple_outputs=True)
 def run_dataops_pipeline(file_content: str, asset_title: str) -> dict:
     """Run the minimal DataOps pipeline over a downloaded distribution.
@@ -273,6 +339,29 @@ def run_dataops_pipeline(file_content: str, asset_title: str) -> dict:
     # from. It is the bytes as transferred over EDC, which is not otherwise
     # recoverable from this bucket — the distribution was pulled from the
     # provider's connector, not from here.
+    # The pipeline stops at the handoff; run the imputation it prepared. Done
+    # here rather than inside run_pipeline because minimal_dataops is vendored
+    # verbatim from WaveStitchPlus (plugins/VENDORED.md) and must not diverge.
+    imputation = impute_prepared_bundle(report, imputation_config)
+    if imputation:
+        report["imputation"] = imputation
+        # Written back to the file, not just to the dict: the report artifact is
+        # uploaded from disk, and it is what the results view reads. Leaving the
+        # summary in memory only would upload a report that never mentions the
+        # imputation this run performed.
+        report_json.write_text(
+            json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8"
+        )
+
+    # The imputed splits are what a reader actually wants to see, so they are
+    # uploaded alongside the frames. The bundle's other files stay on disk: they
+    # are an intermediate the imputation consumed, not a result.
+    imputed_files = {
+        f"imputed_{kind}_csv": info["path"]
+        for kind, info in ((imputation or {}).get("files") or {}).items()
+        if info.get("path") and Path(info["path"]).exists()
+    }
+
     produced = {
         name: str(path)
         for name, path in (
@@ -283,6 +372,7 @@ def run_dataops_pipeline(file_content: str, asset_title: str) -> dict:
         )
         if path.exists()
     }
+    produced.update(imputed_files)
     for name, path in produced.items():
         print(f"[dataops] {name}: {path} ({os.path.getsize(path)} bytes)")
 
@@ -312,6 +402,14 @@ def report_pipeline_outcome(pipeline: dict, uploaded: dict) -> None:
           f"gx_passed={(quality.get('report') or {}).get('gx_passed')})")
     print(f"[dataops] rows: {cleaning.get('input_rows')} in -> "
           f"{cleaning.get('output_rows')} out")
+    imputation = report.get("imputation") or {}
+    if imputation:
+        if imputation.get("error"):
+            print(f"[dataops] imputation failed: {imputation['error']}")
+        else:
+            filled = sum(f.get("filled", 0) for f in (imputation.get("files") or {}).values())
+            print(f"[dataops] imputation {imputation.get('lib')}/{imputation.get('method')}: "
+                  f"{filled} cells filled")
     for name, key in (uploaded or {}).items():
         print(f"[dataops] uploaded {name} -> {key}")
     if pipeline.get("error"):
