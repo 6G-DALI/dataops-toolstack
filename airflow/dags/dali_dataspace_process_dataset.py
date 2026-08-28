@@ -9,7 +9,8 @@ WaveStitchPlus checkout, see plugins/VENDORED.md — wrapped by
 dali.processing.run_dataops_pipeline), then uploads the pipeline's artifacts
 back to the same Data Space bucket the distribution lives in.
 
-Four artifacts are produced and uploaded. The pipeline always writes the
+Six artifacts are produced and uploaded — four here, plus the two imputed
+splits described further down. The pipeline always writes the
 conservatively *soft-cleaned* frame alongside the remediated one, and the raw
 frame goes up with them so the report's raw → soft-cleaned → remediated lineage
 can be read end to end — those bytes arrived over EDC from the provider's
@@ -70,7 +71,7 @@ other methods delegate to SciPy, which the Airflow image does not carry. Pass
 its validation_config / imputation_config. Omitted, they fall back to
 dali.processing's defaults, which mirror WaveStitchPlus/config/dataops.yaml
 (mode auto, no expected columns or numeric bounds, outlier_q 0.01) except that
-the imputation bundle is not built — nothing downstream consumes it yet.
+the imputation bundle *is* built and filled — see above.
 Recognised validation keys: mode (auto|time_series|tabular|none),
 expected_columns, numeric_bounds, missing_threshold, require_timestamp_unique,
 require_timestamp_monotonic, allow_step_index_timestamp, outlier_q,
@@ -120,7 +121,7 @@ from dali.processing import cleanup_workdir, report_pipeline_outcome, run_dataop
         "asset_id":      Param("", type="string", description="Distribution's dali:assetId — the EDC asset @id to negotiate and transfer. Required."),
         "timestamp_col": Param(None, type=["null", "string"], description="Timestamp column. Drives time-series validation. Omitted, it is guessed from the column names, then from the data."),
         "validation":    Param({}, type="object", description="run_pipeline's validation_config: mode, expected_columns, numeric_bounds, missing_threshold, outlier_q, …"),
-        "imputation":    Param({}, type="object", description="run_pipeline's imputation_config: app, method, build_bundle, prepared_dir"),
+        "imputation":    Param({}, type="object", description="Imputation: build_bundle, impute, lib, method, prepared_dir. Defaults to building the bundle and filling it with darts/linear."),
     },
 )
 def dali_dataspace_process_dataset():
