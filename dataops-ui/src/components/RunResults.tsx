@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { FiAlertTriangle, FiCheckCircle, FiDownload } from 'react-icons/fi'
+import { FiDownload } from 'react-icons/fi'
 import { getRunArtifacts, getRunArtifactText } from '../api/airflow'
 import type { RunArtifacts, SeriesPoint } from '../types'
 import ErrorMessage from './ErrorMessage'
@@ -7,25 +7,34 @@ import LoadingSpinner from './LoadingSpinner'
 import MetricCard from './ui/MetricCard'
 import SeriesChart from './ui/SeriesChart'
 import CopyableId from './ui/CopyableId'
+import { EffectsTable, LineageTable, PassFail, QualityView } from './ui/PipelineReportView'
 import '../styles/Chart.css'
 import '../styles/RunResults.css'
 
 /**
  * What a dali_dataspace_process_dataset run produced.
  *
- * The run reports its own outputs: upload_artifacts returns {name: object key},
- * the orchestrator reads that XCom and serves the artifacts from the same Data
- * Space bucket the distribution came from. Nothing here guesses key patterns.
+ * The tabs mirror the WaveStitchPlus dashboard's cleaning-side view
+ * (dashboard/app.py, the `subset is None` branch): Overview, Quality &
+ * remediation, and the data itself. Its Imputation / Metrics / Distribution /
+ * Long-gap tabs are deliberately absent — they compare imputation methods
+ * against masked ground truth from a prepared/generated experiment bundle, and
+ * this DAG runs with `imputation.build_bundle = false`. MAE/RMSE/MAPE would
+ * have nothing to score against.
  *
- * The chart answers the question the pipeline exists to answer — which values
- * were filled in — by diffing the two CSVs it always writes: soft_cleaned is
- * the frame before per-issue remediation, remediated is after, so a position
- * that is empty in the first and present in the second was imputed.
+ * The run reports its own outputs: upload_artifacts returns {name: object key},
+ * the orchestrator reads that XCom and serves the objects from the bucket the
+ * run's conf names. Nothing here guesses key patterns.
  */
+
+/** Artifact names as dali.processing.run_dataops_pipeline publishes them. */
+const RAW = 'input_csv'
+const SOFT = 'soft_cleaned_csv'
+const REMEDIATED = 'output_csv'
 
 /** Enough rows for the shape of a signal without pulling a large frame. */
 const CSV_BYTE_BUDGET = 2 * 1024 * 1024
-/** Points actually drawn. Beyond this the line is stride-sampled — see below. */
+/** Points actually drawn; beyond this observed values are stride-sampled. */
 const MAX_PLOT_POINTS = 2000
 
 /** Minimal RFC4180-ish parser: pandas quotes any field containing a comma. */
@@ -76,6 +85,9 @@ function timeColumn(header: string[], rows: string[][]): number | null {
   return null
 }
 
+type Frame = { header: string[], rows: string[][] }
+type Tab = 'overview' | 'quality' | 'data'
+
 interface Props {
   dagId: string
   runId: string
@@ -85,11 +97,12 @@ export default function RunResults({ dagId, runId }: Props) {
   const [data, setData] = useState<RunArtifacts | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [tab, setTab] = useState<Tab>('overview')
 
-  const [csv, setCsv] = useState<{
-    header: string[]
-    remediated: string[][]
-    soft: string[][]
+  const [frames, setFrames] = useState<{
+    raw: Frame | null
+    soft: Frame | null
+    remediated: Frame | null
     truncated: boolean
   } | null>(null)
   const [csvError, setCsvError] = useState<string | null>(null)
@@ -106,37 +119,41 @@ export default function RunResults({ dagId, runId }: Props) {
     return () => { cancelled = true }
   }, [dagId, runId])
 
-  // The frames are fetched only once the artifact list confirms both exist —
-  // a run that failed before remediation still renders its report and links.
+  // Frames are fetched only once the artifact list says which exist. A run that
+  // failed before remediation, or one from before the raw frame was uploaded,
+  // still renders everything it does have.
   useEffect(() => {
     if (!data) return
     const names = new Set(data.artifacts.map(a => a.name))
-    if (!names.has('remediated_csv') || !names.has('soft_cleaned_csv')) return
+    const wanted = [RAW, SOFT, REMEDIATED].filter(n => names.has(n))
+    if (wanted.length === 0) return
 
     let cancelled = false
     setCsvError(null)
-    Promise.all([
-      getRunArtifactText(dagId, runId, 'remediated_csv', CSV_BYTE_BUDGET),
-      getRunArtifactText(dagId, runId, 'soft_cleaned_csv', CSV_BYTE_BUDGET),
-    ])
-      .then(([rem, soft]) => {
+    Promise.all(wanted.map(n => getRunArtifactText(dagId, runId, n, CSV_BYTE_BUDGET)))
+      .then(results => {
         if (cancelled) return
-        const r = parseCsv(rem.text)
-        const s = parseCsv(soft.text)
-        setCsv({
-          header: r.header,
-          remediated: r.rows,
-          soft: s.rows,
-          truncated: rem.truncated || soft.truncated,
+        const byName = new Map(wanted.map((n, i) => [n, results[i]]))
+        const frame = (n: string) => {
+          const r = byName.get(n)
+          return r ? parseCsv(r.text) : null
+        }
+        setFrames({
+          raw: frame(RAW),
+          soft: frame(SOFT),
+          remediated: frame(REMEDIATED),
+          truncated: results.some(r => r.truncated),
         })
       })
       .catch(e => { if (!cancelled) setCsvError((e as Error).message) })
     return () => { cancelled = true }
   }, [data, dagId, runId])
 
+  const plotFrame = frames?.remediated ?? frames?.soft ?? frames?.raw ?? null
+
   const columns = useMemo(
-    () => (csv ? numericColumns(csv.header, csv.remediated) : []),
-    [csv],
+    () => (plotFrame ? numericColumns(plotFrame.header, plotFrame.rows) : []),
+    [plotFrame],
   )
 
   useEffect(() => {
@@ -144,32 +161,52 @@ export default function RunResults({ dagId, runId }: Props) {
   }, [columns, column])
 
   const series = useMemo<{ points: SeriesPoint[], sampled: boolean, isTime: boolean }>(() => {
-    if (!csv || !column) return { points: [], sampled: false, isTime: false }
-    const col = csv.header.indexOf(column)
+    if (!plotFrame || !column) return { points: [], sampled: false, isTime: false }
+    const col = plotFrame.header.indexOf(column)
     if (col < 0) return { points: [], sampled: false, isTime: false }
 
-    const tCol = timeColumn(csv.header, csv.remediated)
+    const before = frames?.soft
+    const beforeCol = before ? before.header.indexOf(column) : -1
+    const tCol = timeColumn(plotFrame.header, plotFrame.rows)
+
     const all: SeriesPoint[] = []
-    for (let i = 0; i < csv.remediated.length; i++) {
-      const raw = csv.remediated[i][col]
+    for (let i = 0; i < plotFrame.rows.length; i++) {
+      const raw = plotFrame.rows[i][col]
       if (isBlank(raw)) continue
       const y = Number(raw)
       if (Number.isNaN(y)) continue
-      // Same row position in the pre-remediation frame. Blank there and present
-      // here is precisely what "imputed" means for this pipeline.
-      const before = csv.soft[i]?.[col]
-      const x = tCol === null ? i : Date.parse(csv.remediated[i][tCol])
-      all.push({ x: Number.isNaN(x) ? i : x, y, imputed: isBlank(before) })
+      // Blank in the pre-remediation frame and present here is precisely what
+      // "imputed" means for this pipeline. Without that frame nothing is
+      // claimed — every point is simply observed.
+      const wasBlank = beforeCol >= 0 && isBlank(before?.rows[i]?.[beforeCol])
+      const x = tCol === null ? i : Date.parse(plotFrame.rows[i][tCol])
+      all.push({ x: Number.isNaN(x) ? i : x, y, imputed: wasBlank })
     }
 
-    if (all.length <= MAX_PLOT_POINTS) {
-      return { points: all, sampled: false, isTime: tCol !== null }
-    }
+    if (all.length <= MAX_PLOT_POINTS) return { points: all, sampled: false, isTime: tCol !== null }
     // Stride-sample, but never drop an imputed point — they are the story.
     const stride = Math.ceil(all.length / MAX_PLOT_POINTS)
-    const points = all.filter((p, i) => p.imputed || i % stride === 0)
-    return { points, sampled: true, isTime: tCol !== null }
-  }, [csv, column])
+    return {
+      points: all.filter((p, i) => p.imputed || i % stride === 0),
+      sampled: true,
+      isTime: tCol !== null,
+    }
+  }, [plotFrame, frames, column])
+
+  function download(name: string, key: string) {
+    // Fetched rather than linked: the endpoint needs the bearer token, which a
+    // plain href cannot carry.
+    getRunArtifactText(dagId, runId, name, 64 * 1024 * 1024)
+      .then(({ text }) => {
+        const url = URL.createObjectURL(new Blob([text]))
+        const el = document.createElement('a')
+        el.href = url
+        el.download = key.split('/').pop() ?? name
+        el.click()
+        URL.revokeObjectURL(url)
+      })
+      .catch(err => setCsvError((err as Error).message))
+  }
 
   if (loading) return <LoadingSpinner />
   if (error) return <ErrorMessage message={error} />
@@ -185,144 +222,190 @@ export default function RunResults({ dagId, runId }: Props) {
     )
   }
 
-  const cleaning = data.report?.cleaning ?? {}
-  const validation = data.report?.validation ?? {}
-  const quality = data.report?.quality ?? {}
-  const validationPassed = validation.pandera_passed
-  const qualityPassed = quality.report?.gx_passed
-  const imputedCount = series.points.filter(p => p.imputed).length
+  const report = data.report
+  const cleaning = report?.cleaning ?? {}
+  const validation = report?.validation ?? {}
+  const re = report?.validation_comparison?.remediation_effect
+  const filled = re?.missing_cells_before !== undefined && re?.missing_cells_after !== undefined
+    ? re.missing_cells_before - re.missing_cells_after
+    : null
 
   const formatX = series.isTime
     ? (x: number) => new Date(x).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
     : (x: number) => `#${x}`
 
+  const TABS: { id: Tab, label: string }[] = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'quality', label: 'Quality & remediation' },
+    { id: 'data', label: 'Data' },
+  ]
+
   return (
     <div className="run-results">
-      <div className="row g-3 mb-4">
-        <div className="col-sm-6 col-xl-3">
-          <MetricCard label="Rows in" value={cleaning.input_rows ?? null} />
-        </div>
-        <div className="col-sm-6 col-xl-3">
-          <MetricCard label="Rows out" value={cleaning.output_rows ?? null} />
-        </div>
-        <div className="col-sm-6 col-xl-3">
-          <MetricCard
-            label="Imputed (plotted)"
-            value={csv ? imputedCount : null}
-            tone={imputedCount > 0 ? 'warning' : 'default'}
-          />
-        </div>
-        <div className="col-sm-6 col-xl-3">
-          {/* Status is never colour alone: an icon and a word carry it too. */}
-          <div className={`run-results-status run-results-status-${validationPassed === false ? 'critical' : validationPassed === true ? 'good' : 'unknown'}`}>
-            <span className="run-results-status-label">Validation</span>
-            <span className="run-results-status-value">
-              {validationPassed === true && <><FiCheckCircle aria-hidden="true" /> Passed</>}
-              {validationPassed === false && <><FiAlertTriangle aria-hidden="true" /> Failed</>}
-              {validationPassed === undefined && '—'}
-            </span>
-            {/* Two checks run over the frame — pandera's schema validation and
-                Great Expectations' quality suite. Both belong on this tile:
-                they answer the same question and a run can pass one and fail
-                the other. */}
-            <span className="run-results-status-note">
-              {validation.mode && <>mode {String(validation.mode)}</>}
-              {qualityPassed !== undefined && (
-                <> · quality {qualityPassed ? 'passed' : 'failed'}</>
-              )}
-            </span>
-          </div>
-        </div>
-      </div>
+      <ul className="nav nav-tabs run-results-tabs" role="tablist">
+        {TABS.map(t => (
+          <li className="nav-item" key={t.id} role="presentation">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === t.id}
+              className={`nav-link${tab === t.id ? ' active' : ''}`}
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+            </button>
+          </li>
+        ))}
+      </ul>
 
-      {validation.errors && validation.errors.length > 0 && (
-        <div className="alert alert-warning">
-          <strong>Validation reported {validation.errors.length} issue{validation.errors.length === 1 ? '' : 's'}.</strong>
-          <ul className="mb-0 mt-2">
-            {validation.errors.slice(0, 8).map((e, i) => <li key={i}><code>{e}</code></li>)}
-          </ul>
-          {validation.errors.length > 8 && (
-            <p className="mb-0 mt-2 small text-muted">
-              {validation.errors.length - 8} more in the report artifact.
-            </p>
-          )}
-        </div>
+      {tab === 'overview' && (
+        <>
+          <div className="row g-3 mb-4">
+            <div className="col-sm-6 col-xl-3">
+              <MetricCard label="Rows in" value={cleaning.input_rows ?? null} />
+            </div>
+            <div className="col-sm-6 col-xl-3">
+              <MetricCard label="Rows out" value={cleaning.output_rows ?? null} />
+            </div>
+            <div className="col-sm-6 col-xl-3">
+              <MetricCard label="Missing cells filled" value={filled} tone={filled ? 'warning' : 'default'} />
+            </div>
+            <div className="col-sm-6 col-xl-3">
+              <div className="run-results-status">
+                <span className="run-results-status-label">Validation</span>
+                <span className="run-results-status-value">
+                  <PassFail value={validation.pandera_passed} />
+                </span>
+                <span className="run-results-status-note">
+                  {validation.mode && <>mode {String(validation.mode)}</>}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <section className="card mb-4">
+            <div className="card-body">
+              <h2 className="h6">Lineage</h2>
+              <p className="text-muted small">
+                raw → soft-cleaned → remediated. The pipeline always writes the
+                conservatively soft-cleaned frame alongside the remediated one.
+              </p>
+              {report
+                ? <LineageTable report={report} />
+                : <p className="text-muted small mb-0">This run published no report.</p>}
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="card-body">
+              <h2 className="h6">What each stage changed</h2>
+              {report
+                ? <EffectsTable report={report} />
+                : <p className="text-muted small mb-0">This run published no report.</p>}
+            </div>
+          </section>
+        </>
       )}
 
-      <section className="card mb-4">
-        <div className="card-body">
-          {/* One filter row above the chart it scopes — never inside the plot. */}
-          <div className="run-results-chart-header">
-            <h2 className="h6 mb-0">Remediated series</h2>
-            {columns.length > 1 && (
-              <label className="run-results-column-picker">
-                <span className="text-muted small">Column</span>
-                <select
-                  className="form-select form-select-sm"
-                  value={column}
-                  onChange={e => setColumn(e.target.value)}
-                >
-                  {columns.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </label>
+      {tab === 'quality' && (
+        <section className="card">
+          <div className="card-body">
+            {report
+              ? <QualityView report={report} />
+              : <p className="text-muted small mb-0">This run published no report.</p>}
+            {validation.errors && validation.errors.length > 0 && (
+              <div className="alert alert-warning mt-4 mb-0">
+                <strong>
+                  Validation reported {validation.errors.length} issue
+                  {validation.errors.length === 1 ? '' : 's'}.
+                </strong>
+                <ul className="mb-0 mt-2">
+                  {validation.errors.slice(0, 8).map((e, i) => <li key={i}><code>{e}</code></li>)}
+                </ul>
+                {validation.errors.length > 8 && (
+                  <p className="mb-0 mt-2 small text-muted">
+                    {validation.errors.length - 8} more in the report artifact.
+                  </p>
+                )}
+              </div>
             )}
           </div>
+        </section>
+      )}
 
-          {csvError && <ErrorMessage message={csvError} />}
-          {!csv && !csvError && <LoadingSpinner />}
-          {csv && (
-            <>
-              <SeriesChart points={series.points} label={column} formatX={formatX} />
-              {(csv.truncated || series.sampled) && (
-                <p className="text-muted small mb-0 mt-2">
-                  {csv.truncated && 'Only the first part of the frame was fetched. '}
-                  {series.sampled && `Showing ${series.points.length.toLocaleString()} of the fetched rows — every imputed point is kept, observed points are sampled. `}
-                  Download the artifact for the complete data.
+      {tab === 'data' && (
+        <>
+          <section className="card mb-4">
+            <div className="card-body">
+              {/* One filter row above the chart it scopes — never inside the plot. */}
+              <div className="run-results-chart-header">
+                <h2 className="h6 mb-0">
+                  {frames?.remediated ? 'Remediated series' : 'Series'}
+                </h2>
+                {columns.length > 1 && (
+                  <label className="run-results-column-picker">
+                    <span className="text-muted small">Column</span>
+                    <select
+                      className="form-select form-select-sm"
+                      value={column}
+                      onChange={e => setColumn(e.target.value)}
+                    >
+                      {columns.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </label>
+                )}
+              </div>
+
+              {csvError && <ErrorMessage message={csvError} />}
+              {!frames && !csvError && <LoadingSpinner />}
+              {frames && (
+                <>
+                  <SeriesChart points={series.points} label={column} formatX={formatX} />
+                  {!frames.soft && (
+                    <p className="text-muted small mb-0 mt-2">
+                      This run published no soft-cleaned frame, so imputed
+                      positions cannot be identified — every point is shown as observed.
+                    </p>
+                  )}
+                  {(frames.truncated || series.sampled) && (
+                    <p className="text-muted small mb-0 mt-2">
+                      {frames.truncated && 'Only the first part of each frame was fetched. '}
+                      {series.sampled && `Showing ${series.points.length.toLocaleString()} of the fetched rows — every imputed point is kept, observed points are sampled. `}
+                      Download the artifact for the complete data.
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="card-body">
+              <h2 className="h6">Artifacts</h2>
+              {data.dataset_id && (
+                <p className="small text-muted mb-3">
+                  Dataset <CopyableId value={data.dataset_id} />
+                  {data.asset_id && <> · distribution <CopyableId value={data.asset_id} /></>}
                 </p>
               )}
-            </>
-          )}
-        </div>
-      </section>
-
-      <section className="card">
-        <div className="card-body">
-          <h2 className="h6">Artifacts</h2>
-          {data.dataset_id && (
-            <p className="small text-muted mb-3">
-              Dataset <CopyableId value={data.dataset_id} />
-              {data.asset_id && <> · distribution <CopyableId value={data.asset_id} /></>}
-            </p>
-          )}
-          <ul className="run-results-artifacts">
-            {data.artifacts.map(a => (
-              <li key={a.name}>
-                <a
-                  href={`${window.location.origin}`}
-                  onClick={e => {
-                    e.preventDefault()
-                    // Fetched rather than linked: the endpoint needs the bearer
-                    // token, which a plain href cannot carry.
-                    getRunArtifactText(dagId, runId, a.name, 64 * 1024 * 1024)
-                      .then(({ text }) => {
-                        const url = URL.createObjectURL(new Blob([text]))
-                        const el = document.createElement('a')
-                        el.href = url
-                        el.download = a.key.split('/').pop() ?? a.name
-                        el.click()
-                        URL.revokeObjectURL(url)
-                      })
-                      .catch(err => setCsvError((err as Error).message))
-                  }}
-                >
-                  <FiDownload aria-hidden="true" /> {a.name}
-                </a>
-                <code className="run-results-key">{a.key}</code>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </section>
+              <ul className="run-results-artifacts">
+                {data.artifacts.map(a => (
+                  <li key={a.name}>
+                    <button
+                      type="button"
+                      className="btn btn-link btn-sm p-0"
+                      onClick={() => download(a.name, a.key)}
+                    >
+                      <FiDownload aria-hidden="true" /> {a.name}
+                    </button>
+                    <code className="run-results-key">{a.key}</code>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </section>
+        </>
+      )}
     </div>
   )
 }

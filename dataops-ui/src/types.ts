@@ -445,24 +445,91 @@ export interface RunArtifact {
   key: string
 }
 
-/** The pipeline's report.json. Every field is optional — an older run, or one
- *  that failed before a stage, simply omits it, and the view degrades. */
+/**
+ * The pipeline's report.json, as minimal_dataops.run_pipeline writes it.
+ *
+ * Every field is optional: an older run, or one that failed before a stage,
+ * simply omits it and the view degrades rather than breaking. `cleaning` and
+ * `validation_comparison` overlap on purpose — the pipeline writes both, the
+ * first as flat counters and the second as the raw → soft-cleaned → remediated
+ * comparison the dashboard was built around.
+ */
+export interface StageShape {
+  rows?: number
+  cols?: number
+}
+
 export interface PipelineReport {
+  data_type?: string | null
   cleaning?: {
     input_rows?: number
     output_rows?: number
-    dropped_columns?: string[]
+    input_columns?: number
+    output_columns?: number
+    dropped_duplicate_rows?: number
+    dropped_empty_rows?: number
+    duplicate_timestamps?: number
+    non_monotonic_timestamps?: number
     [k: string]: unknown
   }
+  remediation?: {
+    mode?: string
+    actions?: { issue?: string, [k: string]: unknown }[]
+    missing_cells_before?: number
+    missing_cells_after?: number
+    outlier_cells_clipped?: number
+    [k: string]: unknown
+  }
+  /** Great Expectations, before remediation. */
+  quality?: {
+    gx_passed?: boolean | null
+    issue_summary?: Record<string, number>
+    report?: { gx?: { passed?: number, evaluated?: number }, [k: string]: unknown }
+    [k: string]: unknown
+  }
+  /** Great Expectations again, after remediation — present only when re-checked. */
+  quality_after?: {
+    gx_passed?: boolean | null
+    report?: { gx?: { passed?: number, evaluated?: number }, [k: string]: unknown }
+    [k: string]: unknown
+  } | null
   validation?: {
     mode?: string
     pandera_passed?: boolean
     errors?: string[]
     [k: string]: unknown
   }
-  quality?: {
-    report?: { gx_passed?: boolean, [k: string]: unknown }
-    [k: string]: unknown
+  /** The comparison payload the WaveStitchPlus dashboard renders. */
+  validation_comparison?: {
+    dataset_shape?: {
+      raw?: StageShape
+      soft_cleaned?: StageShape
+      /** Backwards-compatible alias the pipeline still writes. */
+      cleaned?: StageShape
+      remediated?: StageShape
+    }
+    cleaning_effect?: {
+      dropped_rows?: number
+      duplicate_rows_before?: number
+      duplicate_rows_after?: number
+      duplicate_timestamps_collapsed?: number
+      non_monotonic_timestamps_sorted?: number
+      missing_cells_before?: number
+      missing_cells_after?: number
+    }
+    remediation_effect?: {
+      missing_cells_before?: number
+      missing_cells_after?: number
+      outlier_cells_clipped?: number
+      actions?: (string | null)[]
+    }
+    validation_status?: {
+      gx_passed?: boolean | null
+      pandera_passed?: boolean
+      mode?: string
+    }
+    issue_counts?: Record<string, number>
+    chart_ready?: { stage: string, metric: string, value: number }[]
   }
   [k: string]: unknown
 }

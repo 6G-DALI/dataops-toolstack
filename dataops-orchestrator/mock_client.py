@@ -253,10 +253,14 @@ async def get_xcom(dag_id: str, run_id: str, task_id: str, key: str = "return_va
     """
     if task_id != "upload_artifacts":
         return None
+    # Names as dali.processing.run_dataops_pipeline publishes them — note
+    # "output_csv", not "remediated_csv"; only the object key says "remediated".
+    prefix = "6g-dali-staging-eur-exp-0004/ab7f9ca6_20260828T101200Z"
     return {
-        "remediated_csv":   "6g-dali-staging-eur-exp-0004/ab7f9ca6_20260828T101200Z_remediated.csv",
-        "report_json":      "6g-dali-staging-eur-exp-0004/ab7f9ca6_20260828T101200Z_report.json",
-        "soft_cleaned_csv": "6g-dali-staging-eur-exp-0004/ab7f9ca6_20260828T101200Z_soft_cleaned.csv",
+        "input_csv":        f"{prefix}_raw.csv",
+        "output_csv":       f"{prefix}_remediated.csv",
+        "report_json":      f"{prefix}_report.json",
+        "soft_cleaned_csv": f"{prefix}_soft_cleaned.csv",
     }
 
 
