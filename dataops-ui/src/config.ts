@@ -14,9 +14,9 @@
  *   2. import.meta.env.VITE_*     (build-time, used by `npm run dev`)
  *   3. the fallback below
  *
- * The entrypoint script emits __DALI_CONFIG__. window.__DATAOPS_CONFIG__ is
- * still read as a fallback, for a deployment that mounts a config.js written
- * before the key was unified; drop it once none remain.
+ * Only window.__DALI_CONFIG__ is read. A config.js still using the retired
+ * __DATAOPS_CONFIG__ is reported on the console by the shared resolver rather
+ * than silently ignored.
  */
 import { resolveConfig, DALI_ENV_KEYS, type DaliBaseConfig } from '@6g-dali/ui-shell'
 
@@ -30,17 +30,6 @@ export interface DataopsConfig extends DaliBaseConfig {
   orchestratorUrl: string
   /** piveau catalogue front end; links are built as <base>/datasets/<id>. */
   catalogueBaseUrl: string
-  /**
-   * Deprecated alias for `authUrl`.
-   *
-   * This app named the IdP `keycloakUrl`/`VITE_KEYCLOAK_URL` before the shared
-   * config settled on `authUrl`/`VITE_AUTH_URL`, and deployed containers still
-   * emit the old name from docker-entrypoint.d/40-dataops-config.sh. Keeping it
-   * as a fallback means upgrading the image does not silently repoint the app
-   * at the compiled-in default IdP. Remove once every deployment sets
-   * VITE_AUTH_URL.
-   */
-  keycloakUrl: string
 }
 
 const resolved = resolveConfig<DataopsConfig>({
@@ -53,10 +42,7 @@ const resolved = resolveConfig<DataopsConfig>({
     dataopsUrl: '',
     mlopsUrl: '',
 
-    // Deliberately empty — see the merge below. The real default lives on
-    // keycloakUrl so that the legacy key still wins over it.
-    authUrl: '',
-    keycloakUrl: 'https://auth.dspace.sparkworks.net/auth',
+    authUrl: 'https://auth.dspace.sparkworks.net/auth',
     keycloakRealm: 'dspace',
     keycloakClientId: 'dataops-ui',
 
@@ -68,7 +54,6 @@ const resolved = resolveConfig<DataopsConfig>({
     // so renaming one is a single change that reaches every front end.
     ...DALI_ENV_KEYS,
 
-    keycloakUrl: 'VITE_KEYCLOAK_URL',
     orchestratorUrl: 'VITE_ORCHESTRATOR_URL',
     catalogueBaseUrl: 'VITE_CATALOGUE_BASE_URL',
   },
@@ -78,9 +63,4 @@ const resolved = resolveConfig<DataopsConfig>({
   env: import.meta.env,
 })
 
-export const config: DataopsConfig = {
-  ...resolved,
-  // VITE_AUTH_URL when a deployment sets it, the legacy VITE_KEYCLOAK_URL
-  // otherwise, and only then the compiled-in default.
-  authUrl: resolved.authUrl || resolved.keycloakUrl,
-}
+export const config: DataopsConfig = resolved

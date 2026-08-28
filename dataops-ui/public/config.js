@@ -26,7 +26,7 @@ window.__DALI_CONFIG__ = {
 
   // Single sign-on. Realm and IdP host MUST match the other DALI front ends;
   // the client is specific to this application.
-  keycloakUrl: 'https://auth.dspace.sparkworks.net/auth',
+  authUrl: 'https://auth.dspace.sparkworks.net/auth',
   keycloakRealm: 'dspace',
   keycloakClientId: 'dataops-ui',
 }

@@ -11,8 +11,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@6g-dali/ui-shell": "^0.1.5",
-    "@6g-dali/ui-theme": "^0.1.5",
+    "@6g-dali/ui-shell": "^0.2.0",
+    "@6g-dali/ui-theme": "^0.2.0",
     "@codemirror/lang-python": "^6.2.1",
     "@tanstack/react-table": "^8.21.3",
     "admin-lte": "^4.0.2",
