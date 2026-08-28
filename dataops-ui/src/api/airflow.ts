@@ -1,4 +1,5 @@
 import type {
+  RunArtifacts,
   AllTasksResponse,
   CreateDagBody,
   CreateTaskBody,
@@ -272,4 +273,40 @@ export function getTaskLogs(dagId: string, runId: string, taskId: string, tryNum
     `/dags/${encodeURIComponent(dagId)}/runs/${encodeURIComponent(runId)}/tasks/${encodeURIComponent(taskId)}/logs/${tryNumber}`,
     { rawText: false }
   ).then(data => data.log ?? '')
+}
+
+
+// ── Pipeline run results ─────────────────────────────────────────────────────
+
+export function getRunArtifacts(dagId: string, runId: string): Promise<RunArtifacts> {
+  return request<RunArtifacts>(
+    `/dags/${encodeURIComponent(dagId)}/runs/${encodeURIComponent(runId)}/artifacts`,
+  )
+}
+
+/**
+ * Fetch one artifact as text.
+ *
+ * `maxBytes` is served as a byte range, so a large remediated frame is never
+ * read out of storage in full; the orchestrator drops any trailing partial line
+ * so the CSV always parses. The response header says whether it truncated.
+ */
+export async function getRunArtifactText(
+  dagId: string,
+  runId: string,
+  name: string,
+  maxBytes?: number,
+): Promise<{ text: string, truncated: boolean, totalSize: number }> {
+  const query = maxBytes ? `?max_bytes=${maxBytes}` : ''
+  const path = `/dags/${encodeURIComponent(dagId)}/runs/${encodeURIComponent(runId)}`
+    + `/artifacts/${encodeURIComponent(name)}${query}`
+  const response = await fetch(`${BASE_URL}${path}`, { headers: await authHeader() })
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`)
+  }
+  return {
+    text: await response.text(),
+    truncated: response.headers.get('X-Artifact-Truncated') === 'true',
+    totalSize: Number(response.headers.get('X-Artifact-Total-Size') || 0),
+  }
 }

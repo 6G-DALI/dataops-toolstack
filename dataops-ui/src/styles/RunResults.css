@@ -1,0 +1,88 @@
+/* Pipeline run results view. */
+
+.run-results-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.run-results-column-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+/* Status tile. Deliberately not a MetricCard: the value is a state, not a
+   number, and §14.1 wants state carried by an icon and a word as well as a
+   colour. */
+.run-results-status {
+  height: 100%;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.run-results-status-label {
+  font-size: var(--size-label);
+  color: var(--text-secondary);
+}
+
+.run-results-status-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--size-h4, 1.25rem);
+  color: var(--text-primary);
+}
+
+.run-results-status-note {
+  font-size: var(--size-caption);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.run-results-status-good .run-results-status-value    { color: var(--accent-green); }
+.run-results-status-critical .run-results-status-value { color: var(--accent-red); }
+
+.run-results-artifacts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.run-results-artifacts li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.run-results-artifacts a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.run-results-key {
+  font-size: var(--size-caption);
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+/* Entry point from the run's task view. */
+.run-results-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--space-3);
+}

@@ -14,6 +14,7 @@ export type View =
   | 'datasets'
   | 'dataset-creator'
   | 'services'
+  | 'run-results'
 
 export interface NavParams {
   dagId?: string
@@ -428,4 +429,58 @@ export interface LogEntry {
   source: string | null
   isGroup: boolean
   raw: boolean
+}
+
+
+// ── Pipeline run results ─────────────────────────────────────────────────────
+//
+// dali_dataspace_process_dataset uploads its artifacts and returns
+// {name: object key} from upload_artifacts. The orchestrator reads that XCom,
+// so a run reports its own outputs instead of the UI guessing key patterns.
+
+export interface RunArtifact {
+  /** Artifact name as the DAG published it, e.g. "remediated_csv". */
+  name: string
+  /** Object key in the Data Space bucket. */
+  key: string
+}
+
+/** The pipeline's report.json. Every field is optional — an older run, or one
+ *  that failed before a stage, simply omits it, and the view degrades. */
+export interface PipelineReport {
+  cleaning?: {
+    input_rows?: number
+    output_rows?: number
+    dropped_columns?: string[]
+    [k: string]: unknown
+  }
+  validation?: {
+    mode?: string
+    pandera_passed?: boolean
+    errors?: string[]
+    [k: string]: unknown
+  }
+  quality?: {
+    report?: { gx_passed?: boolean, [k: string]: unknown }
+    [k: string]: unknown
+  }
+  [k: string]: unknown
+}
+
+export interface RunArtifacts {
+  dag_id: string
+  run_id: string
+  state: string | null
+  catalogue_id: string | null
+  dataset_id: string | null
+  asset_id: string | null
+  artifacts: RunArtifact[]
+  report: PipelineReport | null
+}
+
+/** One plotted point. Defined here so the view and the chart agree on shape. */
+export interface SeriesPoint {
+  x: number
+  y: number
+  imputed: boolean
 }

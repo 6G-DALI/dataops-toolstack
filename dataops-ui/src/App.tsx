@@ -3,6 +3,7 @@ import Layout from './components/Layout'
 import DagList from './components/DagList'
 import DagRunList from './components/DagRunList'
 import TaskInstanceList from './components/TaskInstanceList'
+import RunResults from './components/RunResults'
 import TaskLog from './components/TaskLog'
 import DagTaskList from './components/DagTaskList'
 import AllTaskList from './components/AllTaskList'
@@ -79,6 +80,9 @@ export default function App() {
       )}
       {view === 'tasks' && dagId && runId && (
         <TaskInstanceList dagId={dagId} runId={runId} />
+      )}
+      {view === 'run-results' && dagId && runId && (
+        <RunResults dagId={dagId} runId={runId} />
       )}
       {view === 'logs' && dagId && runId && taskId && (
         <TaskLog dagId={dagId} runId={runId} taskId={taskId} tryNumber={tryNumber} />

@@ -4,7 +4,7 @@ if MOCK:
     from mock_client import (  # noqa: F401
         list_dags, get_dag, set_dag_paused, delete_dag, trigger_dag,
         list_dag_runs, get_dag_run,
-        list_task_instances, get_task_instance, get_task_logs,
+        list_task_instances, get_task_instance, get_task_logs, get_xcom,
         list_tasks, get_task,
         list_all_tasks, create_dag,
         list_datasets, get_dataset, list_catalogues, list_distributions,
@@ -164,6 +164,20 @@ else:
         return await _get_text(
             f"/dags/{dag_id}/dagRuns/{run_id}/taskInstances/{task_id}/logs/{try_number}"
         )
+
+    async def get_xcom(dag_id: str, run_id: str, task_id: str, key: str = "return_value"):
+        """Read one XCom value pushed by a task instance.
+
+        Airflow serialises XComs, so the value comes back under "value" already
+        deserialised when `deserialize=true`. A task that has not run, or that
+        pushed nothing, yields 404 — which the caller treats as "no result yet"
+        rather than as an error.
+        """
+        entry = await _get(
+            f"/dags/{dag_id}/dagRuns/{run_id}/taskInstances/{task_id}/xcomEntries/{key}",
+            params={"deserialize": "true"},
+        )
+        return entry.get("value")
 
     # ── Tasks (structure) ─────────────────────────────────────────────────────
 

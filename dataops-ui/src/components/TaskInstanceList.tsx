@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { FiBarChart2 } from 'react-icons/fi'
 import { getTaskInstances, getDagRun } from '../api/airflow'
 import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
@@ -6,6 +7,7 @@ import StateBadge from './StateBadge'
 import TaskLog from './TaskLog'
 import type { TaskInstance } from '../types'
 import '../styles/TaskTimeline.css'
+import '../styles/RunResults.css'
 
 interface TaskInstanceListProps {
   dagId: string
@@ -16,6 +18,10 @@ interface Selection {
   taskId: string
   tryNumber: number
 }
+
+/** The DAG whose runs publish a results view. Scoped deliberately: it is the
+ *  one that uploads a remediated frame and a report to diff against. */
+const RESULTS_DAG_ID = 'dali_dataspace_process_dataset'
 
 const POLL_INTERVAL_MS = 3000
 const TERMINAL_RUN_STATES = new Set(['success', 'failed'])
@@ -91,6 +97,16 @@ export default function TaskInstanceList({ dagId, runId }: TaskInstanceListProps
   return (
     <div>
       <div className="run-header">
+        {dagId === RESULTS_DAG_ID && (
+          // A plain hash link rather than a threaded callback: App parses the
+          // hash, so this needs no new prop on the way down.
+          <a
+            className="btn btn-sm btn-outline-primary run-results-link"
+            href={`#/run-results/${encodeURIComponent(dagId)}/${encodeURIComponent(runId)}`}
+          >
+            <FiBarChart2 aria-hidden="true" /> View results
+          </a>
+        )}
         {conf && (
           <div className="run-conf">
             <span className="run-conf-title">Configuration</span>

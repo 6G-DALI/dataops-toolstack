@@ -68,3 +68,31 @@ def delete_objects_by_prefix(catalogue_id: str, prefix: str) -> list[str]:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not delete objects under '{prefix}' in bucket '{catalogue_id}': {e}")
     return keys
+
+
+def get_object(catalogue_id: str, key: str, max_bytes: int | None = None) -> tuple[bytes, int]:
+    """Read one object from the Data Lake, returning (body, total_size).
+
+    `max_bytes` fetches only a prefix of the object, via a ranged GET so the
+    bytes are never pulled from storage in the first place. That is what makes
+    it safe to hand a remediated CSV to a browser: the chart needs the first few
+    thousand rows, not a file that may be hundreds of megabytes.
+    """
+    client = _client()
+    try:
+        kwargs = {"Bucket": catalogue_id, "Key": key}
+        if max_bytes:
+            kwargs["Range"] = f"bytes=0-{max_bytes - 1}"
+        obj = client.get_object(**kwargs)
+        body = obj["Body"].read()
+        # ContentRange looks like "bytes 0-1023/57344"; without a range it is
+        # absent and ContentLength is the whole object.
+        content_range = obj.get("ContentRange")
+        total = int(content_range.rsplit("/", 1)[1]) if content_range else obj["ContentLength"]
+        return body, total
+    except client.exceptions.NoSuchKey:
+        raise HTTPException(status_code=404, detail=f"No object '{key}' in bucket '{catalogue_id}'")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not read '{key}' from bucket '{catalogue_id}': {e}")

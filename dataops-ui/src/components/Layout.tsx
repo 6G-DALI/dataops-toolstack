@@ -93,6 +93,9 @@ function buildCrumbs(
   if (runId) {
     crumbs.push(crumb(shortenRunId(runId), 'tasks', { dagId: dagId ?? '', runId }))
   }
+  if (view === 'run-results') {
+    crumbs.push(crumb('Results', 'run-results', { dagId: dagId ?? '', runId: runId ?? '' }))
+  }
   if (taskId) {
     crumbs.push(crumb(taskId, 'logs', { dagId: dagId ?? '', runId: runId ?? '', taskId }))
   }

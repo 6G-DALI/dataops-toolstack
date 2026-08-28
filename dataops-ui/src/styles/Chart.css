@@ -1,0 +1,134 @@
+/* Chart styling for SeriesChart.
+ *
+ * The two categorical slots are the theme's cyan and purple stepped into the
+ * dark-mode OKLCH lightness band [0.48, 0.67]. They were validated, not chosen
+ * by eye — chroma above the floor, CVD ΔE 18.3 (deutan) / 19.0 (tritan),
+ * normal-vision ΔE 27.7, both above 3:1 against the --bg-surface the chart sits
+ * on. Do not swap them for --accent-cyan / --accent-purple: those are lighter
+ * than the band and were the pair that failed.
+ *
+ * They are declared here rather than in @6g-dali/ui-theme because they are
+ * validated against this app's chart surface. If a second front end grows
+ * charts, promote them to the theme and re-run the validator for its surface. */
+:root {
+  --chart-series-1: #08a5c2;  /* observed */
+  --chart-series-2: #7c3aed;  /* imputed  */
+}
+
+.series-chart-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-2);
+  font-size: var(--size-label);
+  color: var(--text-secondary);
+}
+
+.series-chart-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* A colored mark beside the label carries identity; the text stays ink. */
+.series-chart-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.series-chart-swatch.series-observed { background: var(--chart-series-1); }
+.series-chart-swatch.series-imputed  { background: var(--chart-series-2); }
+
+.series-chart-table-toggle { margin-left: auto; }
+
+.series-chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+/* Solid hairlines, one shade off the surface. Never dashed. */
+.series-chart-grid {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+}
+
+.series-chart-tick {
+  fill: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.series-chart-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.series-observed-stroke { stroke: var(--chart-series-1); }
+
+.series-chart-area { opacity: 0.16; }
+.series-chart-fill-top    { stop-color: var(--chart-series-1); stop-opacity: 0.9; }
+.series-chart-fill-bottom { stop-color: var(--chart-series-1); stop-opacity: 0; }
+
+/* A 2px surface ring, not a border, so overlapping markers stay separable. */
+.series-chart-marker {
+  stroke: var(--bg-surface);
+  stroke-width: 2;
+}
+
+.series-observed-fill { fill: var(--chart-series-1); }
+.series-imputed-fill  { fill: var(--chart-series-2); }
+
+.series-chart-direct {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Direct labels are the one place a series colour touches text, because they
+   sit on the mark and replace the legend lookup. */
+.series-observed-text { fill: var(--chart-series-1); }
+.series-imputed-text  { fill: var(--chart-series-2); }
+
+.series-chart-crosshair {
+  stroke: var(--border-bright);
+  stroke-width: 1;
+}
+
+.series-chart-readout {
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  margin: var(--space-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--size-caption);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  min-height: 1.2em; /* reserve the row so the layout never jumps on hover */
+}
+
+.series-chart-readout-y { color: var(--text-primary); }
+
+.series-chart-readout-tag {
+  color: var(--chart-series-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+
+/* The table twin is a scroll region, not an unbounded page extension. */
+.series-chart-table {
+  margin-top: var(--space-3);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .series-chart-svg * { transition: none !important; }
+}

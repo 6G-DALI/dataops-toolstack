@@ -243,6 +243,23 @@ async def get_task_instance(dag_id: str, run_id: str, task_id: str) -> dict:
     return task
 
 
+async def get_xcom(dag_id: str, run_id: str, task_id: str, key: str = "return_value"):
+    """Mirror of the real client's XCom read.
+
+    Only upload_artifacts is modelled, because that is the one the results view
+    reads. Anything else returns None, which the caller reads as "this run
+    published no artifacts" — the same shape as a real run that has not reached
+    the upload step.
+    """
+    if task_id != "upload_artifacts":
+        return None
+    return {
+        "remediated_csv":   "6g-dali-staging-eur-exp-0004/ab7f9ca6_20260828T101200Z_remediated.csv",
+        "report_json":      "6g-dali-staging-eur-exp-0004/ab7f9ca6_20260828T101200Z_report.json",
+        "soft_cleaned_csv": "6g-dali-staging-eur-exp-0004/ab7f9ca6_20260828T101200Z_soft_cleaned.csv",
+    }
+
+
 async def get_task_logs(dag_id: str, run_id: str, task_id: str, try_number: int = 1) -> str:
     return _SAMPLE_LOG.replace("download_dataset", task_id).replace(
         "csv_pipeline", dag_id
