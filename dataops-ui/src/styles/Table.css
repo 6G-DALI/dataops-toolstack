@@ -22,9 +22,14 @@ thead th {
   white-space: nowrap;
 }
 
+/* No background transition. Bootstrap's .table-hover paints the hovered cells
+   with `box-shadow: inset 0 0 0 9999px var(--bs-table-bg-state)`, which is
+   instant and opaque — so a fade on the row underneath is invisible while
+   hovering and, on leaving, outlives the cell overlay by its own duration. The
+   row then stepped from Bootstrap's hover colour to this one before fading out,
+   which read as a blink. Both layers now change together. */
 tbody tr {
   border-bottom: 1px solid #f0f2f5;
-  transition: background 0.1s;
 }
 
 tbody tr:last-child { border-bottom: none; }
