@@ -29,6 +29,19 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Response headers, which `allow_headers` does not cover — that one is about
+    # the *request*. Without this a browser sees only the CORS-safelisted six, so
+    # every X-Artifact-* header reads back as null: the artifact walk in
+    # dataops-ui could not tell a truncated window from a complete file and
+    # stopped after the first one, showing a prefix of a frame as if it were all
+    # of it. Anything this API means a browser to read has to be listed here.
+    expose_headers=[
+        "X-Artifact-Key",
+        "X-Artifact-Total-Size",
+        "X-Artifact-Truncated",
+        "X-Artifact-Offset",
+        "X-Artifact-Next-Offset",
+    ],
 )
 
 app.include_router(dags.router)

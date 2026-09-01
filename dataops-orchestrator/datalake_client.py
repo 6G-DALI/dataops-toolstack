@@ -70,19 +70,26 @@ def delete_objects_by_prefix(catalogue_id: str, prefix: str) -> list[str]:
     return keys
 
 
-def get_object(catalogue_id: str, key: str, max_bytes: int | None = None) -> tuple[bytes, int]:
+def get_object(
+    catalogue_id: str, key: str, max_bytes: int | None = None, offset: int = 0,
+) -> tuple[bytes, int]:
     """Read one object from the Data Lake, returning (body, total_size).
 
-    `max_bytes` fetches only a prefix of the object, via a ranged GET so the
+    `max_bytes` fetches only a window of the object, via a ranged GET so the
     bytes are never pulled from storage in the first place. That is what makes
-    it safe to hand a remediated CSV to a browser: the chart needs the first few
-    thousand rows, not a file that may be hundreds of megabytes.
+    it safe to hand a remediated CSV to a browser: the chart needs a few
+    thousand rows at a time, not a file that may be hundreds of megabytes.
+
+    `offset` moves that window, so a caller can walk a large object in chunks
+    instead of choosing once between a truncated prefix and the whole thing.
     """
     client = _client()
     try:
         kwargs = {"Bucket": catalogue_id, "Key": key}
         if max_bytes:
-            kwargs["Range"] = f"bytes=0-{max_bytes - 1}"
+            kwargs["Range"] = f"bytes={offset}-{offset + max_bytes - 1}"
+        elif offset:
+            kwargs["Range"] = f"bytes={offset}-"
         obj = client.get_object(**kwargs)
         body = obj["Body"].read()
         # ContentRange looks like "bytes 0-1023/57344"; without a range it is

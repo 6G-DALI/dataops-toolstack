@@ -170,9 +170,11 @@ async def _register_distribution(
     media_type = pdc.resolve_media_type(file.content_type, ext)
 
     # Step 2: register this distribution as an EDC asset on our own provider
-    # connector, using the exact same object_key convention the consumer
-    # side (dali.datalake.download_dataset_edc) later filters a provider's
-    # catalogue by — so it becomes discoverable/negotiable over EDC. Runs
+    # connector, under the same asset_id the consumer side
+    # (dali.datalake.download_dataset_edc) later filters a provider's
+    # catalogue by — so it becomes discoverable/negotiable over EDC. The
+    # file's own name is registered alongside it, which is what the consumer
+    # resolves the distribution's filename (and so its format) from. Runs
     # before the piveau publish below since it's independent of it (piveau
     # doesn't need to know about the EDC asset, or vice versa). Best-effort:
     # the S3 upload above already succeeded, so an EDC hiccup is reported,

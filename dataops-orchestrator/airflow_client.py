@@ -277,6 +277,11 @@ else:
         "run_expectations":          ("dali.validation", 1),
         "report_outcome":            ("dali.validation", 2),
         "publish_quality_to_piveau": ("dali.dataspace", 1),
+        "run_dataops_pipeline":      ("dali.processing", 1),
+        "merge_quality_report":      ("dali.validation", 2),
+        "upload_artifacts":          ("dali.datalake", 2),
+        "report_pipeline_outcome":   ("dali.processing", 2),
+        "cleanup_workdir":           ("dali.processing", 1),
     }
 
     def _locate_custom_task(code: str, task_id: str):

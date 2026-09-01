@@ -42,10 +42,15 @@ async def get_task_logs(dag_id: str, run_id: str, task_id: str, try_number: int 
 
 # ── Run results ───────────────────────────────────────────────────────────────
 #
-# dali_dataspace_process_dataset uploads its artifacts to the Data Space bucket
+# dali_dataspace_validate_dataset uploads its artifacts to the Data Space bucket
 # and returns {name: object key} from its upload_artifacts task. That XCom is
 # the link between a run and its output: rather than guessing at key patterns,
 # the run tells us what it produced. Everything below reads it.
+#
+# report_json carries the pipeline's report with the merged quality report —
+# both GX suites plus pandera, totalled — nested under "dali_quality" (see
+# dali.datalake.upload_artifacts), which is why inlining that one artifact is
+# enough to render a run's whole verdict.
 
 _ARTIFACTS_TASK_ID = "upload_artifacts"
 
@@ -110,13 +115,20 @@ async def get_run_artifact(
     run_id: str,
     name: str,
     max_bytes: int = Query(_DEFAULT_CSV_BYTES, ge=1024, le=_MAX_CSV_BYTES),
+    offset: int = Query(0, ge=0),
 ):
-    """Serve one artifact, truncated to `max_bytes`.
+    """Serve a window of one artifact: `max_bytes` of it, starting at `offset`.
 
-    Truncation is on a byte range, not a row count, so a large frame is never
+    The window is a byte range, not a row count, so a large frame is never
     pulled out of storage in full. A CSV cut mid-line would give the browser a
-    malformed final row, so the trailing partial line is dropped and the
-    response says whether anything was left behind.
+    malformed row, so both partial lines are trimmed — the trailing one when the
+    window stops short of the end, and the leading one whenever `offset` lands
+    mid-line, which it does for every window after the first.
+
+    Because that trimming happens here, `X-Artifact-Next-Offset` is always a row
+    boundary: a caller that walks the object by feeding it back in gets whole
+    rows every time and never stitches a split line together itself. Only the
+    first window carries the CSV header — remembering it is the caller's job.
     """
     run = await af.get_dag_run(dag_id, run_id)
     catalogue_id = (run.get("conf") or {}).get("catalogue_id")
@@ -128,26 +140,55 @@ async def get_run_artifact(
     if not key:
         raise HTTPException(status_code=404, detail=f"Run produced no artifact named '{name}'")
 
-    body, total = dlc.get_object(catalogue_id, key, max_bytes=max_bytes)
-    truncated = total > len(body)
+    # One byte before the window, when there is one. That single byte is what
+    # lets this tell a row boundary from a mid-row offset: without it, trimming
+    # the leading line would eat a good row whenever the caller passed back the
+    # boundary this endpoint had just handed them.
+    probe = 1 if offset and key.endswith(".csv") else 0
+    body, total = dlc.get_object(
+        catalogue_id, key, max_bytes=max_bytes + probe, offset=offset - probe,
+    )
+    reached_end = (offset - probe) + len(body) >= total
 
     if key.endswith(".json"):
         media_type = "application/json"
     elif key.endswith(".csv"):
         media_type = "text/csv"
-        if truncated:
+        if probe:
+            if body[:1] == b"\n":
+                body = body[1:]           # the offset was already a boundary
+            else:
+                # It opened mid-row; that row belongs to the previous window.
+                nl = body.find(b"\n")
+                if nl == -1:
+                    # A whole window with no row boundary in it — nothing usable
+                    # here, but the offset must still advance or a caller
+                    # walking the object would ask for these bytes forever.
+                    offset += len(body) - probe
+                    body = b""
+                else:
+                    body = body[nl + 1:]
+                    offset += nl + 1 - probe
+        if not reached_end:
             cut = body.rfind(b"\n")
-            if cut != -1:
-                body = body[:cut + 1]
+            body = body[:cut + 1] if cut != -1 else b""
     else:
         media_type = "application/octet-stream"
+
+    next_offset = offset + len(body)
+    truncated = next_offset < total
 
     return Response(
         content=body,
         media_type=media_type,
         headers={
-            "X-Artifact-Key":       key,
-            "X-Artifact-Total-Size": str(total),
-            "X-Artifact-Truncated":  "true" if truncated else "false",
+            "X-Artifact-Key":         key,
+            "X-Artifact-Total-Size":  str(total),
+            "X-Artifact-Truncated":   "true" if truncated else "false",
+            "X-Artifact-Offset":      str(offset),
+            # Where the next window starts. Always a line boundary for a CSV,
+            # because both partial lines are trimmed above — so a caller
+            # walking the object never has to stitch a split row together.
+            "X-Artifact-Next-Offset": str(next_offset),
         },
     )

@@ -5,12 +5,11 @@ discoverable/negotiable by EDC consumers.
 
 The asset's @id is the distribution's dali:assetId — the same identifier
 written into its piveau description (see piveau_dataset_client.add_distribution)
-— so piveau and EDC agree on one identifier per distribution. Note this is
-NOT the same convention dali.datalake.download_dataset_edc (Airflow, consumer
-side) currently filters a provider's catalogue by (it queries
-"https://w3id.org/edc/v0.0.1/ns/id" = "{dataset_id}/{asset_title}"); that
-consumer-side lookup would need updating separately to match assets
-registered by this module.
+— so piveau and EDC agree on one identifier per distribution. The consumer
+side matches this: dali.datalake.download_dataset_edc (Airflow) filters a
+provider's catalogue by "https://w3id.org/edc/v0.0.1/ns/id" = that same
+asset_id, and recovers the file's name from the `name` property registered
+below. Change the two together.
 
 Registration is best-effort and happens *after* a distribution is already
 fully registered in piveau and uploaded to the Data Lake (see
