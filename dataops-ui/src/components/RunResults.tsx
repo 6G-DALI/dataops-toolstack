@@ -1053,7 +1053,7 @@ export default function RunResults({ dagId, runId }: Props) {
 
   const TABS: { id: Tab, label: string }[] = [
     { id: 'overview', label: 'Overview' },
-      { id: 'quality', label: 'Quality' },
+    { id: 'quality', label: 'Quality' },
     { id: 'remediation', label: 'Issues & remediation' },
     { id: 'data', label: 'Data' },
     { id: 'config', label: 'Configuration' },
