@@ -14,6 +14,7 @@ dags/tasks/*.py
 
 # Hand-authored DAGs that must be tracked despite the rule above
 !dags/dali_dataspace_validate_dataset.py
+!dags/dali_dataspace_process_dataset.py
 !dags/dali_demo_op.py
 
 # macOS

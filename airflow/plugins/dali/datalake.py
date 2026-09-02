@@ -376,15 +376,37 @@ _ARTIFACT_SUFFIXES = {
     "output_csv":       "_remediated.csv",
     "report_json":      "_report.json",
     "soft_cleaned_csv": "_soft_cleaned.csv",
-    # The imputation runs over the handoff's regularized bundle, which is split
-    # into train/test — so its output is per-split rather than one frame.
-    "imputed_train_csv": "_imputed_train.csv",
-    "imputed_test_csv":  "_imputed_test.csv",
+}
+
+# The imputation runs over the handoff's regularized bundle, which is split into
+# train/test — so it produces those two, plus the stitched timeline that puts
+# them back into one series. Their keys are built rather than looked up, because
+# the method that produced them belongs in the name: `_imputed_darts_linear.csv`
+# says which imputer's output this is, where `_imputed.csv` would leave a reader
+# comparing two runs unable to tell them apart, and would have the second run
+# silently overwrite the first's file for the same distribution and timestamp.
+_IMPUTED_ARTIFACTS = {
+    "imputed_train_csv": "train",
+    "imputed_test_csv":  "test",
+    "imputed_final_csv": None,      # the full timeline, no split suffix
 }
 
 
+def _artifact_suffix(name: str, path: str, method_slug: str) -> str:
+    """The object key's tail for one artifact, method-stamped where it matters."""
+    if name in _IMPUTED_ARTIFACTS:
+        parts = ["_imputed"]
+        if method_slug:
+            parts.append(method_slug)
+        kind = _IMPUTED_ARTIFACTS[name]
+        if kind:
+            parts.append(kind)
+        return "_".join(parts) + ".csv"
+    return _ARTIFACT_SUFFIXES.get(name, os.path.splitext(path)[1])
+
+
 @task
-def upload_artifacts(pipeline: dict) -> dict:
+def upload_artifacts(pipeline: dict, quality: dict | None = None) -> dict:
     """Upload a processing run's artifacts next to the distribution they came
     from, and return {name: object key}.
 
@@ -401,6 +423,15 @@ def upload_artifacts(pipeline: dict) -> dict:
     Files are uploaded from disk (load_file) rather than read into memory: a
     remediated CSV can be far larger than the report, and the whole point of
     the scratch directory is that the frame never has to be held in an XCom.
+
+    `quality` is dali.validation.merge_quality_report's merged report. It is
+    written *into* the pipeline's report.json under a "dali_quality" key rather
+    than uploaded as an object of its own: dataops-orchestrator's
+    /runs/{run_id}/artifacts endpoint inlines exactly one artifact —
+    report_json — and dataops-ui renders the run's results from it, so nesting
+    the merged verdict there puts it in front of the user without an
+    orchestrator change. The standalone .gx object upload_results writes is
+    unaffected; this is a second, UI-facing copy.
     """
     params = get_current_context()["params"]
     catalogue_id = params["catalogue_id"]
@@ -410,10 +441,30 @@ def upload_artifacts(pipeline: dict) -> dict:
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     prefix = f"{dataset_id}/{asset_id}_{ts}"
 
+    artifacts   = dict(pipeline.get("artifacts") or {})
+    report_path = artifacts.get("report_json")
+    # Which imputer produced the imputed frames, for their object keys.
+    imputation  = (pipeline.get("report") or {}).get("imputation") or {}
+    method_slug = "_".join(
+        str(part) for part in (imputation.get("lib"), imputation.get("method")) if part
+    )
+    if quality and report_path:
+        try:
+            with open(report_path, encoding="utf-8") as fh:
+                report = json.load(fh)
+            report["dali_quality"] = quality
+            with open(report_path, "w", encoding="utf-8") as fh:
+                json.dump(report, fh, indent=2, default=str)
+                fh.write("\n")
+        except (OSError, ValueError) as exc:
+            # The artifacts are still worth uploading without it, and the same
+            # report went to piveau and to the .gx object regardless.
+            print(f"[dali] could not embed the quality report in {report_path}: {exc}")
+
     hook = S3Hook(aws_conn_id=DATASPACE_S3_CONN_ID)
     uploaded: dict[str, str] = {}
-    for name, path in (pipeline.get("artifacts") or {}).items():
-        key = f"{prefix}{_ARTIFACT_SUFFIXES.get(name, os.path.splitext(path)[1])}"
+    for name, path in artifacts.items():
+        key = f"{prefix}{_artifact_suffix(name, path, method_slug)}"
         print(f"[dali] uploading {name} -> s3://{catalogue_id}/{key}")
         hook.load_file(
             filename=path,
@@ -423,6 +474,22 @@ def upload_artifacts(pipeline: dict) -> dict:
             gzip=False,
         )
         uploaded[name] = key
+
+    # A skipped pipeline (dali.processing.run_dataops_pipeline bails out when
+    # the format check failed) wrote no report.json at all. Publish one holding
+    # just the quality report, so the run still has something for the UI to
+    # render — a format failure is exactly the case a user needs to see.
+    if quality and not report_path:
+        key = f"{prefix}{_ARTIFACT_SUFFIXES['report_json']}"
+        hook.load_string(
+            string_data=json.dumps({"dali_quality": quality}, indent=2, default=str),
+            key=key,
+            bucket_name=catalogue_id,
+            replace=True,
+        )
+        uploaded["report_json"] = key
+        print(f"[dali] uploaded a quality-only report -> s3://{catalogue_id}/{key}")
+
     if not uploaded:
         print("[dali] the pipeline produced no artifacts to upload")
     return uploaded

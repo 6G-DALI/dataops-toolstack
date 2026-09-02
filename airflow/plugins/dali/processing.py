@@ -202,7 +202,73 @@ def _load_run_pipeline():
     return run_pipeline
 
 
-def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict | None:
+def _bundle_facts(prepared_dir: str) -> dict:
+    """What the bundle's own meta.json says about how it was built.
+
+    `regularized_rows == original_rows` is the tell that regularization was
+    skipped: preprocess_csv drops it when a uniform grid would be more than
+    `sparse_skip_pct` empty (dataops._preprocess_impl.regularize), and a bundle
+    that was never regularized has no inserted gaps to fill. Without this the
+    run reports "0 cells filled" and looks broken when it is behaving exactly as
+    configured.
+    """
+    try:
+        meta = json.loads((Path(prepared_dir) / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"[dataops] could not read the bundle's meta.json: {exc}")
+        return {}
+    original = meta.get("original_rows")
+    regularized = meta.get("regularized_rows")
+    return {
+        "original_rows":    original,
+        "regularized_rows": regularized,
+        "base_dt":          meta.get("base_dt"),
+        "sparse_skip_pct":  meta.get("sparse_skip_pct"),
+        "regularized":      None if original is None or regularized is None
+                            else regularized > original,
+    }
+
+
+def _build_final_dataset(prepared_dir: str, bundle_result: dict, *, lib: str, method: str) -> dict:
+    """Stitch the imputed train and test splits into one gap-free timeline.
+
+    The splits are how the bundle is *modelled*, not how anyone wants to read
+    the result: two files, in train/test order, carrying the engineered
+    conditioning features the imputer needed. dataops.imputation_runner's
+    build_final_dataset — "the analysis-ready endpoint of the pipeline" — sorts
+    them back into one series on `time`, keeps a `split` label so the boundary
+    stays visible, and drops the modelling features. Without this the run's most
+    useful output is the one it never produced.
+
+    Never raises: the splits are already written and uploaded by the time this
+    runs, so a stitching failure costs the convenience frame, not the run.
+    """
+    try:
+        from dataops.imputation_runner import build_final_dataset
+
+        prepared = Path(prepared_dir)
+        stem = prepared.name.removesuffix("_regularized")
+        output_path = prepared.parent / f"{stem}_imputed_final.csv"
+        final = build_final_dataset(
+            prepared,
+            method=method,
+            lib=lib,
+            engine="pandas",
+            output_path=output_path,
+            # The splits this run just wrote, so it stitches those rather than
+            # re-imputing to find them.
+            bundle_result=bundle_result,
+        )
+    except Exception as exc:  # noqa: BLE001 - recorded, never fails the run
+        print(f"[dataops] final dataset not built: {exc.__class__.__name__}: {exc}")
+        return {"error": f"{exc.__class__.__name__}: {exc}"}
+
+    print(f"[dataops] final dataset: {final.get('rows')} rows, "
+          f"fill rate {final.get('fill_rate')} -> {final.get('path')}")
+    return final
+
+
+def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict:
     """Run imputation over the handoff's regularized bundle, in-process.
 
     The pipeline deliberately stops at the handoff: it regularizes the timeline
@@ -216,42 +282,85 @@ def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict | None
     interpolation family, so the result is bit-faithful without putting darts in
     the Airflow image.
 
-    Returns the runner's summary, or None when there was nothing to do — no gaps
-    detected, no bundle written, or imputation switched off. Never raises: a
-    failure is recorded and the run still uploads its artifacts, the same way a
-    validation failure is.
+    Always returns a summary carrying a `status` and a `reason`, including when
+    nothing was imputed. Returning None for that case — which this used to do —
+    left report["imputation"] absent, so a run that correctly had nothing to fill
+    was indistinguishable from one where the step never ran, in the logs and in
+    the results view alike. Never raises: a failure is recorded and the run still
+    uploads its artifacts, the same way a validation failure is.
+
+    status is one of:
+      disabled        the run was configured not to impute
+      no_bundle       no bundle to work on — handoff.reason says why
+      error           the bundle was built but the runner failed
+      nothing_to_fill it ran and found no missing values (see `bundle`)
+      imputed         values were filled
     """
+    lib    = imputation_config.get("lib") or "darts"
+    method = imputation_config.get("method") or "nearest"
+    base = {"lib": lib, "method": method, "engine": "pandas", "files": {}, "filled": 0}
+
     if not imputation_config.get("impute", True):
-        return None
+        return {**base, "status": "disabled",
+                "reason": "imputation was switched off for this run"}
 
     handoff = (report or {}).get("handoff") or {}
     prepared_dir = handoff.get("prepared_dir")
     if not handoff.get("bundle_written") or not prepared_dir:
         # needs_ts_imputation false (no gaps), not a time series, or the bundle
         # failed to build — handoff.reason / handoff.bundle_error says which.
-        print(f"[dataops] no bundle to impute (reason={handoff.get('reason')!r}, "
-              f"bundle_error={handoff.get('bundle_error')!r})")
-        return None
+        reason = handoff.get("bundle_error") or {
+            "no_time_gaps":    "the timeline has no gaps to fill",
+            "not_time_series": "the dataset was not validated as a time series",
+        }.get(handoff.get("reason"), f"no bundle was written ({handoff.get('reason')!r})")
+        print(f"[dataops] nothing to impute: {reason}")
+        return {**base, "status": "no_bundle", "reason": reason,
+                "handoff_reason": handoff.get("reason"),
+                "bundle_error": handoff.get("bundle_error")}
 
-    lib    = imputation_config.get("lib") or "darts"
-    method = imputation_config.get("method") or "nearest"
+    bundle = _bundle_facts(prepared_dir)
     try:
         from dataops.imputation_runner import impute_bundle
 
         summary = impute_bundle(prepared_dir, method=method, lib=lib, engine="pandas")
     except Exception as exc:  # noqa: BLE001 - recorded, never fails the run
         print(f"[dataops] imputation failed: {exc.__class__.__name__}: {exc}")
-        return {"lib": lib, "method": method, "engine": "pandas",
-                "error": f"{exc.__class__.__name__}: {exc}", "files": {}}
+        return {**base, "status": "error", "bundle": bundle,
+                "reason": f"{exc.__class__.__name__}: {exc}",
+                "error": f"{exc.__class__.__name__}: {exc}"}
 
-    filled = sum(f.get("filled", 0) for f in summary.get("files", {}).values())
-    print(f"[dataops] imputed with {lib}/{method}: {filled} cells filled across "
-          f"{len(summary.get('files', {}))} split(s)")
-    return summary
+    files = summary.get("files") or {}
+    filled = sum(f.get("filled", 0) for f in files.values())
+    missing = sum(f.get("nan_before", 0) for f in files.values())
+    final = _build_final_dataset(prepared_dir, summary, lib=lib, method=method)
+    summary = {**summary, "bundle": bundle, "filled": filled,
+               "missing_before": missing, "final": final}
+
+    if filled:
+        print(f"[dataops] imputed with {lib}/{method}: {filled} cells filled across "
+              f"{len(files)} split(s)")
+        return {**summary, "status": "imputed",
+                "reason": f"{filled} missing values filled with {lib}/{method}"}
+
+    # Ran, found nothing. Almost always the sparse-grid skip: a series whose
+    # gaps dwarf its cadence would regularize into a frame that is mostly holes,
+    # so preprocess_csv keeps the observed rows instead — and observed rows have
+    # no holes to fill.
+    if bundle.get("regularized") is False:
+        reason = (
+            "the timeline was not regularized, so the bundle holds only observed "
+            f"rows and has no missing values to fill — a uniform grid at "
+            f"{bundle.get('base_dt')}s would have been more than "
+            f"{bundle.get('sparse_skip_pct')}% empty"
+        )
+    else:
+        reason = "the bundle held no missing values"
+    print(f"[dataops] nothing imputed: {reason}")
+    return {**summary, "status": "nothing_to_fill", "reason": reason}
 
 
 @task(multiple_outputs=True)
-def run_dataops_pipeline(file_content: str, asset_title: str) -> dict:
+def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict | None = None) -> dict:
     """Run the minimal DataOps pipeline over a downloaded distribution.
 
     The pipeline reads and writes files, so the content is first written to a
@@ -273,9 +382,25 @@ def run_dataops_pipeline(file_content: str, asset_title: str) -> dict:
     same way dali.validation.report_outcome reports a failed expectation suite
     rather than failing the run).
 
+    `format_check` is dali.validation.validate_file_format's result. The
+    pipeline's very first step is to read the file into a DataFrame, so a file
+    that already failed the format check has nothing here to clean or validate
+    — the run is skipped and reported as such, rather than crashing on a
+    garbage parse and turning a reportable data problem into a DAG failure.
+
     Returns the artifact paths plus the pipeline's own report, for
     dali.datalake.upload_artifacts.
     """
+    if format_check is not None and not format_check.get("success"):
+        reason = (format_check.get("result") or {}).get("error", "invalid file format")
+        print(f"[dataops] skipping pipeline — {asset_title!r} failed the format check: {reason}")
+        return {
+            "workdir":   None,
+            "artifacts": {},
+            "report":    None,
+            "error":     f"skipped: format check failed ({reason})",
+        }
+
     params = get_current_context()["params"]
     run_pipeline = _load_run_pipeline()
 
@@ -361,6 +486,10 @@ def run_dataops_pipeline(file_content: str, asset_title: str) -> dict:
         for kind, info in ((imputation or {}).get("files") or {}).items()
         if info.get("path") and Path(info["path"]).exists()
     }
+    # …and the stitched timeline, which is the one to read if you only read one.
+    final_path = ((imputation or {}).get("final") or {}).get("path")
+    if final_path and Path(final_path).exists():
+        imputed_files["imputed_final_csv"] = final_path
 
     produced = {
         name: str(path)
@@ -404,12 +533,14 @@ def report_pipeline_outcome(pipeline: dict, uploaded: dict) -> None:
           f"{cleaning.get('output_rows')} out")
     imputation = report.get("imputation") or {}
     if imputation:
-        if imputation.get("error"):
-            print(f"[dataops] imputation failed: {imputation['error']}")
-        else:
-            filled = sum(f.get("filled", 0) for f in (imputation.get("files") or {}).values())
-            print(f"[dataops] imputation {imputation.get('lib')}/{imputation.get('method')}: "
-                  f"{filled} cells filled")
+        # status/reason rather than filled-or-error: "0 cells filled" is a
+        # correct outcome for a series with nothing to fill, and reading it as a
+        # failure is exactly the confusion this line exists to prevent.
+        print(f"[dataops] imputation {imputation.get('status')}: {imputation.get('reason')}")
+        if imputation.get("status") == "imputed":
+            print(f"[dataops]   {imputation.get('lib')}/{imputation.get('method')}: "
+                  f"{imputation.get('filled')} of {imputation.get('missing_before')} "
+                  f"missing values filled")
     for name, key in (uploaded or {}).items():
         print(f"[dataops] uploaded {name} -> {key}")
     if pipeline.get("error"):
@@ -419,12 +550,15 @@ def report_pipeline_outcome(pipeline: dict, uploaded: dict) -> None:
 
 
 @task
-def cleanup_workdir(workdir: str) -> None:
+def cleanup_workdir(workdir: str | None) -> None:
     """Remove the scratch directory once its artifacts are uploaded.
 
     Airflow workers are long-lived, so a run that left its scratch directory
     behind would leak a full copy of every dataset it processed onto the
-    worker's disk.
+    worker's disk. A skipped pipeline never made one — nothing to remove.
     """
+    if not workdir:
+        print("[dataops] no scratch directory to remove — pipeline was skipped")
+        return
     shutil.rmtree(workdir, ignore_errors=True)
     print(f"[dataops] removed {workdir}")

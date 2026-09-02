@@ -7,13 +7,14 @@ connector-to-connector transfer and prints each row of the CSV to the logs.
 Trigger via dag_run.conf:
 {
     "dataset_id":       "6g-dali-staging-eur-exp-0004",
-    "asset_title":      "part-00000.csv",
+    "asset_id":         "ab7f9ca6-4f16-463b-8d0a-d246c4314e31",
     "catalogue_id":     "6g-dali-staging-eur",
     "provider_id":      "provider"                      # optional, default "provider"
 }
 
 The provider EDC pushes the asset to a presigned PUT URL on the DataOps S3;
-the transferred object lands at  <catalogue_id>/<dataset_id>/<asset_title>.
+the transferred object lands under a random key in the DataOps bucket, which
+download_dataset_edc reads straight back.
 
 Configuration (from the environment, not DAG params):
     DATAOPS_S3_CONN_ID          Airflow connection ID for the DataOps MinIO/S3
@@ -54,12 +55,12 @@ def print_csv_rows(csv_content: str) -> None:
     params={
         "catalogue_id":     Param("",              type="string", description="S3 bucket / catalogue ID"),
         "dataset_id":       Param("",              type="string", description="Dataset folder within the bucket"),
-        "asset_title":      Param("",              type="string", description="Filename of the target object"),
+        "asset_id":         Param("",              type="string", description="Distribution's dali:assetId — the EDC asset's @id"),
     },
 )
 def dali_demo_op():
-    csv_content = download_dataset_edc()
-    print_csv_rows(csv_content)
+    downloaded = download_dataset_edc()
+    print_csv_rows(downloaded["content"])
 
 
 dali_demo_op()
