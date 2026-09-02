@@ -29,8 +29,8 @@ DATAOPS_S3_CONN_ID   = os.getenv("DATAOPS_S3_CONN_ID", "dali-dataops")
 # actually used by the DataOps pipelines — the provider's management/control
 # ports, and the consumer's protocol/control ports, are the respective
 # connector operators' concern, not something these pipelines call directly.
-EDC_CONSUMER_DOMAIN          = os.getenv("EDC_CONSUMER_DOMAIN", "http://ds.uc1.ac3.sparkworks.net")
-EDC_CONSUMER_MANAGEMENT_PORT = int(os.getenv("EDC_CONSUMER_MANAGEMENT_PORT", "18181"))
+EDC_CONSUMER_DOMAIN          = os.getenv("EDC_CONSUMER_DOMAIN", "http://edc.6gdali.sparkworks.net")
+EDC_CONSUMER_MANAGEMENT_PORT = int(os.getenv("EDC_CONSUMER_MANAGEMENT_PORT", "20001"))
 EDC_CONSUMER_URL             = f"{EDC_CONSUMER_DOMAIN}:{EDC_CONSUMER_MANAGEMENT_PORT}"
 
 EDC_PROVIDER_DOMAIN         = os.getenv("EDC_PROVIDER_DOMAIN", "http://edc.6gdali.sparkworks.net")
