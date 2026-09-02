@@ -21,18 +21,41 @@
    paint their own light surface, so their dark text is correct and is left
    alone. */
 .run-conf-title {
-  display: block;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-muted);
-  margin-bottom: 6px;
+}
+
+/* The whole header row is the disclosure control, so the hit target matches
+   what it looks like rather than being the caret alone. */
+.run-conf-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.run-conf-toggle:hover .run-conf-title { color: var(--text-primary); }
+
+.run-conf-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: var(--bg-surface, rgba(255, 255, 255, 0.06));
+  border-radius: 10px;
+  padding: 0 6px;
+  line-height: 16px;
 }
 
 .run-conf-list {
   list-style: none;
-  margin: 0;
+  margin: 6px 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -67,10 +90,47 @@
   align-items: flex-start;
 }
 
-.timeline-layout--split .timeline {
+/* The task list and its "Task Instances" heading travel together, so the
+   heading narrows with the list instead of running the page's full width. */
+.timeline-column {
+  min-width: 0;
+}
+
+.timeline-layout--split .timeline-column {
   max-width: 360px;
   min-width: 280px;
   flex-shrink: 0;
+}
+
+/* The results panel is the page's main content, not an aside: it gets the
+   remaining width and scrolls itself, so the task list stays put beside it. */
+.timeline-results-panel {
+  flex: 1;
+  min-width: 0;
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 113px - 32px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Below the split's comfortable width the two stack, results first — the
+   outcome is what a run is opened for. */
+@media (max-width: 992px) {
+  .timeline-layout--split {
+    flex-direction: column-reverse;
+  }
+
+  .timeline-layout--split .timeline-column,
+  .timeline-results-panel {
+    max-width: none;
+    width: 100%;
+  }
+
+  .timeline-results-panel {
+    position: static;
+    max-height: none;
+  }
 }
 
 .timeline-log-panel {
@@ -203,7 +263,7 @@
   align-items: center;
   flex-shrink: 0;
   width: 20px;
-  padding-top: 14px;
+  padding-top: 10px;
 }
 
 .timeline-dot {
@@ -233,9 +293,9 @@
 .timeline-line {
   width: 2px;
   flex: 1;
-  min-height: 24px;
+  min-height: 10px;
   background: #e5e7eb;
-  margin: 4px 0;
+  margin: 3px 0;
 }
 
 /* ── Dot colours by state ────────────────────────────────────────────────── */
@@ -256,8 +316,8 @@
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  padding: 12px 16px;
-  margin-bottom: 16px;
+  padding: 8px 12px;
+  margin-bottom: 6px;
   cursor: pointer;
   transition: box-shadow 0.15s, border-color 0.15s;
 }
@@ -277,7 +337,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 3px;
 }
 
 .timeline-task-id {
@@ -288,16 +348,18 @@
 }
 
 .timeline-card-meta {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
 }
 
 .timeline-meta-item {
-  display: flex;
-  flex-direction: column;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
   font-size: 12px;
   color: #374151;
+  white-space: nowrap;
 }
 
 .timeline-meta-label {
@@ -306,5 +368,4 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: #9ca3af;
-  margin-bottom: 1px;
 }

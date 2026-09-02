@@ -1,11 +1,17 @@
 /* Chart styling for SeriesChart.
  *
- * The two categorical slots are the theme's cyan and purple stepped into the
+ * The categorical slots are the theme's cyan and purple stepped into the
  * dark-mode OKLCH lightness band [0.48, 0.67]. They were validated, not chosen
  * by eye — chroma above the floor, CVD ΔE 18.3 (deutan) / 19.0 (tritan),
  * normal-vision ΔE 27.7, both above 3:1 against the --bg-surface the chart sits
  * on. Do not swap them for --accent-cyan / --accent-purple: those are lighter
  * than the band and were the pair that failed.
+ *
+ * Slot 3 was added for the imputed comparison, which needs three lines at once,
+ * and was held to the same bar: L 0.661 (in band), 5.60:1 against #111620, and
+ * separated from both existing slots under simulated deutan and tritan vision.
+ * A green (#2f9e44) was the obvious third choice and was rejected — it collapses
+ * onto the cyan under tritan simulation, which no amount of legend fixes.
  *
  * They are declared here rather than in @6g-dali/ui-theme because they are
  * validated against this app's chart surface. If a second front end grows
@@ -13,6 +19,7 @@
 :root {
   --chart-series-1: #08a5c2;  /* observed */
   --chart-series-2: #7c3aed;  /* imputed  */
+  --chart-series-3: #cf7a3a;  /* third comparison series */
 }
 
 .series-chart-legend {
@@ -40,8 +47,15 @@
 
 .series-chart-swatch.series-observed { background: var(--chart-series-1); }
 .series-chart-swatch.series-imputed  { background: var(--chart-series-2); }
+.series-chart-swatch.series-alt-1    { background: var(--chart-series-2); }
+.series-chart-swatch.series-alt-2    { background: var(--chart-series-3); }
 
 .series-chart-table-toggle { margin-left: auto; }
+
+.series-chart-key-count {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
 
 .series-chart-svg {
   width: 100%;
@@ -71,6 +85,12 @@
 }
 
 .series-observed-stroke { stroke: var(--chart-series-1); }
+
+/* Comparison series. Thinner than the primary and slightly transparent, so
+   where the splits and the timeline they were stitched into coincide — which is
+   everywhere — the primary stays readable rather than being painted over. */
+.series-alt-1-stroke { stroke: var(--chart-series-2); stroke-width: 1.25; opacity: 0.85; }
+.series-alt-2-stroke { stroke: var(--chart-series-3); stroke-width: 1.25; opacity: 0.85; }
 
 .series-chart-area { opacity: 0.16; }
 .series-chart-fill-top    { stop-color: var(--chart-series-1); stop-opacity: 0.9; }
@@ -115,6 +135,26 @@
 
 .series-chart-readout-y { color: var(--text-primary); }
 
+/* The resting cursor is quieter than a pointed one — present, not asserting a
+   selection the reader did not make. */
+.series-chart-cursor-resting .series-chart-crosshair { opacity: 0.45; }
+.series-chart-cursor-resting .series-chart-marker { opacity: 0.7; }
+
+.series-chart-readout-hint {
+  color: var(--text-muted);
+  font-family: var(--font-sans, inherit);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Drag-to-zoom: the band being selected, drawn under the marks. */
+.series-chart-selection {
+  fill: var(--chart-series-1, currentColor);
+  opacity: 0.16;
+}
+
+.series-chart-svg { cursor: crosshair; }
+
 .series-chart-readout-tag {
   color: var(--chart-series-2);
   text-transform: uppercase;
@@ -131,4 +171,30 @@
 
 @media (prefers-reduced-motion: reduce) {
   .series-chart-svg * { transition: none !important; }
+}
+
+/* A legend key that switches its line on and off. Styled as the label it
+   already was rather than as a button: it sits inside the plot's own header,
+   and a row of bordered buttons there would read as page controls. */
+.series-chart-key-toggle {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.series-chart-key-toggle:hover { text-decoration: underline; }
+
+/* Switched off: the swatch hollows out and the label dims, so the key still
+   says which colour it controls and can be clicked to bring the line back. */
+.series-chart-key-toggle.is-off {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.series-chart-key-toggle.is-off .series-chart-swatch {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px currentColor;
 }

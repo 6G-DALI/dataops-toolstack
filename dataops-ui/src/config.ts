@@ -64,3 +64,11 @@ const resolved = resolveConfig<DataopsConfig>({
 })
 
 export const config: DataopsConfig = resolved
+
+/** Link to a dataset's page on the piveau catalogue front end, or null when
+ *  no catalogue base URL is configured (the link is simply omitted then). */
+export function catalogueDatasetUrl(datasetId: string): string | null {
+  return config.catalogueBaseUrl
+    ? `${config.catalogueBaseUrl.replace(/\/$/, '')}/datasets/${encodeURIComponent(datasetId)}`
+    : null
+}

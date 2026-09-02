@@ -434,7 +434,7 @@ export interface LogEntry {
 
 // ── Pipeline run results ─────────────────────────────────────────────────────
 //
-// dali_dataspace_process_dataset uploads its artifacts and returns
+// dali_dataspace_validate_dataset uploads its artifacts and returns
 // {name: object key} from upload_artifacts. The orchestrator reads that XCom,
 // so a run reports its own outputs instead of the UI guessing key patterns.
 
@@ -531,7 +531,118 @@ export interface PipelineReport {
     issue_counts?: Record<string, number>
     chart_ready?: { stage: string, metric: string, value: number }[]
   }
+  /**
+   * Every quality check the run made, from both regimes, totalled — nested
+   * here by dali.datalake.upload_artifacts so one inlined artifact carries the
+   * whole verdict. Absent on runs from before the two DAGs were merged.
+   */
+  dali_quality?: MergedQualityReport
+  /** Written by dali.processing.impute_prepared_bundle, for every run. */
+  imputation?: ImputationReport
   [k: string]: unknown
+}
+
+/**
+ * One quality check, whatever produced it.
+ *
+ * dali.validation normalises the conf-driven GX suite, the DataOps pipeline's
+ * own GX suite and its pandera schema check into this single shape, so the
+ * catalogue and this view can treat them alike. `kwargs.source` says which
+ * regime it came from.
+ */
+export interface QualityCheckResult {
+  expectation_type: string
+  kwargs?: {
+    column?: string
+    source?: string
+    stage?: string
+    mode?: string
+    [k: string]: unknown
+  }
+  success: boolean
+  result?: Record<string, unknown>
+}
+
+export interface QualityStatistics {
+  evaluated_expectations?: number
+  successful_expectations?: number
+  unsuccessful_expectations?: number
+  success_percent?: number
+}
+
+/** One contributing regime's own verdict, for the per-source breakdown. */
+export interface QualitySource {
+  success: boolean
+  evaluated?: number
+  passed?: number
+  mode?: string
+  errors?: number
+}
+
+/**
+ * What the imputation step did, or why it did nothing.
+ *
+ * Written for every run, including the ones that fill nothing: a series whose
+ * gaps dwarf its cadence is not regularized (preprocess_csv skips a grid that
+ * would be mostly holes), so the bundle holds only observed rows and there is
+ * nothing to fill. That is a correct outcome, and without a recorded status it
+ * was indistinguishable from the step never having run.
+ */
+export interface ImputationReport {
+  status?: 'imputed' | 'nothing_to_fill' | 'no_bundle' | 'disabled' | 'error'
+  reason?: string
+  lib?: string
+  method?: string
+  engine?: string
+  filled?: number
+  missing_before?: number
+  error?: string
+  /** How preprocess_csv built the bundle — why there was or wasn't anything to fill. */
+  bundle?: {
+    original_rows?: number
+    regularized_rows?: number
+    base_dt?: number
+    sparse_skip_pct?: number
+    /** False when the uniform grid was skipped for being too sparse. */
+    regularized?: boolean | null
+  }
+  files?: Record<string, {
+    path?: string
+    rows?: number
+    nan_before?: number
+    nan_after?: number
+    filled?: number
+  }>
+  /** The stitched, gap-free timeline — dataops.imputation_runner.build_final_dataset. */
+  final?: {
+    path?: string
+    rows?: number
+    columns?: number | string[]
+    gaps_before?: number
+    gaps_after?: number
+    fill_rate?: number
+    method?: string
+    error?: string
+  }
+}
+
+/** A check both GX suites ran, folded into one published measurement. */
+export interface DuplicateCheck {
+  expectation_type: string
+  column?: string
+  sources?: string[]
+}
+
+/** dali.validation.merge_quality_report's output — also the `.gx` object. */
+export interface MergedQualityReport {
+  input_key?: string | null
+  run_time?: string | null
+  success: boolean
+  /** Counts distinct checks: a check both suites ran counts once. */
+  statistics?: QualityStatistics
+  sources?: Record<string, QualitySource>
+  duplicate_checks?: DuplicateCheck[]
+  results?: QualityCheckResult[]
 }
 
 export interface RunArtifacts {

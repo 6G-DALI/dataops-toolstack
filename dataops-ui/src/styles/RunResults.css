@@ -2,9 +2,40 @@
 
 .run-results-chart-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+/* Caption above and below each of the two Data-tab series charts. Both
+   charts render at the same SeriesChart height already; without this the
+   captions' varying line counts (a two-sentence blurb vs. a one-line note)
+   left the charts themselves starting and ending at different heights even
+   though the plots inside were identical. Reserving two lines regardless of
+   which side is showing more or less text keeps both charts' cluster —
+   caption, plot, caption — the same size. */
+.run-results-chart-caption {
+  min-height: 2.6em;
+}
+
+/* Stands in for caption + SeriesChart (height 260) + caption while a page
+   change is still streaming in, sized to roughly what that cluster occupies
+   once painted — so the card does not visibly grow the moment loading
+   finishes and the real captions/chart take its place. */
+.run-results-chart-loading {
+  min-height: 350px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.run-results-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
   margin-bottom: var(--space-3);
 }
 
@@ -13,6 +44,20 @@
   align-items: center;
   gap: var(--space-2);
   margin: 0;
+}
+
+/* Five tiles share this strip (Rows in, Rows out (cleaned), Rows out
+   (imputed), Missing cells filled, the quality status tile) — one more than
+   MetricCard's own `col-6 col-sm-3` assumes, which fits four per line and
+   would wrap the fifth onto a row by itself. Overridden here, at the call
+   site, rather than in the shared component: HomePage still relies on the
+   default 4-up sizing for its own MetricCard row. */
+@media (min-width: 576px) {
+  .run-results-metrics > [class*="col-"] {
+    flex: 1 1 0;
+    width: auto;
+    max-width: none;
+  }
 }
 
 /* Status tile. Deliberately not a MetricCard: the value is a state, not a
@@ -57,27 +102,81 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
-.run-results-artifacts li {
+.run-results-artifacts li { display: block; }
+
+/* Each entry is one control: icon in a fixed gutter, label and note in a
+   column beside it. Two columns rather than a stacked label-then-note, so the
+   note's left edge lines up with the label's instead of hanging under the
+   icon — the misalignment that made this list look ragged. */
+.run-results-artifact {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  align-items: start;
+  gap: 2px var(--space-3);
+  width: 100%;
+  padding: var(--space-2);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md, 6px);
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.run-results-artifact:hover {
+  background: var(--bg-subtle, rgba(127, 127, 127, 0.08));
+}
+
+.run-results-artifact:hover .run-results-artifact-label {
+  text-decoration: underline;
+}
+
+/* Optically centred on the label's first line, not its box. */
+.run-results-artifact-icon {
+  grid-column: 1;
+  grid-row: 1;
+  margin-top: 3px;
+  color: var(--accent-cyan, currentColor);
+}
+
+.run-results-artifact-label {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   align-items: baseline;
-  gap: var(--space-3);
+  gap: var(--space-2);
   flex-wrap: wrap;
+  font-size: var(--size-body);
+  font-weight: 600;
 }
 
-.run-results-artifacts a {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.run-results-key {
+/* Which frame this one was derived from. Reads as a chain down the list — Raw,
+   Soft-cleaned from Raw, Remediated from Soft-cleaned — so the order carries
+   the provenance rather than the reader having to infer it from the notes. */
+.run-results-artifact-from {
+  font-weight: 400;
   font-size: var(--size-caption);
   color: var(--text-muted);
-  word-break: break-all;
 }
+
+.run-results-artifact-from::before {
+  content: '←';
+  margin-right: 4px;
+}
+
+/* Second row of column 2 — aligned under the label, clear of the icon gutter. */
+.run-results-artifact-note {
+  grid-column: 2;
+  grid-row: 2;
+  color: var(--text-muted);
+  font-size: var(--size-label);
+  line-height: 1.45;
+}
+
 
 /* Entry point from the run's task view. */
 .run-results-link {
@@ -146,4 +245,108 @@
   font-size: var(--size-caption);
   color: var(--text-muted);
   font-family: var(--font-mono);
+}
+
+/* Every-check table: heading and its filter share one row, so the switch reads
+   as scoping the table below rather than floating above the section. */
+.report-checks-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-top: var(--space-4);
+  margin-bottom: var(--space-2);
+}
+
+/* A failed row is marked by its Result cell (icon + word); this is a quiet
+   second cue for scanning a long passing suite, never the only one. */
+.report-check-failed > td:first-child {
+  box-shadow: inset 2px 0 0 var(--danger, #dc3545);
+}
+
+/* ── Legibility ───────────────────────────────────────────────────────────────
+   The shared theme's type scale (@6g-dali/ui-theme tokens.css) bottoms out at
+   11.5px, which is fine for a chrome label but too small for the results view:
+   this page is dense reference material — expectation names, column names and
+   counts — that people read line by line rather than glance at. The tokens are
+   raised here rather than in the theme so only this view changes, and rather
+   than per-rule font-size overrides so everything inside follows one scale. */
+.run-results {
+  --size-body: 15px;
+  --size-label: 14px;
+  --size-caption: 13px;
+  --size-identifier: 14px;
+  font-size: var(--size-body);
+}
+
+.run-results .table,
+.run-results .table code {
+  font-size: var(--size-body);
+}
+
+/* Bootstrap's .small is 0.875em of the parent — pinned so the notes under a
+   table do not compound down to the size we just escaped. */
+.run-results .small,
+.run-results .text-muted.small {
+  font-size: var(--size-caption);
+}
+
+.run-results .h6 {
+  font-size: var(--size-card-title);
+}
+
+/* ── Grouped checks ─────────────────────────────────────────────────────────
+   One expectation, all its columns. A suite asserts the same handful of
+   expectations across every column, so a flat list repeats the expectation name
+   15 times and buries the thing that varies — the column and its result. */
+.report-check-group th {
+  background: var(--bg-subtle, rgba(127, 127, 127, 0.08));
+  font-weight: 600;
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-3);
+}
+
+.report-check-group code {
+  font-size: var(--size-body);
+}
+
+/* The whole header row is the disclosure control, so the hit target is the row
+   the reader is already aiming at rather than a caret inside it. */
+.report-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.report-group-toggle:hover code { text-decoration: underline; }
+
+.report-group-summary {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: var(--size-caption);
+}
+
+/* A conf value that is an object or array — `expectations` is a list of
+   configs, and JSON.stringify onto one line is unreadable at any width. */
+.run-results-conf-value {
+  font-family: var(--font-mono);
+  font-size: var(--size-caption);
+  margin: 0;
+  padding: var(--space-2);
+  background: var(--bg-subtle, rgba(127, 127, 127, 0.08));
+  border-radius: var(--radius-md, 6px);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
 }

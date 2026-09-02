@@ -4,17 +4,9 @@ import { getDagRun } from '../api/airflow'
 import Modal from './Modal'
 import type { DagRun, DistributionSubmitResponse, NavigateFn } from '../types'
 import '../styles/SubmissionProgressModal.css'
-import { config } from '../config'
+import { catalogueDatasetUrl } from '../config'
 
 export const VALIDATION_DAG_ID = 'dali_dataspace_validate_dataset'
-
-const CATALOGUE_BASE_URL = config.catalogueBaseUrl
-
-function catalogueDatasetUrl(datasetId: string): string | null {
-  return CATALOGUE_BASE_URL
-    ? `${CATALOGUE_BASE_URL.replace(/\/$/, '')}/datasets/${encodeURIComponent(datasetId)}`
-    : null
-}
 
 export type StepState = 'pending' | 'running' | 'done' | 'failed'
 

@@ -2,7 +2,7 @@
   overflow-x: auto;
   border-radius: 6px;
   box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-  background: #fff;
+  background: var(--bg-surface);
   border: 1px solid var(--dali-gray);
 }
 
@@ -27,13 +27,21 @@ thead th {
    instant and opaque — so a fade on the row underneath is invisible while
    hovering and, on leaving, outlives the cell overlay by its own duration. The
    row then stepped from Bootstrap's hover colour to this one before fading out,
-   which read as a blink. Both layers now change together. */
+   which read as a blink. Both layers now change together.
+
+   Colours are pulled from the same dark-theme tokens the shared @6g-dali/ui-theme
+   package uses for `--bs-table-hover-bg`/`--bs-table-border-color` (see
+   node_modules/@6g-dali/ui-theme/theme.css), so this row-level fallback (used by
+   tables without Bootstrap's `.table-hover` class) can never land on a
+   different colour than Bootstrap's own overlay. The old hardcoded light-mode
+   values (#f0f2f5 border, #eef3fb hover) read as a stray white line and made
+   row text unreadable against its own hover highlight once the app went dark. */
 tbody tr {
-  border-bottom: 1px solid #f0f2f5;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 tbody tr:last-child { border-bottom: none; }
-tbody tr:hover { background: #eef3fb; }
+tbody tr:hover { background: var(--bg-elevated); }
 
 tbody td {
   padding: 9px 14px;
@@ -61,15 +69,16 @@ tbody td {
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: #555;
+  color: var(--text-secondary);
 }
 
 .dag-runs-limit-select {
   font-size: 13px;
   padding: 3px 8px;
   border-radius: 4px;
-  border: 1px solid #dee2e6;
-  background: #fff;
+  border: 1px solid var(--dali-gray);
+  background: var(--bg-base);
+  color: var(--dali-text);
   cursor: pointer;
 }
 
