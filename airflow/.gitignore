@@ -19,3 +19,6 @@ dags/tasks/*.py
 
 # macOS
 .DS_Store
+
+plugins/data_process_modules
+plugins/dataops
