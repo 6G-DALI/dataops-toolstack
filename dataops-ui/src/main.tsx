@@ -10,8 +10,14 @@ import 'admin-lte/dist/js/adminlte.min.js'
 // components that use them.
 import '@6g-dali/ui-theme/fonts.css'
 import '@6g-dali/ui-theme'
+import { initTheme } from '@6g-dali/ui-theme/theme.js'
 import App from './App'
 import keycloak, { redirectUri } from './auth/keycloak'
+
+// Applies the stored/OS-preferred theme before anything renders, so there is
+// no flash of the wrong theme. AppShell's navbar carries the toggle that
+// flips it afterward.
+initTheme()
 
 const RETURN_KEY = 'kc_post_login_hash'
 
