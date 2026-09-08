@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent, ReactNode } from 'react'
 import { addDistributionRdf, createDatasetRdf } from '../api/airflow'
+import { describeDataset } from '../api/descriptor'
 import {
   TURTLE_PREFIXES,
   TURTLE_PREFIX_COUNT,
@@ -9,6 +10,7 @@ import {
   buildDistributionBody,
   buildDistributionTurtle,
 } from '../map/datasetTurtle'
+import { mergeDescriptor } from '../map/zenodoDescribe'
 import CommaListInput, { splitList } from './CommaListInput'
 import ErrorMessage from './ErrorMessage'
 import SubmissionProgressModal, { initialSubmission } from './SubmissionProgressModal'
@@ -499,6 +501,14 @@ export default function DatasetCreator({ onNavigate }: DatasetCreatorProps) {
   const [addValues, setAddValues] = useState('')
   const [addedChecks, setAddedChecks] = useState<AddedCheck[]>([])
   const [confirmRights, setConfirmRights] = useState(false)
+
+  // "Import from Zenodo" — describe a record via the DALI descriptor Lambda and
+  // prefill the Metadata step from it. Kept separate from the submit `error`
+  // state so a failed describe never blocks navigation through the wizard.
+  const [describeUrl, setDescribeUrl] = useState('')
+  const [describing, setDescribing] = useState(false)
+  const [describeError, setDescribeError] = useState<string | null>(null)
+  const [describeNote, setDescribeNote] = useState<string | null>(null)
   // Shown by default: the record is what actually gets submitted, so it should
   // be visible while the form is filled in rather than opt-in.
   const [showRdf, setShowRdf] = useState(true)
@@ -568,6 +578,37 @@ export default function DatasetCreator({ onNavigate }: DatasetCreatorProps) {
 
   function toggleColumnCheck(col: string, key: keyof ColumnCheckState, value: boolean) {
     setColumnChecks(prev => ({ ...prev, [col]: { ...ensureColumnCheck(col), [key]: value } }))
+  }
+
+  /**
+   * Fetch + describe the pasted Zenodo record and fold the result into the
+   * Metadata step. Only fills the fields the descriptor can determine — the
+   * DALI-specific ones (SNS project, testbed context, quality checks) stay for
+   * the user, and any field already typed is left alone unless the record has a
+   * value for it.
+   */
+  async function handleDescribe() {
+    const url = describeUrl.trim()
+    if (!url || describing) return
+    setDescribing(true)
+    setDescribeError(null)
+    setDescribeNote(null)
+    try {
+      const { metadata } = await describeDataset(url)
+      const merged = mergeDescriptor(metadata, identity, object)
+      setIdentity(merged.identity)
+      setObject(merged.object)
+      setDescribeNote(
+        merged.filled.length
+          ? `Filled ${merged.filled.length} field${merged.filled.length === 1 ? '' : 's'} — `
+            + `${merged.filled.join(', ')}. Review before submitting.`
+          : 'The record was fetched, but none of its fields could be mapped to the form.'
+      )
+    } catch (err) {
+      setDescribeError((err as Error).message)
+    } finally {
+      setDescribing(false)
+    }
   }
 
   function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
@@ -776,6 +817,9 @@ export default function DatasetCreator({ onNavigate }: DatasetCreatorProps) {
     setAddedChecks([])
     setConfirmRights(false)
     setShowRdf(false)
+    setDescribeUrl('')
+    setDescribeError(null)
+    setDescribeNote(null)
   }
 
   return (
@@ -850,6 +894,48 @@ export default function DatasetCreator({ onNavigate }: DatasetCreatorProps) {
             {/* ── Step 1: Metadata ─────────────────────────────────────────── */}
             {step === 0 && (
               <>
+                {/* Not a MAP card — a prefill tool that populates the cards
+                    below. Disabled once the dataset is created (metadata locks). */}
+                <div className="card mb-3 border-primary-subtle">
+                  <div className="card-header d-flex align-items-center justify-content-between">
+                    <span className="fw-semibold text-uppercase small">Import from Zenodo</span>
+                    <span className="badge text-bg-primary">LLM-assisted</span>
+                  </div>
+                  <div className="card-body">
+                    <p className="form-text mt-0">
+                      Paste a Zenodo record link or DOI. The DALI descriptor fetches the record and
+                      fills in the Basic Information and Attribution fields below — the SNS project,
+                      testbed details and quality checks stay for you to complete. Always review the
+                      imported values before submitting.
+                    </p>
+                    <div className="input-group">
+                      <input
+                        type="text"
+                        className="form-control"
+                        placeholder="https://zenodo.org/records/1009700"
+                        value={describeUrl}
+                        onChange={e => setDescribeUrl(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') { e.preventDefault(); void handleDescribe() }
+                        }}
+                        disabled={describing || minStep > 0}
+                        aria-label="Zenodo record URL or DOI"
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => void handleDescribe()}
+                        disabled={describing || !describeUrl.trim() || minStep > 0}
+                      >
+                        {describing && <span className="spinner-border spinner-border-sm me-1" />}
+                        {describing ? 'Describing…' : 'Describe'}
+                      </button>
+                    </div>
+                    {describeError && <div className="text-danger small mt-2">{describeError}</div>}
+                    {describeNote && <div className="text-success small mt-2">{describeNote}</div>}
+                  </div>
+                </div>
+
                 <Card title="Basic Information" obligation="Mandatory">
                   <Field label="Title" required>
                     <input className="form-control" value={identity.title}

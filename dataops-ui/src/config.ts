@@ -30,6 +30,9 @@ export interface DataopsConfig extends DaliBaseConfig {
   orchestratorUrl: string
   /** piveau catalogue front end; links are built as <base>/datasets/<id>. */
   catalogueBaseUrl: string
+  /** DALI Dataset Descriptor Lambda Function URL — normalises a Zenodo record
+   *  into MAP-shaped metadata for the Create-Dataset form's "Import from Zenodo". */
+  descriptorUrl: string
 }
 
 const resolved = resolveConfig<DataopsConfig>({
@@ -48,6 +51,11 @@ const resolved = resolveConfig<DataopsConfig>({
 
     orchestratorUrl: '',
     catalogueBaseUrl: '',
+    // Empty by default so the deployed URL is never baked into the source — it
+    // is supplied per environment via VITE_DESCRIPTOR_URL (.env / the image's
+    // config.js). With it unset the "Import from Zenodo" tool reports that the
+    // descriptor is not configured rather than calling a hardcoded endpoint.
+    descriptorUrl: '',
   },
   envKeys: {
     // The shared names (VITE_DALI_URL, VITE_AUTH_URL, …) come from the package,
@@ -56,6 +64,7 @@ const resolved = resolveConfig<DataopsConfig>({
 
     orchestratorUrl: 'VITE_ORCHESTRATOR_URL',
     catalogueBaseUrl: 'VITE_CATALOGUE_BASE_URL',
+    descriptorUrl: 'VITE_DESCRIPTOR_URL',
   },
   // Passed in rather than read inside the package: `import.meta.env` is
   // substituted by Vite in *this* file, and a pre-bundled dependency cannot
