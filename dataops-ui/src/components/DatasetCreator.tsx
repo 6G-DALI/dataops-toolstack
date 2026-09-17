@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent, ReactNode } from 'react'
+import { FiEdit3, FiServer } from 'react-icons/fi'
+import { SiZenodo } from 'react-icons/si'
 import { addDistributionRdf, createDatasetRdf } from '../api/airflow'
 import { describeDataset } from '../api/descriptor'
 import {
@@ -481,7 +483,173 @@ function addedCheckToExpectation(c: AddedCheck): GreatExpectation {
 
 const STEPS = ['Metadata', 'Data', 'Quality Checks', 'Review & Submit'] as const
 
+/** Which source screen is showing before the wizard itself starts. `started`
+ *  means the choice has been made (or the import succeeded) and the normal
+ *  wizard — beginning at the Metadata step — is what's rendered. */
+type EntryMode = 'choice' | 'zenodo' | 'mrs' | 'started'
+
+interface EntryRowProps {
+  icon: ReactNode
+  title: string
+  description: ReactNode
+  selected: boolean
+  dimmed: boolean
+  onToggle: () => void
+  /** The identifier field for an import source, rendered inside this same
+   *  row once it's selected — omitted for "Create from scratch", which has
+   *  nothing further to fill in before the wizard opens. */
+  children?: ReactNode
+}
+
+function EntryRow({ icon, title, description, selected, dimmed, onToggle, children }: EntryRowProps) {
+  return (
+    <div className={`entry-row${selected ? ' entry-row-selected' : ''}${dimmed ? ' entry-row-dimmed' : ''}`}>
+      <button type="button" className="entry-row-header" onClick={onToggle} aria-pressed={selected}>
+        <div className="entry-row-icon" aria-hidden="true">{icon}</div>
+        <div className="entry-row-text">
+          <div className="entry-row-title fw-semibold">{title}</div>
+          <div className="entry-row-description">{description}</div>
+        </div>
+      </button>
+      {selected && children && <div className="entry-row-body">{children}</div>}
+    </div>
+  )
+}
+
+interface ImportFieldsProps {
+  placeholder: string
+  ariaLabel: string
+  value: string
+  onChange: (value: string) => void
+  onSubmit: () => void
+  describing: boolean
+  error: string | null
+  note: string | null
+}
+
+/** The identifier input shared by both "describe an external record" flows —
+ *  Zenodo and MRS send different kinds of identifier to the same descriptor
+ *  Lambda, but the interaction (paste, describe, review the fill note, land
+ *  on Metadata) is identical either way. Lives inside the selected
+ *  EntryRow, not in a separate card, so the field reads as part of that row. */
+function ImportFields({ placeholder, ariaLabel, value, onChange, onSubmit, describing, error, note }: ImportFieldsProps) {
+  return (
+    <>
+      <div className="input-group">
+        <input
+          type="text"
+          className="form-control"
+          placeholder={placeholder}
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { e.preventDefault(); onSubmit() }
+          }}
+          disabled={describing}
+          aria-label={ariaLabel}
+          autoFocus
+        />
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={onSubmit}
+          disabled={describing || !value.trim()}
+        >
+          {describing && <span className="spinner-border spinner-border-sm me-1" />}
+          {describing ? 'Describing…' : 'Describe'}
+        </button>
+      </div>
+      {error && <div className="text-danger small mt-2">{error}</div>}
+      {note && <div className="text-success small mt-2">{note}</div>}
+    </>
+  )
+}
+
+interface EntryChooserProps {
+  selected: EntryMode
+  onChoose: (mode: EntryMode) => void
+  describeUrl: string
+  onDescribeUrlChange: (value: string) => void
+  onDescribe: () => void
+  describing: boolean
+  describeError: string | null
+  describeNote: string | null
+}
+
+/** The landing screen: create the dataset by hand, or prefill it from an
+ *  external record (Zenodo or the SLICES-RI MRS). The three options stack
+ *  full-width rather than sitting side by side, so picking an import source
+ *  can expand its identifier field right inside that row instead of opening
+ *  a separate panel elsewhere on the page. Once a source is picked, the other
+ *  two dim to point at the expanded row — but stay clickable, so switching
+ *  source is one click: handleChooseEntry resets the identifier field and any
+ *  error/note from the previous attempt. Clicking the selected row again
+ *  collapses it back down. */
+function EntryChooser({
+  selected, onChoose, describeUrl, onDescribeUrlChange, onDescribe, describing, describeError, describeNote,
+}: EntryChooserProps) {
+  const importing = selected === 'zenodo' || selected === 'mrs'
+  return (
+    <>
+      <p className="text-muted">
+        Describe the dataset (6G-DALI Metadata Application Profile), attach its file, configure
+        quality checks, then submit. Start from scratch, or prefill the Metadata step from an
+        existing record — you can review and edit everything before submitting either way.
+      </p>
+      <div className="entry-list">
+        <EntryRow
+          icon={<FiEdit3 />}
+          title="Create from scratch"
+          description="Fill in the 6G-DALI Metadata Application Profile yourself, step by step."
+          selected={false}
+          dimmed={importing}
+          onToggle={() => onChoose('started')}
+        />
+        <EntryRow
+          icon={<SiZenodo />}
+          title="Import from Zenodo"
+          description="Paste a Zenodo record link or DOI — the DALI descriptor prefills Basic Information and Attribution."
+          selected={selected === 'zenodo'}
+          dimmed={importing && selected !== 'zenodo'}
+          onToggle={() => onChoose(selected === 'zenodo' ? 'choice' : 'zenodo')}
+        >
+          <ImportFields
+            placeholder="https://zenodo.org/records/1009700"
+            ariaLabel="Zenodo record URL or DOI"
+            value={describeUrl}
+            onChange={onDescribeUrlChange}
+            onSubmit={onDescribe}
+            describing={describing}
+            error={describeError}
+            note={describeNote}
+          />
+        </EntryRow>
+        <EntryRow
+          icon={<FiServer />}
+          title="Import from MRS"
+          description="Paste a SLICES-RI MRS digital object identifier — the DALI descriptor prefills Basic Information and Attribution."
+          selected={selected === 'mrs'}
+          dimmed={importing && selected !== 'mrs'}
+          onToggle={() => onChoose(selected === 'mrs' ? 'choice' : 'mrs')}
+        >
+          <ImportFields
+            placeholder="e.g. 3fa85f64-5717-4562-b3fc-2c963f66afa6"
+            ariaLabel="MRS digital object identifier"
+            value={describeUrl}
+            onChange={onDescribeUrlChange}
+            onSubmit={onDescribe}
+            describing={describing}
+            error={describeError}
+            note={describeNote}
+          />
+        </EntryRow>
+      </div>
+    </>
+  )
+}
+
 export default function DatasetCreator({ onNavigate }: DatasetCreatorProps) {
+  const [entryMode, setEntryMode] = useState<EntryMode>('choice')
   const [step, setStep] = useState(0)
   const [identity, setIdentity] = useState(emptyIdentity)
   const [object, setObject] = useState(emptyObject)
@@ -502,9 +670,11 @@ export default function DatasetCreator({ onNavigate }: DatasetCreatorProps) {
   const [addedChecks, setAddedChecks] = useState<AddedCheck[]>([])
   const [confirmRights, setConfirmRights] = useState(false)
 
-  // "Import from Zenodo" — describe a record via the DALI descriptor Lambda and
-  // prefill the Metadata step from it. Kept separate from the submit `error`
-  // state so a failed describe never blocks navigation through the wizard.
+  // "Import from Zenodo" / "Import from MRS" — describe a record via the DALI
+  // descriptor Lambda and prefill the Metadata step from it before the wizard
+  // opens. Both flows share this state: the identifier is opaque to the UI,
+  // it's just handed to the same descriptor endpoint either way. Kept separate
+  // from the submit `error` state so a failed describe never blocks navigation.
   const [describeUrl, setDescribeUrl] = useState('')
   const [describing, setDescribing] = useState(false)
   const [describeError, setDescribeError] = useState<string | null>(null)
@@ -581,11 +751,11 @@ export default function DatasetCreator({ onNavigate }: DatasetCreatorProps) {
   }
 
   /**
-   * Fetch + describe the pasted Zenodo record and fold the result into the
-   * Metadata step. Only fills the fields the descriptor can determine — the
-   * DALI-specific ones (SNS project, testbed context, quality checks) stay for
-   * the user, and any field already typed is left alone unless the record has a
-   * value for it.
+   * Fetch + describe the pasted Zenodo/MRS record and fold the result into the
+   * Metadata step, then open the wizard there. Only fills the fields the
+   * descriptor can determine — the DALI-specific ones (SNS project, testbed
+   * context, quality checks) stay for the user, and any field already typed is
+   * left alone unless the record has a value for it.
    */
   async function handleDescribe() {
     const url = describeUrl.trim()
@@ -604,11 +774,22 @@ export default function DatasetCreator({ onNavigate }: DatasetCreatorProps) {
             + `${merged.filled.join(', ')}. Review before submitting.`
           : 'The record was fetched, but none of its fields could be mapped to the form.'
       )
+      setEntryMode('started')
     } catch (err) {
       setDescribeError((err as Error).message)
     } finally {
       setDescribing(false)
     }
+  }
+
+  // Switching entry option clears any half-typed identifier or leftover
+  // error/note from a previous attempt — Zenodo and MRS share describeUrl, so
+  // without this a stale Zenodo error would flash under the MRS panel.
+  function handleChooseEntry(mode: EntryMode) {
+    setDescribeUrl('')
+    setDescribeError(null)
+    setDescribeNote(null)
+    setEntryMode(mode)
   }
 
   function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
@@ -803,6 +984,7 @@ export default function DatasetCreator({ onNavigate }: DatasetCreatorProps) {
     setError(null)
     setSubmission(null)
     setCreatedDataset(null)
+    setEntryMode('choice')
     setStep(0)
     setIdentity(emptyIdentity)
     setObject(emptyObject)
@@ -820,6 +1002,23 @@ export default function DatasetCreator({ onNavigate }: DatasetCreatorProps) {
     setDescribeUrl('')
     setDescribeError(null)
     setDescribeNote(null)
+  }
+
+  if (entryMode !== 'started') {
+    return (
+      <div>
+        <EntryChooser
+          selected={entryMode}
+          onChoose={handleChooseEntry}
+          describeUrl={describeUrl}
+          onDescribeUrlChange={setDescribeUrl}
+          onDescribe={() => void handleDescribe()}
+          describing={describing}
+          describeError={describeError}
+          describeNote={describeNote}
+        />
+      </div>
+    )
   }
 
   return (
@@ -894,47 +1093,15 @@ export default function DatasetCreator({ onNavigate }: DatasetCreatorProps) {
             {/* ── Step 1: Metadata ─────────────────────────────────────────── */}
             {step === 0 && (
               <>
-                {/* Not a MAP card — a prefill tool that populates the cards
-                    below. Disabled once the dataset is created (metadata locks). */}
-                <div className="card mb-3 border-primary-subtle">
-                  <div className="card-header d-flex align-items-center justify-content-between">
-                    <span className="fw-semibold text-uppercase small">Import from Zenodo</span>
-                    <span className="badge text-bg-primary">LLM-assisted</span>
+                {/* Left over from the "Import from Zenodo/MRS" entry choice —
+                    a reminder of what was prefilled, dismissible since the
+                    cards below are now the source of truth. */}
+                {describeNote && (
+                  <div className="alert alert-success py-2 small d-flex justify-content-between align-items-start gap-2" role="status">
+                    <span>{describeNote}</span>
+                    <button type="button" className="btn-close btn-sm flex-shrink-0" aria-label="Dismiss" onClick={() => setDescribeNote(null)} />
                   </div>
-                  <div className="card-body">
-                    <p className="form-text mt-0">
-                      Paste a Zenodo record link or DOI. The DALI descriptor fetches the record and
-                      fills in the Basic Information and Attribution fields below — the SNS project,
-                      testbed details and quality checks stay for you to complete. Always review the
-                      imported values before submitting.
-                    </p>
-                    <div className="input-group">
-                      <input
-                        type="text"
-                        className="form-control"
-                        placeholder="https://zenodo.org/records/1009700"
-                        value={describeUrl}
-                        onChange={e => setDescribeUrl(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') { e.preventDefault(); void handleDescribe() }
-                        }}
-                        disabled={describing || minStep > 0}
-                        aria-label="Zenodo record URL or DOI"
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        onClick={() => void handleDescribe()}
-                        disabled={describing || !describeUrl.trim() || minStep > 0}
-                      >
-                        {describing && <span className="spinner-border spinner-border-sm me-1" />}
-                        {describing ? 'Describing…' : 'Describe'}
-                      </button>
-                    </div>
-                    {describeError && <div className="text-danger small mt-2">{describeError}</div>}
-                    {describeNote && <div className="text-success small mt-2">{describeNote}</div>}
-                  </div>
-                </div>
+                )}
 
                 <Card title="Basic Information" obligation="Mandatory">
                   <Field label="Title" required>

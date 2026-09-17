@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FiBarChart2, FiChevronDown, FiChevronRight } from 'react-icons/fi'
+import { FiChevronDown, FiChevronRight } from 'react-icons/fi'
 import { getTaskInstances, getDagRun } from '../api/airflow'
 import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
@@ -26,13 +26,10 @@ interface Selection {
 const RESULTS_DAG_ID = 'dali_dataspace_validate_dataset'
 
 /**
- * The panel beside the task list has one slot and two occupants: a run's
- * results, shown by default, and a task's logs, shown while a task is
- * selected. They are alternatives rather than a stack because both want the
- * full height of a sticky pane, and reading a log is a different job from
- * reading the run's outcome — mixing them halves each.
+ * On the results DAG the timeline is handed to RunResults as its first tab,
+ * with a selected task's log opening in a panel beside the list inside that
+ * tab. Elsewhere the timeline is the whole page.
  */
-type Panel = 'results' | 'log'
 
 const POLL_INTERVAL_MS = 3000
 const TERMINAL_RUN_STATES = new Set(['success', 'failed'])
@@ -125,56 +122,12 @@ export default function TaskInstanceList({ dagId, runId }: TaskInstanceListProps
   }
 
   const hasResults = dagId === RESULTS_DAG_ID
-  const panel: Panel | null = selected ? 'log' : hasResults ? 'results' : null
 
-  return (
-    <div>
-      <div className="run-header">
-        {hasResults && (
-          // Not a link to the standalone #/run-results page any more: results
-          // live in the panel beside the tasks, so this only has to hand the
-          // panel back from a log. The route still exists for deep links.
-          <button
-            type="button"
-            className={`btn btn-sm run-results-link ${panel === 'results' ? 'btn-primary' : 'btn-outline-primary'}`}
-            aria-pressed={panel === 'results'}
-            onClick={() => setSelected(null)}
-          >
-            <FiBarChart2 aria-hidden="true" /> View results
-          </button>
-        )}
-        {/* Only where there is no results panel to hold it. On the merged DAG
-            the configuration is a tab beside the report's own, so showing it
-            here as well would be the same content in two places. */}
-        {conf && !hasResults && (
-          <div className="run-conf">
-            <button
-              type="button"
-              className="run-conf-toggle"
-              aria-expanded={confOpen}
-              onClick={() => setConfOpen(o => !o)}
-            >
-              {confOpen ? <FiChevronDown aria-hidden="true" /> : <FiChevronRight aria-hidden="true" />}
-              <span className="run-conf-title">Configuration</span>
-              <span className="run-conf-count">{Object.keys(conf).length}</span>
-            </button>
-            {confOpen && (
-              <ul className="run-conf-list">
-                {Object.entries(conf).map(([k, v]) => (
-                  <li key={k} className="run-conf-row">
-                    <span className="run-conf-key">{k}</span>
-                    <span className="run-conf-val">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className={`timeline-layout${panel ? ' timeline-layout--split' : ''}`}>
+  const timeline = (
+      <div className={`timeline-layout${selected ? ' timeline-layout--split' : ''}`}>
         <div className="timeline-column">
-          <p className="text-muted">Task Instances</p>
+          {/* As a tab the label is already on the tab. */}
+          {!hasResults && <p className="text-muted">Task Instances</p>}
           {tasks.length === 0 ? (
             <p className="timeline-empty">No tasks found.</p>
           ) : (
@@ -222,7 +175,7 @@ export default function TaskInstanceList({ dagId, runId }: TaskInstanceListProps
           )}
         </div>
 
-        {panel === 'log' && selected && (
+        {selected && (
           <div className="timeline-log-panel">
             <TaskLog
               dagId={dagId}
@@ -234,12 +187,46 @@ export default function TaskInstanceList({ dagId, runId }: TaskInstanceListProps
           </div>
         )}
 
-        {panel === 'results' && (
-          <div className="timeline-results-panel">
-            <RunResults key={runState ?? 'pending'} dagId={dagId} runId={runId} />
-          </div>
-        )}
       </div>
+  )
+
+  // Results are fetched once on mount, so keying on the run's state remounts
+  // them when it reaches a terminal state — which is when artifacts exist.
+  if (hasResults) {
+    return <RunResults key={runState ?? 'pending'} dagId={dagId} runId={runId} tasks={timeline} />
+  }
+
+  return (
+    <div>
+      {/* On the results DAG the configuration is a tab of RunResults, so the
+          toggle here only exists where there is no results view to hold it. */}
+      {conf && (
+        <div className="run-header">
+          <div className="run-conf">
+            <button
+              type="button"
+              className="run-conf-toggle"
+              aria-expanded={confOpen}
+              onClick={() => setConfOpen(o => !o)}
+            >
+              {confOpen ? <FiChevronDown aria-hidden="true" /> : <FiChevronRight aria-hidden="true" />}
+              <span className="run-conf-title">Configuration</span>
+              <span className="run-conf-count">{Object.keys(conf).length}</span>
+            </button>
+            {confOpen && (
+              <ul className="run-conf-list">
+                {Object.entries(conf).map(([k, v]) => (
+                  <li key={k} className="run-conf-row">
+                    <span className="run-conf-key">{k}</span>
+                    <span className="run-conf-val">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+      {timeline}
     </div>
   )
 }

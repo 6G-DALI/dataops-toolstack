@@ -178,14 +178,6 @@
 }
 
 
-/* Entry point from the run's task view. */
-.run-results-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: var(--space-3);
-}
-
 /* Report views. */
 .run-results-tabs { margin-bottom: var(--space-4); }
 
