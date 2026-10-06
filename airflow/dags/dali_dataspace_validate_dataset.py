@@ -148,12 +148,12 @@ Configuration (from the environment, not DAG params):
     DATAOPS_S3_CONN_ID    Airflow connection ID for the DataOps MinIO/S3 the
                           EDC transfer stages the file into (default
                           "dali-dataops").
-    EDC_CONSUMER_DOMAIN / EDC_CONSUMER_MANAGEMENT_PORT
-                          Our own consumer connector's management API — every
-                          catalog/negotiation/transfer call is made against it.
-    EDC_PROVIDER_DOMAIN / EDC_PROVIDER_PROTOCOL_PORT
-                          The provider connector's DSP address, used as
-                          counterPartyAddress (see dali.utils).
+    EDC_CONSUMER_URL      Base URL of our own consumer connector; its management
+                          API ({url}/management/v3) takes every catalog /
+                          negotiation / transfer call.
+    EDC_PROVIDER_PROTOCOL_URL
+                          The provider connector's base URL, used as
+                          counterPartyAddress ({url}/protocol) (see dali.utils).
     EDC_POLL_INTERVAL / EDC_POLL_TIMEOUT
                           How often, and for how long, the negotiation and
                           transfer are polled (default 3s, 120s).
