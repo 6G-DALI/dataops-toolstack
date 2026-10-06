@@ -70,8 +70,13 @@ def dist_keys(node: dict) -> set[str]:
     its full @id, that @id's last path segment, and likewise for
     dct:identifier — matches piveau_client.py's _dist_keys on the UI side,
     since piveau's own distribution "id" doesn't consistently show up in the
-    same form in every context."""
+    same form in every context. Also dali:assetId, which is how the
+    s3-asset-monitor records the EDC asset a distribution was registered for."""
     keys: set[str] = set()
+    for key in (f"{DALI_NS}assetId", "dali:assetId"):
+        asset = _scalar(node.get(key))
+        if asset:
+            keys.add(asset)
     for raw in (node.get("@id", ""), _scalar(node.get("dct:identifier"))):
         if not raw:
             continue
