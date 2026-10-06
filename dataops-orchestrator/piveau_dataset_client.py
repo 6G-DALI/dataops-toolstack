@@ -199,14 +199,24 @@ def _esc(s: str) -> str:
 
 
 def _dataset_uri(dataset_id: str) -> str:
-    return f"{DSPACE_BASE}/set/data/{dataset_id}"
+    """This is only ever used as the *submitted* subject IRI or as a
+    best-effort fallback (see _put_dataset_graph) — piveau canonicalizes the
+    real @id itself on write (datasetContext in PIVEAU_DCATAP_SCHEMA_CONFIG),
+    so this must stay in sync with that config to avoid returning a dead
+    link in create_dataset's "dataset_uri" response field. datasetContext is
+    "datasets/" (matches /datasets/{id}, the REST path that actually
+    resolves — "set/data/" never did, on this instance or the old dev one)."""
+    return f"{DSPACE_BASE}/datasets/{dataset_id}"
 
 
 def _distribution_uri(asset_id: str) -> str:
-    """piveau represents distributions as flat resources — /set/distribution/{id},
-    not nested under the dataset's own URI — confirmed against production records
-    (e.g. https://dspace.sparkworks.net/set/distribution/<uuid>)."""
-    return f"{DSPACE_BASE}/set/distribution/{asset_id}"
+    """piveau represents distributions as flat resources, not nested under the
+    dataset's own URI — confirmed against production records. Distributions
+    have no standalone read route at all (neither "set/distribution/{id}" nor
+    "distributions/{id}" resolves), so this string is never a live link
+    either way — kept as "distributions/" only for naming consistency with
+    datasetContext/catalogueContext in PIVEAU_DCATAP_SCHEMA_CONFIG."""
+    return f"{DSPACE_BASE}/distributions/{asset_id}"
 
 
 def _require_piveau_config() -> None:

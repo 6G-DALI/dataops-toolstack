@@ -26,6 +26,10 @@ import type {
   TaskInstancesResponse,
   TaskLogResponse,
   TriggerConf,
+  Testbed,
+  TestbedAuditEntry,
+  TestbedCreateRequest,
+  TestbedProvisionResponse,
 } from '../types'
 import keycloak from '../auth/keycloak'
 import { config } from '../config'
@@ -374,4 +378,47 @@ export async function getRunArtifactCsv(
       return { text, truncated: true, totalSize, fetched: offset }
     }
   }
+}
+
+// ── Testbed registry ─────────────────────────────────────────────────────────
+export function getTestbeds(): Promise<{ testbeds: Testbed[]; total: number }> {
+  return request('/testbeds')
+}
+
+export function getTestbed(slug: string): Promise<Testbed> {
+  return request(`/testbeds/${encodeURIComponent(slug)}`)
+}
+
+export function registerTestbed(body: TestbedCreateRequest): Promise<Testbed> {
+  return request('/testbeds', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function provisionTestbed(slug: string): Promise<TestbedProvisionResponse> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/provision`, { method: 'POST' })
+}
+
+export function rotateTestbedCredentials(slug: string): Promise<{ note: string }> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/credentials/rotate`, { method: 'POST' })
+}
+
+export function deleteTestbed(slug: string): Promise<unknown> {
+  return request(`/testbeds/${encodeURIComponent(slug)}`, { method: 'DELETE' })
+}
+
+export function getTestbedAudit(slug: string): Promise<{ entries: TestbedAuditEntry[] }> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/audit`)
+}
+
+/** Downloads the generated connector bundle (a zip) through the browser. */
+export async function downloadTestbedBundle(slug: string): Promise<void> {
+  const response = await fetch(`${BASE_URL}/testbeds/${encodeURIComponent(slug)}/bundle`, {
+    headers: await authHeader(),
+  })
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`)
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `connector-${slug}.zip`
+  link.click()
+  URL.revokeObjectURL(url)
 }

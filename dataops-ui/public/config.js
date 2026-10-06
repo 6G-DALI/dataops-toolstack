@@ -15,6 +15,9 @@ window.__DALI_CONFIG__ = {
   // piveau catalogue front end; dataset links are <base>/datasets/<id>.
   catalogueBaseUrl: '',
 
+  // DALI Dataset Descriptor Lambda Function URL — "Import from Zenodo".
+  descriptorUrl: '',
+
   // Portal base URL — the navbar username links to <base>/#/account.
   portalUrl: '',
 

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import {
-  FiHome, FiGrid, FiList, FiDatabase, FiPlusCircle, FiSettings,
+  FiHome, FiGrid, FiList, FiDatabase, FiPlusCircle, FiSettings, FiServer,
 } from 'react-icons/fi'
 import {
   AppShell,
@@ -32,7 +32,11 @@ const NAV_ITEMS: NavItem<View>[] = [
   { label: 'Datasets',    view: 'datasets',        icon: FiDatabase },
   { label: 'Add Dataset', view: 'dataset-creator', icon: FiPlusCircle },
   { label: 'Services',    view: 'services',        icon: FiSettings },
+  { label: 'Testbeds',    view: 'testbeds',        icon: FiServer },
 ]
+
+/** Realm role that unlocks the testbed registry (see the orchestrator's TESTBED_ADMIN_ROLE). */
+const TESTBED_ADMIN_ROLE = 'testbed-admin'
 
 /** The portal owns the single account page for the whole DALI SSO environment,
  *  so the username links there rather than being inert. An unset portal URL
@@ -76,6 +80,13 @@ function buildCrumbs(
     return [crumb('Datasets', 'datasets'), crumb('Add Dataset', 'dataset-creator')]
   }
   if (view === 'services') return [crumb('Services', 'services')]
+  if (view === 'testbeds') return [crumb('Testbeds', 'testbeds')]
+  if (view === 'testbed-register') {
+    return [crumb('Testbeds', 'testbeds'), crumb('Register testbed', 'testbed-register')]
+  }
+  if (view === 'testbed-detail') {
+    return [crumb('Testbeds', 'testbeds'), crumb(dagId ?? '', 'testbed-detail', { dagId: dagId ?? '' })]
+  }
   if (view === 'all-tasks') return [crumb('Tasks', 'all-tasks')]
   if (view === 'dag-builder') {
     return [crumb('Tasks', 'all-tasks'), crumb('Build DAG', 'dag-builder')]
@@ -109,6 +120,7 @@ function topLevelView(view: View): View {
   if (view === 'dataset-creator') return 'dataset-creator'
   if (view === 'datasets') return 'datasets'
   if (view === 'services') return 'services'
+  if (view.startsWith('testbed')) return 'testbeds'
   return 'dags'
 }
 
@@ -126,7 +138,7 @@ export default function Layout({ view, dagId, runId, taskId, onNavigate, childre
     <AppShell<View>
       brand={<>6G-<span className="dali-accent">DALI</span> DataOps</>}
       homeView="home"
-      nav={NAV_ITEMS}
+      nav={NAV_ITEMS.filter(i => i.view !== 'testbeds' || keycloak.hasRealmRole(TESTBED_ADMIN_ROLE))}
       activeView={topLevelView(view)}
       onNavigate={next => onNavigate(next, {})}
       tools={daliTools(config)}

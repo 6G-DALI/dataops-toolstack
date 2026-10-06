@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import rabbitmq_consumer
 from config import HOST, PORT, CORS_ORIGINS
-from routers import dags, runs, tasks, datasets, stats, services
+from routers import dags, runs, tasks, datasets, stats, services, testbeds
 
 
 @asynccontextmanager
@@ -50,6 +50,7 @@ app.include_router(tasks.router)
 app.include_router(datasets.router)
 app.include_router(stats.router)
 app.include_router(services.router)
+app.include_router(testbeds.router)
 
 
 @app.get("/health", tags=["Health"])

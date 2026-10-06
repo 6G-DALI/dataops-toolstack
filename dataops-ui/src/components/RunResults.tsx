@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { FiDownload, FiExternalLink } from 'react-icons/fi'
 import { getDagRun, getDatasets, getDistributions, getRunArtifactCsv, getRunArtifacts, getRunArtifactText } from '../api/airflow'
 import type { RunArtifact, RunArtifacts, SeriesPoint } from '../types'
@@ -272,29 +272,28 @@ function caughtUpTo(frame: Frame | null, bound: number | null, done: boolean, ti
 }
 
 /**
- * The pipeline's own three frames, which the stage picker switches between.
+ * Every frame the Data tab can plot, in pipeline order — the stage picker
+ * switches between them.
  *
- * The imputed frames are deliberately not among them: they are the regularized
- * timeline in converted units, four times the rows, so putting them in the same
- * picker made the reader compare two things that share neither scale nor row
- * count by flipping between them. They get their own chart below, where all
- * three can be seen at once.
+ * The imputed frames are the regularized timeline in converted units, four
+ * times the rows of the pipeline's own three, so they share neither scale nor
+ * row count with them. They still belong in the same picker: the column
+ * selection follows the measure across the rename (`columnAliases`), the y
+ * range is fitted per column name so the converted units get their own scale,
+ * and the x axis is the one timeline throughout — which is what makes flipping
+ * between "remediated" and "imputed" show where the gaps were filled.
  */
 const STAGES: { id: StageId, label: string, artifact: string }[] = [
   { id: 'raw', label: 'Raw', artifact: RAW },
   { id: 'soft', label: 'Soft-cleaned', artifact: SOFT },
   { id: 'remediated', label: 'Remediated', artifact: REMEDIATED },
+  { id: 'imputed_final', label: 'Imputed — full timeline', artifact: IMPUTED_FINAL },
+  { id: 'imputed_train', label: 'Imputed — train split', artifact: IMPUTED_TRAIN },
+  { id: 'imputed_test', label: 'Imputed — test split', artifact: IMPUTED_TEST },
 ]
 
-/** Plotted together on the imputed chart: the stitched timeline and its splits. */
-const IMPUTED_SERIES: { id: StageId, label: string, artifact: string }[] = [
-  { id: 'imputed_final', label: 'Full timeline', artifact: IMPUTED_FINAL },
-  { id: 'imputed_train', label: 'Train split', artifact: IMPUTED_TRAIN },
-  { id: 'imputed_test', label: 'Test split', artifact: IMPUTED_TEST },
-]
-
-/** Every frame the Data tab fetches, whichever chart it belongs to. */
-const FETCHED = [...STAGES, ...IMPUTED_SERIES]
+/** Every frame the Data tab fetches — all of them, since one chart plots any. */
+const FETCHED = STAGES
 
 /**
  * The one frame fetched to completion, up front — every other wanted frame is
@@ -308,18 +307,27 @@ function pickRefStage<T extends { id: StageId }>(wanted: T[]): T | null {
   return byId('raw') ?? byId('soft') ?? byId('remediated') ?? wanted[0] ?? null
 }
 
-type Tab = 'overview' | 'quality' | 'remediation' | 'data' | 'config'
+type Tab = 'tasks' | 'overview' | 'quality' | 'remediation' | 'data' | 'artifacts' | 'config'
 
 interface Props {
   dagId: string
   runId: string
+  /**
+   * The run's task timeline, rendered by the caller (TaskInstanceList owns
+   * the polling and the selected-task log). When given it becomes the first
+   * tab and the default one: the tasks are what a run in flight has to show,
+   * and the tab bar stays up even while the artifacts are still loading or
+   * missing, so a reader is never left with a spinner and no way to the
+   * tasks behind it.
+   */
+  tasks?: ReactNode
 }
 
-export default function RunResults({ dagId, runId }: Props) {
+export default function RunResults({ dagId, runId, tasks }: Props) {
   const [data, setData] = useState<RunArtifacts | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState<Tab>('overview')
+  const [tab, setTab] = useState<Tab>(tasks ? 'tasks' : 'overview')
 
   const [frames, setFrames] = useState<{
     stages: Partial<Record<StageId, Frame>>
@@ -354,10 +362,10 @@ export default function RunResults({ dagId, runId }: Props) {
    * enough to cover the page on screen.
    *
    * Read as a render-driving flag rather than folded into `frames` itself:
-   * the two charts painting mid-walk — a partial line for whichever stage
+   * the chart painting mid-walk — a partial line for whichever stage
    * happens to be a chunk behind — was the "weird lines" symptom paging
-   * produced. Both charts wait on this together and paint the whole page in
-   * one go instead.
+   * produced. Every stage waits on this together and the whole page paints
+   * in one go instead, so switching stage never shows a half-loaded frame.
    */
   const [stageReady, setStageReady] = useState<Partial<Record<StageId, boolean>>>({})
   const [column, setColumn] = useState<string>('')
@@ -365,44 +373,9 @@ export default function RunResults({ dagId, runId }: Props) {
   // pipeline's output — but the soft-cleaned and raw frames are uploaded too,
   // and seeing what a stage looked like is the reason they are.
   const [stage, setStage] = useState<StageId>('remediated')
-  // One zoom window for both charts. They plot the same timeline on a shared x
-  // axis, so zooming one and not the other would leave two plots that look
-  // comparable and are not — the exact failure the shared axes exist to avoid.
+  // Zoom window and crosshair position for the chart, reset on paging.
   const [zoom, setZoom] = useState<{ min: number, max: number } | null>(null)
-  // Same reasoning as `zoom`: one crosshair position for both charts, so
-  // pointing at a value on one side shows the corresponding position on the
-  // other rather than requiring two separate hovers to compare them by eye.
   const [hoverX, setHoverX] = useState<number | null>(null)
-  /**
-   * Imputed series switched off from the chart's legend.
-   *
-   * Defaults to the full timeline alone — the one to read if you only read
-   * one — with the splits available a click away via the view switch below,
-   * or individually via the legend's own per-series toggles, which this
-   * state still drives either way.
-   */
-  const [hiddenSeries, setHiddenSeries] = useState<string[]>(['imputed_train', 'imputed_test'])
-
-  function toggleSeries(key: string) {
-    setHiddenSeries(prev => {
-      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
-      // Never all three: an empty chart is not a state worth being able to reach
-      // by clicking, and the way out of it is not obvious.
-      return next.length >= IMPUTED_SERIES.length ? prev : next
-    })
-  }
-
-  // The switch's two presets, named rather than derived from `hiddenSeries`
-  // directly so a manual per-series toggle (still available in the legend)
-  // can leave neither button showing as active without that reading as broken.
-  const IMPUTED_VIEW_FULL: string[] = ['imputed_train', 'imputed_test']
-  const IMPUTED_VIEW_SPLITS: string[] = ['imputed_final']
-  const imputedView: 'full' | 'splits' | null =
-    hiddenSeries.length === IMPUTED_VIEW_FULL.length && IMPUTED_VIEW_FULL.every(k => hiddenSeries.includes(k))
-      ? 'full'
-      : hiddenSeries.length === IMPUTED_VIEW_SPLITS.length && IMPUTED_VIEW_SPLITS.every(k => hiddenSeries.includes(k))
-        ? 'splits'
-        : null
   // The run's dag_run.conf — what this run was asked to do. Fetched here rather
   // than passed down, so the component works the same on the standalone
   // #/run-results route as it does embedded beside the task list.
@@ -620,16 +593,14 @@ export default function RunResults({ dagId, runId }: Props) {
    *
    * A scale fitted per frame redraws each of them to fill the plot, so
    * remediation clipping an outlier would leave the line looking the same, only
-   * relabelled. One range across all of them holds the axis still, and — now
-   * that the imputed chart sits beside this one — makes the two charts directly
-   * comparable, because both ask this for their own column and get the same
-   * answer whenever that column is the same.
+   * relabelled. One range across all of them holds the axis still, so flipping
+   * between stages shows what changed rather than a rescaled line.
    *
    * Matched on the exact name, deliberately. The alias that carries a selection
    * across frames is also a unit conversion (`ram_usage` in bytes becomes
    * `ram_usage_mb`), and a range spanning both would put one of them on the
    * floor. Frames naming a column identically share a scale; converted ones form
-   * their own, and the charts say so.
+   * their own, and the caption says so.
    */
   const yDomainFor = useCallback((columnName: string): [number, number] | undefined => {
     if (!frames || !columnName) return undefined
@@ -771,8 +742,8 @@ export default function RunResults({ dagId, runId }: Props) {
     const ref = pickRefStage(wanted)
     return wanted.filter(st => st.id !== ref?.id).map(st => st.id)
   }, [data])
-  /** True once every stage the two Data-tab charts draw from has caught up to
-   *  the page on screen — gates painting them, per the loader effect below. */
+  /** True once every stage the Data-tab chart can draw from has caught up to
+   *  the page on screen — gates painting it, per the loader effect below. */
   const pageReady = otherStageIds.every(id => stageReady[id] === true)
 
   /**
@@ -781,8 +752,8 @@ export default function RunResults({ dagId, runId }: Props) {
    * one window of it at a time would defeat the point of paging. Extends
    * existing progress rather than restarting: paging forward asks each file
    * for a bit more, paging back reuses what's already there (the check at the
-   * top of `extend`'s loop), and switching stage or the imputed-chart view
-   * never triggers a fetch of its own, since every wanted frame here already
+   * top of `extend`'s loop), and switching stage never triggers a fetch of
+   * its own, since every wanted frame here already
    * advances together, in step with the page.
    */
   useEffect(() => {
@@ -882,6 +853,11 @@ export default function RunResults({ dagId, runId }: Props) {
 
     const before = baseline
     const beforeCol = before ? before.header.indexOf(plottedColumn) : -1
+    // The imputed splits carry no baseline to diff against (they are the
+    // regularized grid, not a row-aligned rewrite) but mark their synthesised
+    // rows themselves, in is_gap. The stitched timeline drops that flag, so
+    // on it every point reads as observed.
+    const gapCol = plotFrame.header.indexOf(GAP_FLAG)
 
     const all: SeriesPoint[] = []
     for (let i = 0; i < plotFrame.rows.length; i++) {
@@ -897,6 +873,8 @@ export default function RunResults({ dagId, runId }: Props) {
       if (beforeCol >= 0) {
         const prev = before?.rows[i]?.[beforeCol]
         changed = isBlank(prev) || Number(prev) !== y
+      } else if (gapCol >= 0) {
+        changed = Number(plotFrame.rows[i][gapCol]) !== 0
       }
       const x = timeline === null ? i : timeline.toMs(plotFrame.rows[i][timeline.idx])
       all.push({ x: Number.isNaN(x) ? i : x, y, changed })
@@ -916,80 +894,6 @@ export default function RunResults({ dagId, runId }: Props) {
     }
   }, [plotFrame, baseline, plottedColumn, timeline, pageBounds])
 
-  /**
-   * The three imputed frames as one chart's worth of series.
-   *
-   * Built separately from the stage chart because nothing about them lines up
-   * with it: converted units, four times the rows, and split in two. Here they
-   * do line up with each other — same columns, same grid — so they belong on
-   * shared axes, which is the only way to see that the splits tile the timeline
-   * rather than duplicating it.
-   *
-   * The full timeline leads, because SeriesChart's crosshair follows the first
-   * series and that is the one a reader is asking about.
-   */
-  const imputedChart = useMemo(() => {
-    if (!frames) return null
-    const present = IMPUTED_SERIES.filter(sr => frames.stages[sr.id])
-    if (present.length === 0) return null
-
-    // Its own column list: these frames name the measure differently (units) and
-    // carry the imputer's working columns, so the stage chart's picker does not
-    // apply. The first frame decides, since all three share a schema.
-    const first = frames.stages[present[0].id]!
-    const axis = timeAxis(first, timeNames)
-    const columns = numericColumns(first.header, first.rows)
-      .filter(c => !BUNDLE_FEATURE_COLUMNS.has(c) && c !== (axis && first.header[axis.idx]))
-
-    // Derived from the stage chart's column, never held separately: the two
-    // frames name the same measure differently (the bundle converts units, so
-    // `ram_usage` becomes `ram_usage_mb`), and two independent selections let
-    // the pair drift onto different measures while still looking like a
-    // comparison. One choice, resolved into each frame's own vocabulary.
-    const wanted = columns.includes(plottedColumn)
-      ? plottedColumn
-      : (columnAliases[plottedColumn] ?? []).find(a => columns.includes(a)) ?? ''
-    const column = columns.includes(wanted) ? wanted : columns[0] ?? ''
-    if (!column) return { columns: [], column: '', series: [], isTime: false, gapCount: 0 }
-
-    let gapCount = 0
-    const series = present.map(sr => {
-      const frame = frames.stages[sr.id]!
-      const col = frame.header.indexOf(column)
-      const t = timeAxis(frame, timeNames)
-      const gapCol = frame.header.indexOf(GAP_FLAG)
-      const points: SeriesPoint[] = []
-      for (let i = 0; i < frame.rows.length; i++) {
-        const raw = frame.rows[i][col]
-        if (isBlank(raw)) continue
-        const y = Number(raw)
-        if (Number.isNaN(y)) continue
-        const changed = gapCol >= 0 && Number(frame.rows[i][gapCol]) !== 0
-        // Counted across the splits, which are disjoint and do carry the flag.
-        // The stitched timeline drops it, so counting the first series — which
-        // is that timeline — would always have reported zero.
-        if (changed) gapCount++
-        const x = t ? t.toMs(frame.rows[i][t.idx]) : i
-        points.push({ x: Number.isNaN(x) ? i : x, y, changed })
-      }
-      // Same page window as the stage chart, full resolution within it — no
-      // stride here either. These frames run four times longer than raw, so
-      // a page landing near MAX_PLOT_POINTS raw rows can still hand a series
-      // here more than that many points; shown in full regardless, per the
-      // reasoning on `pages` above.
-      const windowed = pageBounds ? points.filter(p => p.x >= pageBounds.min && p.x <= pageBounds.max) : points
-      return {
-        key: sr.id,
-        label: sr.label,
-        points: windowed,
-        total: points.length,
-        shown: windowed.length,
-      }
-    })
-
-    return { columns, column, series, isTime: axis !== null, gapCount }
-  }, [frames, timeNames, plottedColumn, columnAliases, pageBounds])
-
   function download(name: string, key: string) {
     // Fetched rather than linked: the endpoint needs the bearer token, which a
     // plain href cannot carry.
@@ -1005,16 +909,55 @@ export default function RunResults({ dagId, runId }: Props) {
       .catch(err => setCsvError((err as Error).message))
   }
 
-  if (loading) return <LoadingSpinner />
-  if (error) return <ErrorMessage message={error} />
-  if (!data) return null
+  const TABS: { id: Tab, label: string }[] = [
+    ...(tasks ? [{ id: 'tasks' as const, label: 'Task instances' }] : []),
+    { id: 'overview', label: 'Overview' },
+    { id: 'quality', label: 'Quality' },
+    { id: 'remediation', label: 'Issues & remediation' },
+    { id: 'data', label: 'Data' },
+    { id: 'artifacts', label: 'Artifacts' },
+    { id: 'config', label: 'Configuration' },
+  ]
 
-  if (data.artifacts.length === 0) {
+  const tabBar = (
+    <ul className="nav nav-tabs run-results-tabs" role="tablist">
+      {TABS.map(t => (
+        <li className="nav-item" key={t.id} role="presentation">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            className={`nav-link${tab === t.id ? ' active' : ''}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
+
+  const noArtifacts = data && data.artifacts.length === 0 && (
+    <div className="alert alert-secondary mb-0">
+      This run has not published any artifacts
+      {data.state && data.state !== 'success' ? ` — it is ${data.state}.` : '.'}
+      {' '}Results appear once <code>upload_artifacts</code> completes.
+    </div>
+  )
+
+  if (loading || error || !data || noArtifacts) {
+    const fallback = loading
+      ? <LoadingSpinner />
+      : error
+        ? <ErrorMessage message={error} />
+        : noArtifacts || null
+    if (!tasks) return fallback
+    // The tasks tab is fully usable whatever state the artifacts are in; the
+    // other tabs all show the same one message until they exist.
     return (
-      <div className="alert alert-secondary mb-0">
-        This run has not published any artifacts
-        {data.state && data.state !== 'success' ? ` — it is ${data.state}.` : '.'}
-        {' '}Results appear once <code>upload_artifacts</code> completes.
+      <div className="run-results">
+        {tabBar}
+        {tab === 'tasks' ? tasks : fallback}
       </div>
     )
   }
@@ -1043,21 +986,14 @@ export default function RunResults({ dagId, runId }: Props) {
   // What the markers mean depends on which two stages are being diffed: against
   // the soft-cleaned frame they are remediation's work, against the raw frame
   // they are the clean's.
+  const isImputedStage = selected?.id.startsWith('imputed_') ?? false
   const markerLabel = selected?.id === 'soft'
     ? 'Changed by cleaning'
-    : filledCells > 0 ? 'Imputed' : 'Adjusted'
+    : isImputedStage || filledCells > 0 ? 'Imputed' : 'Adjusted'
 
   const formatX = series.isTime
     ? (x: number) => new Date(x).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
     : (x: number) => `#${x}`
-
-  const TABS: { id: Tab, label: string }[] = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'quality', label: 'Quality' },
-    { id: 'remediation', label: 'Issues & remediation' },
-    { id: 'data', label: 'Data' },
-    { id: 'config', label: 'Configuration' },
-  ]
 
   return (
     <div className="run-results">
@@ -1113,21 +1049,9 @@ export default function RunResults({ dagId, runId }: Props) {
         <MetricCard label="Missing cells filled" value={filled} tone={filled ? 'warning' : 'default'} />
       </div>
 
-      <ul className="nav nav-tabs run-results-tabs" role="tablist">
-        {TABS.map(t => (
-          <li className="nav-item" key={t.id} role="presentation">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === t.id}
-              className={`nav-link${tab === t.id ? ' active' : ''}`}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-            </button>
-          </li>
-        ))}
-      </ul>
+      {tabBar}
+
+      {tab === 'tasks' && tasks}
 
       {tab === 'overview' && (
         <>
@@ -1260,13 +1184,9 @@ export default function RunResults({ dagId, runId }: Props) {
         </section>
       ))}
 
-      {/* Side by side, but not evenly: a series needs width to be readable at
-          all, while the artifact list is a handful of names. Two thirds / one
-          third rather than half each. */}
-      {/* The two charts side by side, on the same axes: the left is the frame as
-          the pipeline left it, the right is that timeline once the gaps were
-          filled. Reading them as a pair is the point, which a stacked layout
-          loses the moment one of them scrolls out of view. */}
+      {/* One chart, full width, with every stage — the pipeline's three and
+          the imputed three — behind one picker, on one timeline: flipping
+          between remediated and imputed shows where the gaps were filled. */}
       {tab === 'data' && (
         <>
           {pageCount > 1 && (
@@ -1284,7 +1204,7 @@ export default function RunResults({ dagId, runId }: Props) {
                 {pageBounds && (
                   <> · {formatX(pageBounds.min)} – {formatX(pageBounds.max)}</>
                 )}
-                {' '}· both charts, full resolution, no sampling
+                {' '}· full resolution, no sampling
               </span>
               <button
                 type="button"
@@ -1296,9 +1216,7 @@ export default function RunResults({ dagId, runId }: Props) {
               </button>
             </div>
           )}
-        <div className="row g-3">
-          <div className="col-xl-6">
-          <section className="card h-100">
+          <section className="card">
             <div className="card-body">
               {/* One filter row above the chart it scopes — never inside the plot. */}
               <div className="run-results-chart-header">
@@ -1345,13 +1263,17 @@ export default function RunResults({ dagId, runId }: Props) {
               )}
               {frames && pageReady && (
                 <>
-                  {/* Mirrors the imputed chart's caption below: same slot, same
-                      reserved height (.run-results-chart-caption), so the two
-                      plots start at the same y regardless of which stage is
-                      selected or how long its blurb runs. */}
+                  {/* Reserved height (.run-results-chart-caption) so the plot
+                      starts at the same y whichever stage is selected or how
+                      long its blurb runs. */}
                   <p className="text-muted small run-results-chart-caption">
                     {selected ? `The ${selected.label.toLowerCase()} frame, full resolution, one page at a time.` : ''}
-                    {' '}Marked points ({markerLabel.toLowerCase()}) are cells that differ from the frame before this one, where there is one to compare against.
+                    {' '}
+                    {isImputedStage
+                      ? selected?.id === 'imputed_final'
+                        ? 'The stitched, gap-free timeline: both splits in one series ordered by time. It drops the is_gap flag, so imputed rows cannot be marked here — pick a split to see them.'
+                        : `Marked points (${markerLabel.toLowerCase()}) are rows the regularizer synthesised and the imputer filled, per the frame's own is_gap flag; the rest are observations.`
+                      : `Marked points (${markerLabel.toLowerCase()}) are cells that differ from the frame before this one, where there is one to compare against.`}
                   </p>
                   <SeriesChart
                     points={series.points}
@@ -1366,11 +1288,19 @@ export default function RunResults({ dagId, runId }: Props) {
                     onHoverXChange={setHoverX}
                   />
                   {/* One paragraph, always rendered, combining whichever of the
-                      three notes apply — matches the imputed chart's single
-                      bottom caption rather than stacking a variable number of
-                      blocks that would push the two cards out of alignment. */}
+                      notes apply, so the card keeps its height across stages. */}
                   <p className="text-muted small mb-0 mt-2 run-results-chart-caption">
-                    {!baseline && (
+                    {isImputedStage && (
+                      <>
+                        {series.points.some(p => p.changed)
+                          ? `${series.points.filter(p => p.changed).length.toLocaleString()} of the ${series.points.length.toLocaleString()} rows on this page were imputed. `
+                          : ''}
+                        {column && plottedColumn !== column
+                          ? `Plotted as ${plottedColumn} — the bundle converted the units, so this frame's y scale is its own and not comparable to the remediated one's. `
+                          : ''}
+                      </>
+                    )}
+                    {!baseline && !isImputedStage && (
                       selected?.id === 'raw'
                         ? 'The raw frame is what arrived over EDC — there is no earlier stage to compare it against, so every point is shown as observed. '
                         : selected?.id === 'soft' && frames.stages.raw
@@ -1412,188 +1342,89 @@ export default function RunResults({ dagId, runId }: Props) {
               )}
             </div>
           </section>
-          </div>
+        </>
+      )}
 
-          {imputedChart && imputedChart.series.length > 0 && (
-            <div className="col-xl-6">
-              <section className="card h-100">
-                <div className="card-body">
-                  <div className="run-results-chart-header">
-                    <h2 className="h6 mb-0">Imputed timeline</h2>
-                    <div className="btn-group btn-group-sm" role="group" aria-label="Series shown">
-                      <button
-                        type="button"
-                        className={`btn btn-outline-secondary${imputedView === 'full' ? ' active' : ''}`}
-                        onClick={() => setHiddenSeries(IMPUTED_VIEW_FULL)}
-                      >
-                        Full timeline
-                      </button>
-                      <button
-                        type="button"
-                        className={`btn btn-outline-secondary${imputedView === 'splits' ? ' active' : ''}`}
-                        onClick={() => setHiddenSeries(IMPUTED_VIEW_SPLITS)}
-                      >
-                        Train / test splits
-                      </button>
-                    </div>
-                    {imputedChart.columns.length > 1 && (
-                      <label className="run-results-column-picker">
-                        <span className="text-muted small">Column</span>
-                        <select
-                          className="form-select form-select-sm"
-                          value={imputedChart.column}
-                          onChange={e => setColumn(e.target.value)}
-                        >
-                          {imputedChart.columns.map(c => <option key={c} value={c}>{c}</option>)}
-                        </select>
-                      </label>
-                    )}
-                  </div>
-                  {/* Same pageReady gate as the stage chart, so the two charts
-                      never show one painted and the other still streaming —
-                      they wait on the same underlying flag and flip together. */}
-                  {pageReady ? (
-                    <>
-                      <p className="text-muted small run-results-chart-caption">
-                        The stitched timeline with the two splits it was built from: they
-                        tile it rather than repeating it, so each covers a stretch of the
-                        whole.{' '}
-                        {imputedChart.column === plottedColumn
-                          ? 'Both charts are on the same axes, so the two sides can be read straight across.'
-                          : <>The x axis matches the chart on the left, but the y axis
-                              cannot: this frame reports <code>{imputedChart.column}</code>{' '}
-                              where that one reports <code>{plottedColumn}</code>, and the
-                              bundle converted the units.</>}
-                      </p>
-                      <SeriesChart
-                        points={imputedChart.series[0].points}
-                        primaryKey={imputedChart.series[0].key}
-                        primaryLabel={imputedChart.series[0].label}
-                        overlays={imputedChart.series.slice(1)}
-                        hidden={hiddenSeries}
-                        onToggle={toggleSeries}
-                        counts={Object.fromEntries(
-                          imputedChart.series.map(s => [s.key, { shown: s.shown, total: s.total }]),
-                        )}
-                        label={imputedChart.column}
-                        formatX={imputedChart.isTime ? formatX : (x: number) => `#${x}`}
-                        yDomain={yDomainFor(imputedChart.column)}
-                        xDomain={pagedXDomain}
-                        range={zoom}
-                        onRangeChange={setZoom}
-                        hoverX={hoverX}
-                        onHoverXChange={setHoverX}
-                      />
-                      {/* Always rendered — matches the stage chart's bottom
-                          caption, which is also a single always-present slot —
-                          so the two cards end at the same height whether or not
-                          this run's bundle has anything to report here. */}
-                      <p className="text-muted small mb-0 mt-2 run-results-chart-caption">
-                        {imputedChart.gapCount > 0 && (
-                          <>
-                            {imputedChart.gapCount.toLocaleString()} rows across the two
-                            splits were synthesised by regularization and filled by
-                            imputation; the rest are observations. The count comes from the
-                            splits because the stitched timeline drops the{' '}
-                            <code>is_gap</code> flag that carries it — worth knowing if you
-                            download the full frame on its own.
-                          </>
-                        )}
-                      </p>
-                    </>
-                  ) : (
-                    <div className="run-results-chart-loading">
-                      <LoadingSpinner />
-                    </div>
-                  )}
-                </div>
-              </section>
-            </div>
-          )}
-
-          <div className="col-12">
-          <section className="card">
-            <div className="card-body">
-              <h2 className="h6">Artifacts</h2>
-              {data.dataset_id && (
-                <p className="small text-muted mb-3 d-flex flex-wrap align-items-center gap-1">
-                  {/* Name leads, the UUID that identifies it in the catalogue
-                      trails as a copyable aside — matches how DatasetList
-                      names a row and keeps the id only as supporting detail. */}
-                  <span>Dataset</span>
+      {tab === 'artifacts' && (
+      <section className="card">
+        <div className="card-body">
+          <h2 className="h6">Published artifacts</h2>
+          {data.dataset_id && (
+            <p className="small text-muted mb-3 d-flex flex-wrap align-items-center gap-1">
+              {/* Name leads, the UUID that identifies it in the catalogue
+                  trails as a copyable aside — matches how DatasetList
+                  names a row and keeps the id only as supporting detail. */}
+              <span>Dataset</span>
+              {catalogueDatasetUrl(data.dataset_id) ? (
+                <a
+                  href={catalogueDatasetUrl(data.dataset_id)!}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="View in catalogue"
+                >
+                  {catalogueNames.dataset ?? data.dataset_id} <FiExternalLink aria-hidden="true" />
+                </a>
+              ) : (
+                <strong>{catalogueNames.dataset ?? data.dataset_id}</strong>
+              )}
+              <CopyableId value={data.dataset_id} maxWidth={340} />
+              {data.asset_id && (
+                <>
+                  <span>· distribution</span>
+                  {/* piveau has no distribution-specific page — a
+                      distribution is shown inline on its dataset's page —
+                      so this points at the same catalogue URL as above. */}
                   {catalogueDatasetUrl(data.dataset_id) ? (
                     <a
                       href={catalogueDatasetUrl(data.dataset_id)!}
                       target="_blank"
                       rel="noreferrer"
-                      title="View in catalogue"
+                      title="View dataset in catalogue"
                     >
-                      {catalogueNames.dataset ?? data.dataset_id} <FiExternalLink aria-hidden="true" />
+                      {catalogueNames.asset ?? data.asset_id} <FiExternalLink aria-hidden="true" />
                     </a>
                   ) : (
-                    <strong>{catalogueNames.dataset ?? data.dataset_id}</strong>
+                    <strong>{catalogueNames.asset ?? data.asset_id}</strong>
                   )}
-                  <CopyableId value={data.dataset_id} maxWidth={340} />
-                  {data.asset_id && (
-                    <>
-                      <span>· distribution</span>
-                      {/* piveau has no distribution-specific page — a
-                          distribution is shown inline on its dataset's page —
-                          so this points at the same catalogue URL as above. */}
-                      {catalogueDatasetUrl(data.dataset_id) ? (
-                        <a
-                          href={catalogueDatasetUrl(data.dataset_id)!}
-                          target="_blank"
-                          rel="noreferrer"
-                          title="View dataset in catalogue"
-                        >
-                          {catalogueNames.asset ?? data.asset_id} <FiExternalLink aria-hidden="true" />
-                        </a>
-                      ) : (
-                        <strong>{catalogueNames.asset ?? data.asset_id}</strong>
-                      )}
-                      <CopyableId value={data.asset_id} maxWidth={340} />
-                    </>
-                  )}
-                </p>
+                  <CopyableId value={data.asset_id} maxWidth={340} />
+                </>
               )}
-              <ul className="run-results-artifacts">
-                {data.artifacts.slice().sort(byProvenance).map(a => (
-                  <li key={a.name}>
-                    {/* The object key is not shown: a long bucket path that
-                        wraps over several lines and says nothing about which of
-                        five near-identical CSVs this is. The download still
-                        uses it, and it stays in the run's XCom for anyone who
-                        needs the exact object. */}
-                    {/* Not btn-link btn-sm: those pin a smaller font that the
-                        view's own type scale cannot override, which is what
-                        made this list the smallest text on the page. */}
-                    <button
-                      type="button"
-                      className="run-results-artifact"
-                      onClick={() => download(a.name, a.key)}
-                    >
-                      <FiDownload className="run-results-artifact-icon" aria-hidden="true" />
-                      <span className="run-results-artifact-label">
-                        {ARTIFACTS[a.name]?.label ?? a.name}
-                        {ARTIFACTS[a.name]?.derivedFrom && (
-                          <span className="run-results-artifact-from">
-                            from {ARTIFACTS[a.name].derivedFrom}
-                          </span>
-                        )}
+            </p>
+          )}
+          <ul className="run-results-artifacts">
+            {data.artifacts.slice().sort(byProvenance).map(a => (
+              <li key={a.name}>
+                {/* The object key is not shown: a long bucket path that
+                    wraps over several lines and says nothing about which of
+                    five near-identical CSVs this is. The download still
+                    uses it, and it stays in the run's XCom for anyone who
+                    needs the exact object. */}
+                {/* Not btn-link btn-sm: those pin a smaller font that the
+                    view's own type scale cannot override, which is what
+                    made this list the smallest text on the page. */}
+                <button
+                  type="button"
+                  className="run-results-artifact"
+                  onClick={() => download(a.name, a.key)}
+                >
+                  <FiDownload className="run-results-artifact-icon" aria-hidden="true" />
+                  <span className="run-results-artifact-label">
+                    {ARTIFACTS[a.name]?.label ?? a.name}
+                    {ARTIFACTS[a.name]?.derivedFrom && (
+                      <span className="run-results-artifact-from">
+                        from {ARTIFACTS[a.name].derivedFrom}
                       </span>
-                      {ARTIFACTS[a.name] && (
-                        <span className="run-results-artifact-note">{ARTIFACTS[a.name].note}</span>
-                      )}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </section>
-          </div>
+                    )}
+                  </span>
+                  {ARTIFACTS[a.name] && (
+                    <span className="run-results-artifact-note">{ARTIFACTS[a.name].note}</span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
-        </>
+      </section>
       )}
 
       {tab === 'config' && (

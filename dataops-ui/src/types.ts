@@ -15,6 +15,9 @@ export type View =
   | 'dataset-creator'
   | 'services'
   | 'run-results'
+  | 'testbeds'
+  | 'testbed-register'
+  | 'testbed-detail'
 
 export interface NavParams {
   dagId?: string
@@ -667,4 +670,55 @@ export interface SeriesPoint {
    * run can legitimately have zero filled cells and still have changed points.
    */
   changed: boolean
+}
+
+// ── Testbeds (registry) ──────────────────────────────────────────────────────
+export interface TestbedStep {
+  status: 'ok' | 'failed' | 'skipped'
+  detail: string
+  at: string
+}
+
+export interface Testbed {
+  slug: string
+  name: string
+  organisation: string | null
+  contact_email: string | null
+  participant_id: string
+  ids_id: string
+  experiment_prefix: string
+  bucket: string
+  catalogue_id: string
+  dsp_url: string
+  produced_by_iri: string | null
+  status: 'draft' | 'provisioned' | string
+  steps: Record<string, TestbedStep>
+  has_credentials: boolean
+  created_at: string
+  updated_at: string
+  created_by: string | null
+}
+
+export interface TestbedCreateRequest {
+  slug: string
+  name: string
+  organisation?: string
+  contact_email?: string
+  produced_by_iri?: string
+  participant_id?: string
+  experiment_prefix?: string
+  bucket?: string
+  dsp_url?: string
+}
+
+export interface TestbedProvisionResponse {
+  testbed: Testbed
+  followups: string[]
+}
+
+export interface TestbedAuditEntry {
+  ts: string
+  actor: string | null
+  action: string
+  detail: string | null
 }

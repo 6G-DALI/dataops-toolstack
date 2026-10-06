@@ -45,6 +45,7 @@ tmp=$(mktemp)
 for pair in \
   'orchestratorUrl:VITE_ORCHESTRATOR_URL' \
   'catalogueBaseUrl:VITE_CATALOGUE_BASE_URL' \
+  'descriptorUrl:VITE_DESCRIPTOR_URL' \
   'portalUrl:VITE_PORTAL_URL' \
   'daliUrl:VITE_DALI_URL' \
   'dataspaceUrl:VITE_DATASPACE_URL' \

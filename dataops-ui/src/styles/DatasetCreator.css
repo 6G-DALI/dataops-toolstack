@@ -338,3 +338,117 @@
   background: var(--dali-navy);
   color: #fff;
 }
+
+/* Colour tokens: despite the name, --dali-navy is remapped by
+   @6g-dali/ui-theme's tokens.css to --bg-surface (a *surface* colour, not a
+   text colour) so every existing card/header background stays theme-aware —
+   it's white in light mode and a dark panel colour in dark mode. Using it for
+   `color` (as an earlier pass here did) produced invisible/white text and
+   ignored the dark theme entirely. Text must use --dali-text / --dali-muted,
+   which are properly bridged to --text-primary / --text-secondary and flip
+   with the theme. */
+.entry-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Deliberately not btn-outline-primary: Bootstrap's outline hover inverts to a
+   solid background with white text, which washed out the muted description.
+   Owning the palette here keeps every piece legible in both states instead of
+   fighting Bootstrap's cascade. */
+.entry-row {
+  border: 1px solid var(--dali-gray);
+  border-radius: 8px;
+  background: var(--dali-navy);
+  transition: border-color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+}
+
+.entry-row-header {
+  /* A plain button reset, not the global .btn class (Button.css) — that
+     class's fixed small padding/font-size was designed for inline actions,
+     not a full-width row header sized to match the icon/description below. */
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  padding: 20px 24px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  color: var(--dali-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+/* The active Zenodo/MRS row, expanded to hold its identifier field below —
+   kept visually "open" so the field reads as living inside this row rather
+   than as a separate panel elsewhere on the page. */
+.entry-row-selected {
+  border-color: var(--dali-blue);
+  background: rgba(var(--accent-cyan-rgb), 0.08);
+  box-shadow: 0 0 0 2px var(--dali-blue);
+}
+
+/* The rows not in use while a Zenodo/MRS field is open — dimmed to point at
+   the expanded row, but still a live button: clicking one switches source
+   directly (handleChooseEntry resets the identifier field), so this is a
+   visual cue only, never `disabled`. Brightens back up on hover/focus so it's
+   clear the click still lands. */
+.entry-row-dimmed {
+  opacity: 0.5;
+}
+
+.entry-row-dimmed:hover,
+.entry-row-dimmed:focus-visible {
+  opacity: 1;
+}
+
+.entry-row-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(var(--accent-cyan-rgb), 0.14);
+  color: var(--dali-blue);
+  font-size: 32px;
+}
+
+.entry-row-text {
+  min-width: 0;
+}
+
+.entry-row-title {
+  font-size: 1.1rem;
+  color: var(--dali-text);
+}
+
+.entry-row-description {
+  font-size: 0.9rem;
+  color: var(--dali-muted);
+}
+
+/* The identifier field, living inside the selected row rather than in a
+   separate card below it — a top border stands in for the row's own header
+   boundary since both pieces share the same box now. */
+.entry-row-body {
+  padding: 0 24px 20px calc(24px + 64px + 20px);
+}
+
+@media (max-width: 576px) {
+  .entry-row-header {
+    gap: 14px;
+    padding: 16px;
+  }
+  .entry-row-icon {
+    width: 48px;
+    height: 48px;
+    font-size: 24px;
+  }
+  .entry-row-body {
+    padding: 0 16px 16px;
+  }
+}

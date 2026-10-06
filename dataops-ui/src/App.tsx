@@ -13,6 +13,9 @@ import DatasetCreator from './components/DatasetCreator'
 import ServiceList from './components/ServiceList'
 import TaskCreator from './components/TaskCreator'
 import HomePage from './components/HomePage'
+import TestbedList from './components/TestbedList'
+import TestbedRegister from './components/TestbedRegister'
+import TestbedDetail from './components/TestbedDetail'
 import type { NavParams, View } from './types'
 import './styles/App.css'
 
@@ -107,6 +110,16 @@ export default function App() {
       )}
       {view === 'services' && (
         <ServiceList />
+      )}
+      {view === 'testbeds' && (
+        <TestbedList onNavigate={navigate} />
+      )}
+      {view === 'testbed-register' && (
+        <TestbedRegister onNavigate={navigate} />
+      )}
+      {/* The testbed slug travels in the dagId slot of the hash, like the task id does for task-creator. */}
+      {view === 'testbed-detail' && dagId && (
+        <TestbedDetail slug={dagId} onNavigate={navigate} />
       )}
     </Layout>
   )

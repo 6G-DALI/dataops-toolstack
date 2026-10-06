@@ -102,34 +102,16 @@
   flex-shrink: 0;
 }
 
-/* The results panel is the page's main content, not an aside: it gets the
-   remaining width and scrolls itself, so the task list stays put beside it. */
-.timeline-results-panel {
-  flex: 1;
-  min-width: 0;
-  position: sticky;
-  top: 16px;
-  max-height: calc(100vh - 113px - 32px);
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-/* Below the split's comfortable width the two stack, results first — the
-   outcome is what a run is opened for. */
+/* Below the split's comfortable width the list and the log stack, the log
+   first — it is what selecting a task asked for. */
 @media (max-width: 992px) {
   .timeline-layout--split {
     flex-direction: column-reverse;
   }
 
-  .timeline-layout--split .timeline-column,
-  .timeline-results-panel {
+  .timeline-layout--split .timeline-column {
     max-width: none;
     width: 100%;
-  }
-
-  .timeline-results-panel {
-    position: static;
-    max-height: none;
   }
 }
 
