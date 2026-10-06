@@ -15,6 +15,7 @@ from dali.utils import (
     DATAOPS_S3_CONN_ID,
     DATASPACE_S3_CONN_ID,
     EDC_CONSUMER_URL,
+    EDC_MANAGEMENT_HEADERS,
     EDC_PROVIDER_PROTOCOL_URL,
 )
 
@@ -198,6 +199,7 @@ def download_dataset_edc() -> dict:
     print(f"[edc] requesting offer for asset '{asset_id}' from {provider_url}")
     cat_resp = requests.post(
         f"{mgmt}/catalog/request",
+        headers=EDC_MANAGEMENT_HEADERS,
         json={
             "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
             "counterPartyAddress": f"{provider_url}/protocol",
@@ -238,6 +240,7 @@ def download_dataset_edc() -> dict:
     provider_id = params.get("provider_id", "daliprovider")
     neg_resp = requests.post(
         f"{mgmt}/contractnegotiations",
+        headers=EDC_MANAGEMENT_HEADERS,
         json={
             "@context": {
                 "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
@@ -267,7 +270,7 @@ def download_dataset_edc() -> dict:
     agreement_id = None
     deadline = time.time() + EDC_POLL_TIMEOUT
     while time.time() < deadline:
-        state_resp = requests.get(f"{mgmt}/contractnegotiations/{neg_id}", timeout=10)
+        state_resp = requests.get(f"{mgmt}/contractnegotiations/{neg_id}", headers=EDC_MANAGEMENT_HEADERS, timeout=10)
         state_resp.raise_for_status()
         state = state_resp.json()
         neg_state = state.get("state", state.get("edc:state", ""))
@@ -302,6 +305,7 @@ def download_dataset_edc() -> dict:
     # ── 5. Initiate data transfer — provider PUTs to our presigned URL ────────
     xfer_resp = requests.post(
         f"{mgmt}/transferprocesses",
+        headers=EDC_MANAGEMENT_HEADERS,
         json={
             "@context":            {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
             "@type":               "TransferRequest",
@@ -326,7 +330,7 @@ def download_dataset_edc() -> dict:
     # ── 6. Poll until transfer is COMPLETED ──────────────────────────────────
     deadline = time.time() + EDC_POLL_TIMEOUT
     while time.time() < deadline:
-        xstate_resp = requests.get(f"{mgmt}/transferprocesses/{xfer_id}", timeout=10)
+        xstate_resp = requests.get(f"{mgmt}/transferprocesses/{xfer_id}", headers=EDC_MANAGEMENT_HEADERS, timeout=10)
         xstate_resp.raise_for_status()
         xfer_state = xstate_resp.json().get("state", xstate_resp.json().get("edc:state", ""))
         print(f"[edc] transfer state: {xfer_state}")
