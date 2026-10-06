@@ -34,6 +34,8 @@ from typing import Any
 from airflow.decorators import task
 from airflow.sdk import get_current_context
 
+from dali.utils import sanitize
+
 # Defaults mirroring WaveStitchPlus/config/dataops.yaml's `validation:` block,
 # used when a run passes no validation config of its own. Kept here rather than
 # read from that YAML because the file is a local-CLI convenience — a DAG run
@@ -505,12 +507,14 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
     for name, path in produced.items():
         print(f"[dataops] {name}: {path} ({os.path.getsize(path)} bytes)")
 
-    return {
+    # The report carries NaN cells (e.g. the profile's row preview). They are not valid JSON,
+    # and the XCom push of this return value fails on them, so replace them with None.
+    return sanitize({
         "workdir":   str(workdir),
         "artifacts": produced,
         "report":    report,
         "error":     pipeline_error,
-    }
+    })
 
 
 @task
