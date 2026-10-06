@@ -3,6 +3,7 @@ import os
 import sys
 import zipfile
 
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -107,3 +108,77 @@ def test_policy_is_scoped_to_bucket():
     doc = datalake_admin.policy_document("6g-dali-kul")
     resources = [r for s in doc["Statement"] for r in s["Resource"]]
     assert resources == ["arn:aws:s3:::6g-dali-kul", "arn:aws:s3:::6g-dali-kul/*"]
+
+
+# --- asset discovery ------------------------------------------------------------
+
+CATALOG_ONE = {
+    "@type": "dcat:Catalog",
+    "dcat:dataset": {
+        "@id": "kul-experiments-1", "@type": "dcat:Dataset", "name": "KUL experiments",
+        "odrl:hasPolicy": {"@id": "Y29udHJhY3Q=:a3VsLWV4cA==:abc", "@type": "odrl:Offer"},
+    },
+}
+CATALOG_MANY = {
+    "dcat:dataset": [
+        {"@id": "a1", "odrl:hasPolicy": [{"@id": "offer-a1"}]},
+        {"@id": "a2", "edc:name": "Second", "odrl:hasPolicy": {"@id": "offer-a2"}},
+    ],
+}
+
+
+def test_parse_catalog_shapes():
+    import edc_consumer_client as ec
+    assert ec.parse_catalog(CATALOG_ONE) == [
+        {"asset_id": "kul-experiments-1", "title": "KUL experiments", "offer_id": "Y29udHJhY3Q=:a3VsLWV4cA==:abc"}]
+    assert [a["asset_id"] for a in ec.parse_catalog(CATALOG_MANY)] == ["a1", "a2"]
+    assert ec.parse_catalog(CATALOG_MANY)[1]["title"] == "Second"
+    assert ec.parse_catalog({"@type": "dcat:Catalog"}) == []  # nothing offered
+
+
+def test_discover_stores_assets_and_records_connector(client, monkeypatch):
+    import edc_consumer_client as ec
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+    monkeypatch.setattr(ec, "fetch_catalog", lambda url, pid: ec.parse_catalog(CATALOG_ONE))
+    r = client.post("/testbeds/kul/assets/discover").json()
+    assert r["offered"] == 1 and r["assets"][0]["asset_id"] == "kul-experiments-1"
+    assert r["assets"][0]["status"] == "discovered" and r["assets"][0]["present"] is True
+    assert client.get("/testbeds/kul").json()["steps"]["connector"]["status"] == "ok"
+
+    # rediscovery keeps negotiation state, and flags assets that are no longer offered
+    with testbed_store._db() as c:
+        c.execute("UPDATE testbed_assets SET status='agreed', contract_agreement_id='ag-1' WHERE slug='kul'")
+    monkeypatch.setattr(ec, "fetch_catalog", lambda url, pid: ec.parse_catalog(CATALOG_MANY))
+    assets = {a["asset_id"]: a for a in client.post("/testbeds/kul/assets/discover").json()["assets"]}
+    assert assets["kul-experiments-1"]["status"] == "agreed" and assets["kul-experiments-1"]["present"] is False
+    assert assets["kul-experiments-1"]["contract_agreement_id"] == "ag-1"
+    assert assets["a1"]["present"] is True and len(client.get("/testbeds/kul/assets").json()["assets"]) == 3
+
+
+def test_discover_failure_is_recorded(client, monkeypatch):
+    import edc_consumer_client as ec
+    from fastapi import HTTPException
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+
+    def down(url, pid):
+        raise HTTPException(status_code=502, detail="connection refused")
+    monkeypatch.setattr(ec, "fetch_catalog", down)
+    r = client.post("/testbeds/kul/assets/discover")
+    assert r.status_code == 502
+    step = client.get("/testbeds/kul").json()["steps"]["connector"]
+    assert step["status"] == "failed" and "refused" in step["detail"]
+
+
+def test_fetch_catalog_request_shape(monkeypatch):
+    import edc_consumer_client as ec
+    seen = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        seen.update(url=url, body=json, headers=headers)
+        return httpx.Response(200, json=CATALOG_ONE)
+    monkeypatch.setattr(ec, "EDC_PROVIDER_MANAGEMENT_URL", "https://edc.example/management")
+    monkeypatch.setattr(ec, "EDC_API_KEY", "k")
+    monkeypatch.setattr(ec.httpx, "post", fake_post)
+    assert ec.fetch_catalog("https://edc.kul/protocol", "provider-kul")[0]["asset_id"] == "kul-experiments-1"
+    assert seen["url"] == "https://edc.example/management/v3/catalog/request" and seen["headers"] == {"X-Api-Key": "k"}
+    assert seen["body"]["counterPartyAddress"] == "https://edc.kul/protocol" and seen["body"]["@type"] == "CatalogRequest"
