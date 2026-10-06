@@ -38,7 +38,7 @@ EDC_MANAGEMENT_HEADERS = {EDC_API_KEY_HEADER: EDC_API_KEY} if EDC_API_KEY else {
 
 print(f"EDC_API_KEY: {EDC_API_KEY}")
 
-PIVEAU_DATASETS_URL = "https://dspace.sparkworks.net/datasets"
+PIVEAU_DATASETS_URL = os.getenv("PIVEAU_DATASETS_URL", "https://dataspace.6gdali.eu/datasets").rstrip("/")
 DALI_NS             = "https://dali-project.eu/ns#"
 
 
