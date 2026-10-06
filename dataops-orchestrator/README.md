@@ -52,5 +52,6 @@ bundle. They answer 503 until the variables below are set.
 | `TESTBED_BUCKET_PREFIX` | `6g-dali-` | Default bucket / catalogue / experiment prefix is `<prefix><slug>` |
 | `TESTBED_DOMAIN_SUFFIX` | `6gdali.eu` | Default DSP URL is `https://edc.<slug>.<suffix>/protocol` |
 | `CENTRAL_CONNECTOR_URL` | `https://edc.dataspace.6gdali.eu` | Written into generated connector properties |
+| `DATALAKE_PUBLIC_ENDPOINT_URL` | `DATASPACE_S3_ENDPOINT_URL` | Data lake address written into a transfer's destination. Used by the *testbed's* data plane, so it must be reachable from the testbeds |
 
 Tests: `pip install pytest && python -m pytest tests`.

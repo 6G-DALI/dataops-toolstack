@@ -76,6 +76,7 @@ _DDL = (
         slug TEXT NOT NULL, asset_id TEXT NOT NULL, title TEXT, offer_id TEXT,
         status TEXT NOT NULL DEFAULT 'discovered', present INTEGER NOT NULL DEFAULT 1,
         contract_agreement_id TEXT, transfer_id TEXT, transfer_state TEXT, transfer_checked_at TEXT,
+        negotiation_id TEXT, negotiation_state TEXT,
         discovered_at TEXT, last_seen_at TEXT, PRIMARY KEY (slug, asset_id))""",
     """CREATE TABLE IF NOT EXISTS testbed_audit (
         id {id_type}, ts TEXT NOT NULL, slug TEXT NOT NULL,
@@ -100,7 +101,7 @@ class _Conn:
         return self.raw.execute(sql.replace("?", "%s") if _PG else sql, params)
 
 
-_NEW_ASSET_COLUMNS = ("transfer_state", "transfer_checked_at")
+_NEW_ASSET_COLUMNS = ("transfer_state", "transfer_checked_at", "negotiation_id", "negotiation_state")
 
 
 def _migrate(conn: "_Conn") -> None:
@@ -201,6 +202,26 @@ def list_assets(slug: str) -> list[dict]:
     with _db() as c:
         rows = c.execute("SELECT * FROM testbed_assets WHERE slug=? ORDER BY asset_id", (slug,)).fetchall()
     return [{**{k: r[k] for k in r.keys()}, "present": bool(r["present"])} for r in rows]
+
+
+def record_contract(slug: str, asset_id: str, negotiation_id: str | None, negotiation_state: str | None,
+                    agreement_id: str | None) -> dict | None:
+    """Remember the negotiation (and the agreement it produced) for an asset. An agreement moves a
+    'discovered' or 'negotiating' asset to 'agreed'; an unfinished negotiation to 'negotiating'."""
+    with _db() as c:
+        c.execute(
+            """UPDATE testbed_assets SET negotiation_id=COALESCE(?, negotiation_id),
+               negotiation_state=COALESCE(?, negotiation_state),
+               contract_agreement_id=COALESCE(NULLIF(?, ''), contract_agreement_id),
+               status=CASE
+                 WHEN NULLIF(?, '') IS NOT NULL AND status IN ('discovered', 'negotiating') THEN 'agreed'
+                 WHEN NULLIF(?, '') IS NULL AND CAST(? AS TEXT) IS NOT NULL AND status = 'discovered' THEN 'negotiating'
+                 ELSE status END
+               WHERE slug=? AND asset_id=?""",
+            (negotiation_id, negotiation_state, agreement_id or "", agreement_id or "", agreement_id or "",
+             negotiation_state, slug, asset_id),
+        )
+    return next((a for a in list_assets(slug) if a["asset_id"] == asset_id), None)
 
 
 def record_transfer(slug: str, asset_id: str, transfer: dict | None) -> dict | None:

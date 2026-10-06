@@ -7,6 +7,8 @@ central connector (EDC_PROVIDER_MANAGEMENT_URL / EDC_API_KEY, the same connector
 edc_client.py registers assets on; it acts as consumer for other participants).
 """
 
+import time
+
 import httpx
 from fastapi import HTTPException
 
@@ -146,3 +148,134 @@ def find_transfers(asset_id: str, dsp_url: str) -> list[dict]:
         return parse_transfers(r.json(), dsp_url)
     except ValueError:
         raise HTTPException(status_code=502, detail=f"Central connector answered with non-JSON: {r.text[:200]}")
+
+
+# --- contract agreements and negotiations -----------------------------------------------------
+
+NEGOTIATION_DONE = {"FINALIZED"}
+NEGOTIATION_FAILED = {"TERMINATED", "TERMINATING"}
+
+
+def _mgmt(path: str) -> str:
+    if not EDC_PROVIDER_MANAGEMENT_URL:
+        raise HTTPException(status_code=503, detail="EDC_PROVIDER_MANAGEMENT_URL not configured")
+    return f"{EDC_PROVIDER_MANAGEMENT_URL.rstrip('/')}{path}"
+
+
+def _headers() -> dict:
+    return {"X-Api-Key": EDC_API_KEY} if EDC_API_KEY else {}
+
+
+def _call(method: str, path: str, body: dict | None = None, what: str = "request"):
+    try:
+        r = httpx.request(method, _mgmt(path), json=body, headers=_headers(), timeout=30)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach the central connector: {e}")
+    if r.status_code not in (200, 201):
+        raise HTTPException(status_code=502, detail=f"{what} failed: {r.status_code} {r.text[:300]}")
+    try:
+        return r.json()
+    except ValueError:
+        raise HTTPException(status_code=502, detail=f"{what}: central connector answered with non-JSON: {r.text[:200]}")
+
+
+def parse_agreements(items, provider_id: str | None = None) -> list[dict]:
+    """Contract agreements, newest first. With `provider_id`, agreements with another provider are dropped."""
+    out = []
+    for a in _as_list(items):
+        provider = _scalar(a.get("providerId") or a.get("edc:providerId"))
+        if provider_id and provider and provider != provider_id:
+            continue
+        signed = a.get("contractSigningDate") or a.get("edc:contractSigningDate") or 0
+        out.append({
+            "agreement_id": a.get("@id") or _scalar(a.get("id")),
+            "provider_id": provider,
+            "signing_date": int(signed) if str(signed).isdigit() else 0,
+        })
+    return sorted(out, key=lambda x: x["signing_date"], reverse=True)
+
+
+def find_agreements(asset_id: str, provider_id: str) -> list[dict]:
+    body = {"@context": _CONTEXT, "@type": "QuerySpec", "limit": 100,
+            "filterExpression": [{"operandLeft": "assetId", "operator": "=", "operandRight": asset_id}]}
+    return parse_agreements(_call("POST", "/v3/contractagreements/request", body, "Agreement query"), provider_id)
+
+
+def _negotiation_summary(n: dict) -> dict:
+    return {
+        "negotiation_id": n.get("@id") or _scalar(n.get("id")),
+        "state": _scalar(n.get("state") or n.get("edc:state")),
+        "agreement_id": _scalar(n.get("contractAgreementId") or n.get("edc:contractAgreementId")) or None,
+    }
+
+
+def get_negotiation(negotiation_id: str) -> dict:
+    return _negotiation_summary(_call("GET", f"/v3/contractnegotiations/{negotiation_id}", what="Negotiation lookup"))
+
+
+def get_agreement_negotiation(agreement_id: str) -> dict | None:
+    """The negotiation that produced an agreement; None when the connector no longer knows it."""
+    try:
+        return _negotiation_summary(_call("GET", f"/v3/contractagreements/{agreement_id}/negotiation",
+                                          what="Agreement negotiation lookup"))
+    except HTTPException:
+        return None
+
+
+def start_negotiation(dsp_url: str, provider_id: str, asset_id: str, offer_id: str) -> str:
+    """Ask for a contract on an offer found in the testbed's catalogue. Returns the negotiation id."""
+    body = {
+        "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/", "odrl": "http://www.w3.org/ns/odrl/2/"},
+        "@type": "ContractRequest",
+        "counterPartyAddress": dsp_url,
+        "providerId": provider_id,
+        "protocol": "dataspace-protocol-http",
+        "policy": {
+            "@id": offer_id,
+            "@type": "http://www.w3.org/ns/odrl/2/Offer",
+            "odrl:permission": [], "odrl:prohibition": [], "odrl:obligation": [],
+            "odrl:target": {"@id": asset_id},
+            "odrl:assigner": {"@id": provider_id},
+        },
+    }
+    result = _call("POST", "/v3/contractnegotiations", body, "Contract negotiation")
+    return result.get("@id") or _scalar(result.get("id"))
+
+
+def wait_negotiation(negotiation_id: str, timeout: float = 30, interval: float = 1) -> dict:
+    """Poll until the negotiation is FINALIZED or TERMINATED, or `timeout` runs out (then returns the
+    latest state, which is still in progress)."""
+    deadline = time.monotonic() + timeout
+    while True:
+        n = get_negotiation(negotiation_id)
+        if n["state"] in NEGOTIATION_DONE or n["state"] in NEGOTIATION_FAILED or time.monotonic() >= deadline:
+            return n
+        time.sleep(interval)
+
+
+def start_transfer(*, dsp_url: str, provider_id: str, asset_id: str, agreement_id: str, endpoint: str, bucket: str,
+                   access_key: str, secret_key: str, piveau_url: str, piveau_api_key: str, prefix: str = "") -> str:
+    """Start the long-lived PiveauData PUSH transfer: the testbed's data plane streams its bucket into the
+    data lake (with the testbed's scoped key) and registers the files in piveau. Returns the transfer id."""
+    body = {
+        "@context": _CONTEXT,
+        "@type": "TransferRequest",
+        "dataDestination": {
+            "type": "PiveauData", "endpoint": endpoint, "bucketName": bucket,
+            "accessKey": access_key, "secretKey": secret_key, "prefix": prefix,
+            "piveauUrl": piveau_url, "piveauApiKey": piveau_api_key,
+        },
+        "protocol": "dataspace-protocol-http",
+        "assetId": asset_id,
+        "contractId": agreement_id,
+        "connectorId": provider_id,
+        "counterPartyAddress": dsp_url,
+        "transferType": "PiveauData-PUSH",
+    }
+    result = _call("POST", "/v3/transferprocesses", body, "Transfer start")
+    return result.get("@id") or _scalar(result.get("id"))
+
+
+def get_transfer_state(transfer_id: str) -> str:
+    t = _call("GET", f"/v3/transferprocesses/{transfer_id}", what="Transfer lookup")
+    return _scalar(t.get("state") or t.get("edc:state"))

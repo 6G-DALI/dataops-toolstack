@@ -87,3 +87,9 @@ DATASPACE_S3_ADMIN_SECRET_KEY = os.getenv("DATASPACE_S3_ADMIN_SECRET_KEY", "") o
 # testbed endpoints answer 503 (they hand out credentials, so never open).
 KEYCLOAK_ISSUER = os.getenv("KEYCLOAK_ISSUER", "")
 TESTBED_ADMIN_ROLE = os.getenv("TESTBED_ADMIN_ROLE", "testbed-admin")
+
+# --- Starting transfers from the registry (routers/testbeds.py) -----------------
+# Data lake endpoint written into a transfer's destination. It is used by the *testbed connector's*
+# data plane, so it must be reachable from the testbeds (public/tailnet address), which can differ
+# from the address the orchestrator itself uses. Defaults to DATASPACE_S3_ENDPOINT_URL.
+DATALAKE_PUBLIC_ENDPOINT_URL = os.getenv("DATALAKE_PUBLIC_ENDPOINT_URL", "") or DATASPACE_S3_ENDPOINT_URL

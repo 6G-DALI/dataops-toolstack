@@ -9,6 +9,7 @@ Connecting the connector and managing its transfers/assets come in a later phase
 """
 
 import re
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -16,10 +17,11 @@ from pydantic import BaseModel, Field
 
 import datalake_admin
 import edc_consumer_client
+import piveau_dataset_client as pdc
 import piveau_catalogue_client
 import testbed_store as store
 from auth import require_testbed_admin
-from config import TESTBED_BUCKET_PREFIX, TESTBED_DOMAIN_SUFFIX
+from config import DATALAKE_PUBLIC_ENDPOINT_URL, TESTBED_BUCKET_PREFIX, TESTBED_DOMAIN_SUFFIX
 from testbed_bundle import build_bundle
 
 router = APIRouter(prefix="/testbeds", tags=["Testbeds"], dependencies=[Depends(require_testbed_admin)])
@@ -120,19 +122,126 @@ def discover_assets(slug: str, claims: dict = Depends(require_testbed_admin)):
     return {"assets": assets, "total": len(assets), "offered": len(offered)}
 
 
+def _asset(slug: str, asset_id: str) -> dict:
+    asset = next((a for a in store.list_assets(slug) if a["asset_id"] == asset_id), None)
+    if not asset:
+        raise HTTPException(status_code=404, detail=f"Asset '{asset_id}' not found for testbed '{slug}'")
+    return asset
+
+
+def _contract_info(asset: dict) -> dict | None:
+    if not (asset["contract_agreement_id"] or asset["negotiation_id"]):
+        return None
+    return {"agreement_id": asset["contract_agreement_id"], "negotiation_id": asset["negotiation_id"],
+            "negotiation_state": asset["negotiation_state"]}
+
+
 @router.post("/{slug}/assets/{asset_id}/transfers/find")
 def find_transfers(slug: str, asset_id: str, claims: dict = Depends(require_testbed_admin)):
-    """Look for transfers of this asset from the testbed's connector to our central connector, and store
-    the one worth tracking (a running transfer if there is one) on the asset."""
+    """Look on the central connector for this asset's contract and its transfers, and store what is found
+    on the asset: the agreement (and the negotiation behind it) and the transfer worth tracking (a running
+    one if there is one)."""
     tb = _get(slug)
-    if not any(a["asset_id"] == asset_id for a in store.list_assets(slug)):
-        raise HTTPException(status_code=404, detail=f"Asset '{asset_id}' not found for testbed '{slug}'")
+    asset = _asset(slug, asset_id)
+
+    agreement = negotiation = None
+    try:
+        agreements = edc_consumer_client.find_agreements(asset_id, tb["participant_id"])
+        agreement = agreements[0] if agreements else None
+        if agreement:
+            negotiation = edc_consumer_client.get_agreement_negotiation(agreement["agreement_id"])
+        elif asset["negotiation_id"]:  # a negotiation we started that has no agreement yet
+            negotiation = edc_consumer_client.get_negotiation(asset["negotiation_id"])
+    except HTTPException:
+        pass  # the contract lookup must not stop the transfer lookup
+
     transfers = edc_consumer_client.find_transfers(asset_id, tb["dsp_url"])
     chosen = edc_consumer_client.best_transfer(transfers)
+
+    agreement_id = (agreement or {}).get("agreement_id") or (chosen or {}).get("contract_id") or None
+    if negotiation or agreement_id:
+        store.record_contract(slug, asset_id, (negotiation or {}).get("negotiation_id"),
+                              (negotiation or {}).get("state"), agreement_id)
     asset = store.record_transfer(slug, asset_id, chosen)
     store.audit(slug, _actor(claims), "find-transfer",
-                f"{asset_id}: {chosen['state'] if chosen else 'no transfer'} ({len(transfers)} found)")
-    return {"asset": asset, "transfers": transfers, "active": bool(chosen and chosen["active"])}
+                f"{asset_id}: contract {agreement_id or 'none'}, transfer "
+                f"{chosen['state'] if chosen else 'none'} ({len(transfers)} found)")
+    return {"asset": asset, "transfers": transfers, "active": bool(chosen and chosen["active"]),
+            "agreement": _contract_info(asset)}
+
+
+@router.post("/{slug}/assets/{asset_id}/negotiate")
+def negotiate_asset(slug: str, asset_id: str, claims: dict = Depends(require_testbed_admin)):
+    """Negotiate a contract for the asset's offer through the central connector and store the agreement.
+
+    Waits up to ~30 s for the negotiation to finish. If it is still running after that, it stays
+    'negotiating' and "Find transfer" refreshes it later. Does nothing if the asset already has a
+    finalized agreement, and continues a negotiation already in progress instead of starting another.
+    """
+    tb = _get(slug)
+    asset = _asset(slug, asset_id)
+    if asset["contract_agreement_id"] and asset["negotiation_state"] == "FINALIZED":
+        return {"result": "already_agreed", "asset": asset, "agreement": _contract_info(asset)}
+    if not asset["present"] or not asset["offer_id"]:
+        raise HTTPException(status_code=409, detail="The testbed is not offering this asset right now. Run Find asset first.")
+
+    negotiation_id = asset["negotiation_id"]
+    if negotiation_id and asset["negotiation_state"] not in ("TERMINATED", "TERMINATING", "FINALIZED"):
+        pass  # keep waiting on the negotiation already in progress
+    else:
+        negotiation_id = edc_consumer_client.start_negotiation(
+            tb["dsp_url"], tb["participant_id"], asset_id, asset["offer_id"])
+        store.record_contract(slug, asset_id, negotiation_id, "REQUESTING", None)
+
+    outcome = edc_consumer_client.wait_negotiation(negotiation_id)
+    finalized = outcome["state"] in edc_consumer_client.NEGOTIATION_DONE
+    asset = store.record_contract(slug, asset_id, outcome["negotiation_id"] or negotiation_id, outcome["state"],
+                                  outcome["agreement_id"] if finalized else None)
+    result = "agreed" if finalized else "failed" if outcome["state"] in edc_consumer_client.NEGOTIATION_FAILED else "in_progress"
+    store.audit(slug, _actor(claims), "negotiate", f"{asset_id}: {outcome['state']}")
+    return {"result": result, "asset": asset, "agreement": _contract_info(asset)}
+
+
+@router.post("/{slug}/assets/{asset_id}/transfers/start")
+def start_asset_transfer(slug: str, asset_id: str, claims: dict = Depends(require_testbed_admin)):
+    """Start the PiveauData PUSH transfer for an asset with a finalized contract, using the testbed's own
+    scoped Data Lake key. Refuses to start a second transfer while one is running."""
+    tb = _get(slug)
+    asset = _asset(slug, asset_id)
+    creds = store.get_s3_credentials(slug)
+    if not creds:
+        raise HTTPException(status_code=409, detail="This testbed has no Data Lake key yet. Run provisioning first.")
+    if not asset["contract_agreement_id"] or asset["negotiation_state"] not in ("FINALIZED", None):
+        raise HTTPException(status_code=409, detail="No finalized contract for this asset. Negotiate a contract first.")
+    if not pdc.PIVEAU_HUB_URL or not pdc.PIVEAU_API_KEY:
+        raise HTTPException(status_code=503, detail="PIVEAU_HUB_URL or PIVEAU_API_KEY not configured")
+    if not DATALAKE_PUBLIC_ENDPOINT_URL:
+        raise HTTPException(status_code=503, detail="DATASPACE_S3_ENDPOINT_URL not configured")
+
+    running = edc_consumer_client.best_transfer(edc_consumer_client.find_transfers(asset_id, tb["dsp_url"]))
+    if running and running["active"]:
+        asset = store.record_transfer(slug, asset_id, running)
+        return {"result": "already_running", "asset": asset, "transfer_id": running["transfer_id"], "state": running["state"]}
+
+    transfer_id = edc_consumer_client.start_transfer(
+        dsp_url=tb["dsp_url"], provider_id=tb["participant_id"], asset_id=asset_id,
+        agreement_id=asset["contract_agreement_id"], endpoint=DATALAKE_PUBLIC_ENDPOINT_URL, bucket=tb["bucket"],
+        access_key=creds[0], secret_key=creds[1],
+        piveau_url=f"{pdc.PIVEAU_HUB_URL.rstrip('/')}/datasets", piveau_api_key=pdc.PIVEAU_API_KEY)
+
+    state = "REQUESTED"
+    deadline = time.monotonic() + 15  # usually STARTED within a few seconds
+    while time.monotonic() < deadline:
+        state = edc_consumer_client.get_transfer_state(transfer_id) or state
+        if state == "STARTED" or state in edc_consumer_client.ENDED_STATES:
+            break
+        time.sleep(1)
+    asset = store.record_transfer(slug, asset_id, {
+        "transfer_id": transfer_id, "state": state, "active": state == "STARTED",
+        "contract_id": asset["contract_agreement_id"]})
+    store.audit(slug, _actor(claims), "start-transfer", f"{asset_id}: {transfer_id} {state}")
+    return {"result": "started" if state == "STARTED" else "in_progress", "asset": asset,
+            "transfer_id": transfer_id, "state": state}
 
 
 @router.get("/{slug}/audit")
