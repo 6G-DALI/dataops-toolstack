@@ -107,3 +107,16 @@ def test_policy_is_scoped_to_bucket():
     doc = datalake_admin.policy_document("6g-dali-kul")
     resources = [r for s in doc["Statement"] for r in s["Resource"]]
     assert resources == ["arn:aws:s3:::6g-dali-kul", "arn:aws:s3:::6g-dali-kul/*"]
+
+
+def test_seed_existing_testbeds_is_idempotent(client):
+    import seed_testbeds
+    assert seed_testbeds.seed() == ["isi", "kul", "eur"]
+    assert seed_testbeds.seed() == []
+    listed = {tb["slug"]: tb for tb in client.get("/testbeds").json()["testbeds"]}
+    assert set(listed) == {"isi", "kul", "eur"}
+    assert listed["eur"]["participant_id"] == "provider" and listed["kul"]["status"] == "adopted"
+    assert listed["kul"]["has_credentials"] is False
+    # adopted testbeds can later be provisioned in place: bucket/catalogue exist, a scoped key is added
+    r = client.post("/testbeds/kul/provision").json()
+    assert r["testbed"]["status"] == "provisioned" and r["issued_credentials"]["access_key"] == "tb-kul-1"
