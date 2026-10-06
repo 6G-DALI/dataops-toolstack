@@ -54,3 +54,37 @@ RABBITMQ_QUEUE = os.getenv("RABBITMQ_QUEUE", "dataops.dag-triggers")
 # consumer DAG run happens to be pulling from). Registration is skipped
 # (with a log message, not an error) when left unset.
 EDC_PROVIDER_MANAGEMENT_URL = os.getenv("EDC_PROVIDER_MANAGEMENT_URL", "")
+# API key for that Management API, sent as X-Api-Key. Empty = no header.
+EDC_API_KEY = os.getenv("EDC_API_KEY", "")
+
+# --- Testbed registry (routers/testbeds.py) -----------------------------------
+# Postgres connection string for the orchestrator's own database, e.g.
+# postgresql://orchestrator:secret@orchestrator-db:5432/orchestrator. Tables are
+# created on first use.
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+# Fallback when DATABASE_URL is unset (local development, tests): a SQLite file.
+# Not for production - it is lost with the container unless on a mounted volume.
+TESTBED_DB_PATH = os.getenv("TESTBED_DB_PATH", "/srv/data/testbeds.db")
+# Master secret. Per-testbed data-lake secrets are stored encrypted with a key
+# derived from it, and bundle passwords are derived from it, so regenerating a
+# bundle gives identical values. Required: the testbed endpoints refuse to run
+# without it. Generate with: python -c "import secrets;print(secrets.token_urlsafe(48))"
+TESTBED_SECRET_KEY = os.getenv("TESTBED_SECRET_KEY", "")
+# Defaults used to derive a new testbed's identity from its slug.
+TESTBED_BUCKET_PREFIX = os.getenv("TESTBED_BUCKET_PREFIX", "6g-dali-")
+TESTBED_DOMAIN_SUFFIX = os.getenv("TESTBED_DOMAIN_SUFFIX", "6gdali.eu")
+# Public URL of the central connector, written into each generated connector
+# properties as edc.dali.connector.url.
+CENTRAL_CONNECTOR_URL = os.getenv("CENTRAL_CONNECTOR_URL", "https://edc.dataspace.6gdali.eu")
+# Data lake admin credentials: able to create buckets, users and policies.
+# MinIO only (via the `mc` client baked into the image). Falls back to the
+# regular DATASPACE_S3_* key, which works only if that key is an admin key.
+DATASPACE_S3_ADMIN_ACCESS_KEY = os.getenv("DATASPACE_S3_ADMIN_ACCESS_KEY", "") or DATASPACE_S3_ACCESS_KEY
+DATASPACE_S3_ADMIN_SECRET_KEY = os.getenv("DATASPACE_S3_ADMIN_SECRET_KEY", "") or DATASPACE_S3_SECRET_KEY
+MC_BINARY = os.getenv("MC_BINARY", "mc")
+
+# --- Keycloak token validation for the admin-only endpoints -------------------
+# e.g. https://auth.dspace.sparkworks.net/auth/realms/dspace. Unset = the
+# testbed endpoints answer 503 (they hand out credentials, so never open).
+KEYCLOAK_ISSUER = os.getenv("KEYCLOAK_ISSUER", "")
+TESTBED_ADMIN_ROLE = os.getenv("TESTBED_ADMIN_ROLE", "testbed-admin")

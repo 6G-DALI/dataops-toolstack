@@ -35,3 +35,22 @@ GET /health
 ```
 
 Returns `{"status": "ok"}` when the service is up.
+
+## Testbed registry (`/testbeds`)
+
+Admin-only endpoints (Keycloak bearer token with the `testbed-admin` realm role) that register a
+testbed, provision its bucket, scoped Data Lake key and piveau catalogue, and generate its connector
+bundle. They answer 503 until the variables below are set.
+
+| Variable | Default | Description |
+|---|---|---|
+| `TESTBED_SECRET_KEY` | (required) | Master secret: encrypts stored data-lake secrets, derives bundle passwords. Keep it stable. |
+| `KEYCLOAK_ISSUER` | (required) | e.g. `https://auth.dspace.sparkworks.net/auth/realms/dspace` |
+| `TESTBED_ADMIN_ROLE` | `testbed-admin` | Realm role allowed to use the endpoints |
+| `TESTBED_DB_PATH` | `/srv/data/testbeds.db` | SQLite registry; must be on a persistent volume |
+| `DATASPACE_S3_ADMIN_ACCESS_KEY` / `_SECRET_KEY` | `DATASPACE_S3_*` | MinIO admin key (create buckets, users, policies) |
+| `TESTBED_BUCKET_PREFIX` | `6g-dali-` | Default bucket / catalogue / experiment prefix is `<prefix><slug>` |
+| `TESTBED_DOMAIN_SUFFIX` | `6gdali.eu` | Default DSP URL is `https://edc.<slug>.<suffix>/protocol` |
+| `CENTRAL_CONNECTOR_URL` | `https://edc.dataspace.6gdali.eu` | Written into generated connector properties |
+
+Tests: `pip install pytest && python -m pytest tests`.
