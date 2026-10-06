@@ -21,23 +21,25 @@ DATASPACE_S3_CONN_ID = os.getenv("DATASPACE_S3_CONN_ID", DEFAULT_CONN_ID)
 DATAOPS_S3_CONN_ID   = os.getenv("DATAOPS_S3_CONN_ID", "dali-dataops")
 
 # EDC connector endpoints — fixed per deployment, not DAG params, so a
-# triggering user can't point a run at an arbitrary connector. Port layout
-# matches tests/edc_test_files/1-prepare-contract-cloud.py:
-#   consumer_http_management_port=18181, provider_http_management_port=20001,
-#   provider_http_protocol_port=20002.
-# Only the consumer's management port and the provider's protocol port are
-# actually used by the DataOps pipelines — the provider's management/control
-# ports, and the consumer's protocol/control ports, are the respective
-# connector operators' concern, not something these pipelines call directly.
-EDC_CONSUMER_DOMAIN          = os.getenv("EDC_CONSUMER_DOMAIN", "http://edc.6gdali.sparkworks.net")
-EDC_CONSUMER_MANAGEMENT_PORT = int(os.getenv("EDC_CONSUMER_MANAGEMENT_PORT", "20001"))
-EDC_CONSUMER_URL             = f"{EDC_CONSUMER_DOMAIN}:{EDC_CONSUMER_MANAGEMENT_PORT}"
+# triggering user can't point a run at an arbitrary connector.
+# EDC_CONSUMER_URL - the DataOps (facility) connector's base URL. Airflow itself calls its
+#   management API ({url}/management/v3). Defaults to the reverse proxy
+#   (proxy.dspace.sparkworks.net/dspace-edc -> edc.dataspace.6gdali.eu), because hosts behind the
+#   6G-DALI NAT cannot reach the public address. NOTE: the 6G-DALI proxy answers 403 for
+#   /management unless the proxy server's IP is allowed there, so this only works once it is.
+#   (Keep the proxy's own /dspace-edc/management restricted - it has no auth of its own.)
+# EDC_PROVIDER_PROTOCOL_URL - the provider connector's protocol (DSP) base URL, sent as
+#   counterPartyAddress ({url}/protocol). It is the consumer connector - not Airflow - that
+#   dials it, from its own host, so this is the connector's real public address and must NOT
+#   go through the proxy.
+EDC_CONSUMER_URL          = os.getenv("EDC_CONSUMER_URL", "https://proxy.dspace.sparkworks.net/dspace-edc").rstrip("/")
+EDC_PROVIDER_PROTOCOL_URL = os.getenv("EDC_PROVIDER_PROTOCOL_URL", "https://edc.dataspace.6gdali.eu").rstrip("/")
 
-EDC_PROVIDER_DOMAIN         = os.getenv("EDC_PROVIDER_DOMAIN", "http://edc.6gdali.sparkworks.net")
-EDC_PROVIDER_PROTOCOL_PORT  = int(os.getenv("EDC_PROVIDER_PROTOCOL_PORT", "20002"))
-EDC_PROVIDER_PROTOCOL_URL   = f"{EDC_PROVIDER_DOMAIN}:{EDC_PROVIDER_PROTOCOL_PORT}"
-
-PIVEAU_DATASETS_URL = "https://dspace.sparkworks.net/datasets"
+# piveau-hub-repo's dataset API, called by Airflow itself. Defaults to the reverse proxy
+# (proxy.dspace.sparkworks.net/dspace-repo -> dataspace.6gdali.eu), because hosts behind the
+# 6G-DALI NAT cannot reach the public address directly. Override with PIVEAU_DATASETS_URL.
+PIVEAU_DATASETS_URL = os.getenv("PIVEAU_DATASETS_URL",
+                                "https://proxy.dspace.sparkworks.net/dspace-repo/datasets").rstrip("/")
 DALI_NS             = "https://dali-project.eu/ns#"
 
 
