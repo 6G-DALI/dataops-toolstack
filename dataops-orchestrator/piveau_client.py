@@ -9,9 +9,13 @@ used by the DataOps UI's DAG trigger picker).
 """
 
 import asyncio
+import logging
 import os
 
 import httpx
+from fastapi import HTTPException
+
+log = logging.getLogger(__name__)
 
 PIVEAU_URL = os.getenv("PIVEAU_URL", "https://search.dspace.sparkworks.net")
 DSPACE_URL = os.getenv("DSPACE_URL", "https://dspace.sparkworks.net/datasets")
@@ -27,6 +31,21 @@ _CONNECTOR_TYPE   = "https://dali-project.eu/ns#connectorType"
 _VARIABLE_MEASURED = "schema:variableMeasured"
 _DCT_TITLE         = "dct:title"
 _DCT_TYPE          = "@type"
+
+
+def _search_unavailable(what: str, exc: Exception) -> HTTPException:
+    """Log a failed piveau-hub-search call and turn it into a 502.
+
+    These calls used to swallow the error and return an empty list, which made "piveau is
+    unreachable / refusing us" indistinguishable from "there is nothing in the catalogue" -
+    the UI just showed 0 catalogues and the cause only appeared as a print() that was never
+    flushed. Surfacing it as an error lets the UI show the reason, and the log has the detail.
+    """
+    log.error("[piveau] %s failed (PIVEAU_URL=%s): %r", what, PIVEAU_URL, exc)
+    return HTTPException(
+        status_code=502,
+        detail=f"Could not query piveau search at {PIVEAU_URL} ({what}): {exc!r}",
+    )
 
 
 def _title(obj: dict) -> str:
@@ -126,7 +145,7 @@ async def _fetch_dataset_detail(
         variable_measured = list(dict.fromkeys(variable_measured))  # dedupe, keep order
         return sns, variable_measured, dist_details, graph
     except Exception as exc:
-        print(f"[piveau] detail fetch failed for {dataset_id}: {exc}")
+        log.warning("[piveau] detail fetch failed for %s (DSPACE_URL=%s): %r", dataset_id, DSPACE_URL, exc)
     return "", [], {}, {}
 
 
@@ -316,6 +335,9 @@ async def fetch_datasets(catalogue_id: str | None = None, limit: int = 100) -> l
     requested from piveau — this both scopes the result to a single
     catalogue and avoids that catalogue's datasets being crowded out by
     unrelated ones under the shared `limit`.
+
+    Raises HTTPException(502) if piveau-hub-search cannot be queried, rather than returning an
+    empty list that looks like an empty catalogue.
     """
     try:
         pairs = await _search_datasets(catalogue_id, limit)
@@ -324,8 +346,7 @@ async def fetch_datasets(catalogue_id: str | None = None, limit: int = 100) -> l
             for ds, (sns, variable_measured, dist_details, raw) in pairs
         ]
     except Exception as exc:
-        print(f"[piveau] fetch_datasets failed: {exc}")
-        return []
+        raise _search_unavailable("fetch_datasets", exc) from exc
 
 
 async def fetch_distributions(
@@ -344,8 +365,7 @@ async def fetch_distributions(
                 return _expand(ds, sns, variable_measured, dist_details, raw)
         return []
     except Exception as exc:
-        print(f"[piveau] fetch_distributions failed: {exc}")
-        return []
+        raise _search_unavailable("fetch_distributions", exc) from exc
 
 
 async def fetch_catalogues(limit: int = 100) -> list[dict]:
@@ -363,5 +383,4 @@ async def fetch_catalogues(limit: int = 100) -> list[dict]:
                 for c in results
             ]
     except Exception as exc:
-        print(f"[piveau] fetch_catalogues failed: {exc}")
-        return []
+        raise _search_unavailable("fetch_catalogues", exc) from exc
