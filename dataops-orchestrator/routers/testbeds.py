@@ -120,6 +120,21 @@ def discover_assets(slug: str, claims: dict = Depends(require_testbed_admin)):
     return {"assets": assets, "total": len(assets), "offered": len(offered)}
 
 
+@router.post("/{slug}/assets/{asset_id}/transfers/find")
+def find_transfers(slug: str, asset_id: str, claims: dict = Depends(require_testbed_admin)):
+    """Look for transfers of this asset from the testbed's connector to our central connector, and store
+    the one worth tracking (a running transfer if there is one) on the asset."""
+    tb = _get(slug)
+    if not any(a["asset_id"] == asset_id for a in store.list_assets(slug)):
+        raise HTTPException(status_code=404, detail=f"Asset '{asset_id}' not found for testbed '{slug}'")
+    transfers = edc_consumer_client.find_transfers(asset_id, tb["dsp_url"])
+    chosen = edc_consumer_client.best_transfer(transfers)
+    asset = store.record_transfer(slug, asset_id, chosen)
+    store.audit(slug, _actor(claims), "find-transfer",
+                f"{asset_id}: {chosen['state'] if chosen else 'no transfer'} ({len(transfers)} found)")
+    return {"asset": asset, "transfers": transfers, "active": bool(chosen and chosen["active"])}
+
+
 @router.get("/{slug}/audit")
 def get_audit(slug: str):
     _get(slug)

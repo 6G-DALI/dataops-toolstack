@@ -75,7 +75,7 @@ _DDL = (
     """CREATE TABLE IF NOT EXISTS testbed_assets (
         slug TEXT NOT NULL, asset_id TEXT NOT NULL, title TEXT, offer_id TEXT,
         status TEXT NOT NULL DEFAULT 'discovered', present INTEGER NOT NULL DEFAULT 1,
-        contract_agreement_id TEXT, transfer_id TEXT,
+        contract_agreement_id TEXT, transfer_id TEXT, transfer_state TEXT, transfer_checked_at TEXT,
         discovered_at TEXT, last_seen_at TEXT, PRIMARY KEY (slug, asset_id))""",
     """CREATE TABLE IF NOT EXISTS testbed_audit (
         id {id_type}, ts TEXT NOT NULL, slug TEXT NOT NULL,
@@ -100,6 +100,21 @@ class _Conn:
         return self.raw.execute(sql.replace("?", "%s") if _PG else sql, params)
 
 
+_NEW_ASSET_COLUMNS = ("transfer_state", "transfer_checked_at")
+
+
+def _migrate(conn: "_Conn") -> None:
+    """Add columns introduced after a table was first created (CREATE TABLE IF NOT EXISTS skips those)."""
+    if _PG:
+        for col in _NEW_ASSET_COLUMNS:
+            conn.execute(f"ALTER TABLE testbed_assets ADD COLUMN IF NOT EXISTS {col} TEXT")
+    else:
+        have = {r["name"] for r in conn.execute("PRAGMA table_info(testbed_assets)").fetchall()}
+        for col in _NEW_ASSET_COLUMNS:
+            if col not in have:
+                conn.execute(f"ALTER TABLE testbed_assets ADD COLUMN {col} TEXT")
+
+
 @contextmanager
 def _db():
     global _schema_ready
@@ -118,6 +133,7 @@ def _db():
             id_type = "BIGSERIAL PRIMARY KEY" if _PG else "INTEGER PRIMARY KEY AUTOINCREMENT"
             for ddl in _DDL:
                 conn.execute(ddl.format(id_type=id_type) if "{id_type}" in ddl else ddl)
+            _migrate(conn)
             _schema_ready = _PG
         yield conn
         raw.commit()
@@ -185,6 +201,25 @@ def list_assets(slug: str) -> list[dict]:
     with _db() as c:
         rows = c.execute("SELECT * FROM testbed_assets WHERE slug=? ORDER BY asset_id", (slug,)).fetchall()
     return [{**{k: r[k] for k in r.keys()}, "present": bool(r["present"])} for r in rows]
+
+
+def record_transfer(slug: str, asset_id: str, transfer: dict | None) -> dict | None:
+    """Remember the transfer found for an asset (or that there is none). A STARTED transfer moves the
+    asset to status 'transferring'; the agreement id comes from the transfer's contract."""
+    with _db() as c:
+        if transfer is None:
+            c.execute("UPDATE testbed_assets SET transfer_state=NULL, transfer_id=NULL, transfer_checked_at=?"
+                      " WHERE slug=? AND asset_id=?", (_now(), slug, asset_id))
+        else:
+            status = "transferring" if transfer["active"] else None
+            c.execute(
+                """UPDATE testbed_assets SET transfer_id=?, transfer_state=?, transfer_checked_at=?,
+                   contract_agreement_id=COALESCE(NULLIF(?, ''), contract_agreement_id),
+                   status=COALESCE(?, CASE WHEN status='transferring' THEN 'agreed' ELSE status END)
+                   WHERE slug=? AND asset_id=?""",
+                (transfer["transfer_id"], transfer["state"], _now(), transfer["contract_id"], status, slug, asset_id),
+            )
+    return next((a for a in list_assets(slug) if a["asset_id"] == asset_id), None)
 
 
 def sync_assets(slug: str, offered: list[dict]) -> list[dict]:

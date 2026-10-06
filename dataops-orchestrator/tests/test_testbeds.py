@@ -182,3 +182,73 @@ def test_fetch_catalog_request_shape(monkeypatch):
     assert ec.fetch_catalog("https://edc.kul/protocol", "provider-kul")[0]["asset_id"] == "kul-experiments-1"
     assert seen["url"] == "https://edc.example/management/v3/catalog/request" and seen["headers"] == {"X-Api-Key": "k"}
     assert seen["body"]["counterPartyAddress"] == "https://edc.kul/protocol" and seen["body"]["@type"] == "CatalogRequest"
+
+
+# --- transfer lookup ---------------------------------------------------------------
+
+KUL_URL = "https://edc.kul.6gdali.eu/protocol"
+TRANSFERS = [
+    {"@id": "t-old", "state": "COMPLETED", "contractId": "ag-0", "counterPartyAddress": KUL_URL, "stateTimestamp": 100},
+    {"@id": "t-live", "edc:state": "STARTED", "contractId": "ag-1", "counterPartyAddress": KUL_URL + "/",
+     "transferType": "PiveauData-PUSH", "stateTimestamp": 200},
+    {"@id": "t-other", "state": "STARTED", "contractId": "ag-9",
+     "counterPartyAddress": "https://edc.isi.6gdali.eu/protocol", "stateTimestamp": 300},
+]
+
+
+def test_parse_and_choose_transfers():
+    import edc_consumer_client as ec
+    parsed = ec.parse_transfers(TRANSFERS, KUL_URL)
+    assert [t["transfer_id"] for t in parsed] == ["t-live", "t-old"]  # other testbed dropped, newest first
+    assert parsed[0]["active"] is True and parsed[0]["transfer_type"] == "PiveauData-PUSH"
+    assert ec.best_transfer(parsed)["transfer_id"] == "t-live"
+    assert ec.best_transfer([{"state": "COMPLETED", "transfer_id": "x", "active": False, "state_timestamp": 1},
+                             {"state": "REQUESTED", "transfer_id": "y", "active": False, "state_timestamp": 0}])["transfer_id"] == "y"
+    assert ec.best_transfer([]) is None
+    assert ec.parse_transfers([{"@id": "n", "state": "STARTED"}], KUL_URL)[0]["transfer_id"] == "n"  # no address: kept
+
+
+def test_find_transfers_request_shape(monkeypatch):
+    import edc_consumer_client as ec
+    seen = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        seen.update(url=url, body=json)
+        return httpx.Response(200, json=TRANSFERS)
+    monkeypatch.setattr(ec, "EDC_PROVIDER_MANAGEMENT_URL", "https://edc.example/management")
+    monkeypatch.setattr(ec.httpx, "post", fake_post)
+    assert len(ec.find_transfers("kul-experiments-1", KUL_URL)) == 2
+    assert seen["url"].endswith("/v3/transferprocesses/request")
+    assert seen["body"]["filterExpression"] == [{"operandLeft": "assetId", "operator": "=", "operandRight": "kul-experiments-1"}]
+
+
+def test_find_transfer_endpoint_marks_asset_transferring(client, monkeypatch):
+    import edc_consumer_client as ec
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven", "dsp_url": KUL_URL})
+    monkeypatch.setattr(ec, "fetch_catalog", lambda u, p: ec.parse_catalog(CATALOG_ONE))
+    client.post("/testbeds/kul/assets/discover")
+
+    monkeypatch.setattr(ec, "find_transfers", lambda a, u: ec.parse_transfers(TRANSFERS, u))
+    r = client.post("/testbeds/kul/assets/kul-experiments-1/transfers/find").json()
+    assert r["active"] is True and r["asset"]["transfer_state"] == "STARTED" and r["asset"]["status"] == "transferring"
+    assert r["asset"]["transfer_id"] == "t-live" and r["asset"]["contract_agreement_id"] == "ag-1"
+
+    monkeypatch.setattr(ec, "find_transfers", lambda a, u: [])  # transfer gone
+    r = client.post("/testbeds/kul/assets/kul-experiments-1/transfers/find").json()
+    assert r["active"] is False and r["asset"]["transfer_state"] is None and r["asset"]["transfer_checked_at"]
+    assert client.post("/testbeds/kul/assets/nope/transfers/find").status_code == 404
+
+
+def test_old_asset_table_gets_new_columns(tmp_path, monkeypatch):
+    import sqlite3
+    path = str(tmp_path / "old.db")
+    raw = sqlite3.connect(path)
+    raw.execute("""CREATE TABLE testbed_assets (slug TEXT NOT NULL, asset_id TEXT NOT NULL, title TEXT, offer_id TEXT,
+        status TEXT NOT NULL DEFAULT 'discovered', present INTEGER NOT NULL DEFAULT 1, contract_agreement_id TEXT,
+        transfer_id TEXT, discovered_at TEXT, last_seen_at TEXT, PRIMARY KEY (slug, asset_id))""")
+    raw.commit()
+    raw.close()
+    monkeypatch.setattr(testbed_store, "TESTBED_DB_PATH", path)
+    assert testbed_store.list_assets("x") == []  # opening the db runs the migration
+    cols = {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(testbed_assets)")}
+    assert {"transfer_state", "transfer_checked_at"} <= cols
