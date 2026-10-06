@@ -46,6 +46,33 @@ interface RequestOptions extends RequestInit {
   rawText?: boolean
 }
 
+/**
+ * Turns a failed response into a readable message.
+ *
+ * The API answers errors as JSON `{"detail": ...}`, so that is what is shown. A proxy in front of the
+ * orchestrator can replace the real response with its own HTML error page; dumping that markup into
+ * the banner is useless, so say what happened instead.
+ */
+async function describeError(response: Response): Promise<string> {
+  const text = await response.text()
+  const prefix = `${response.status} ${response.statusText}`.trim()
+  if ((response.headers.get('content-type') ?? '').includes('json')) {
+    try {
+      const body = JSON.parse(text) as { detail?: unknown; message?: unknown }
+      const detail = body.detail ?? body.message
+      if (detail !== undefined) return `${prefix}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`
+    } catch {
+      // not valid JSON after all: fall through to the raw text
+    }
+  }
+  if (/^\s*<(!doctype|html)/i.test(text)) {
+    const title = /<title>([^<]*)<\/title>/i.exec(text)?.[1]?.trim()
+    return `${prefix}: the server answered with an HTML page${title ? ` (“${title}”)` : ''} instead of an API error. ` +
+      'A proxy in front of the orchestrator probably replaced the real response: check the orchestrator log.'
+  }
+  return `${prefix}: ${text}`
+}
+
 /** Refresh the access token when close to expiry and return the current bearer header. */
 async function authHeader(): Promise<Record<string, string>> {
   if (!keycloak.authenticated) return {}
@@ -72,10 +99,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       ...(optionHeaders as Record<string, string> | undefined),
     },
   })
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(`${response.status} ${response.statusText}: ${text}`)
-  }
+  if (!response.ok) throw new Error(await describeError(response))
   if (rawText) return response.text() as Promise<T>
   return response.json() as Promise<T>
 }
@@ -418,7 +442,7 @@ export async function downloadTestbedBundle(slug: string): Promise<void> {
   const response = await fetch(`${BASE_URL}/testbeds/${encodeURIComponent(slug)}/bundle`, {
     headers: await authHeader(),
   })
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`)
+  if (!response.ok) throw new Error(await describeError(response))
   const url = URL.createObjectURL(await response.blob())
   const link = document.createElement('a')
   link.href = url
