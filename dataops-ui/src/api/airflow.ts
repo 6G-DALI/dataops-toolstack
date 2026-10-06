@@ -27,6 +27,7 @@ import type {
   TaskLogResponse,
   TriggerConf,
   Testbed,
+  TestbedAsset,
   TestbedAuditEntry,
   TestbedCreateRequest,
   TestbedProvisionResponse,
@@ -421,4 +422,13 @@ export async function downloadTestbedBundle(slug: string): Promise<void> {
   link.download = `connector-${slug}.zip`
   link.click()
   URL.revokeObjectURL(url)
+}
+
+export function getTestbedAssets(slug: string): Promise<{ assets: TestbedAsset[]; total: number }> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/assets`)
+}
+
+/** Asks the testbed's connector (through the central one) what it offers and stores each asset. */
+export function discoverTestbedAssets(slug: string): Promise<{ assets: TestbedAsset[]; total: number; offered: number }> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/assets/discover`, { method: 'POST' })
 }
