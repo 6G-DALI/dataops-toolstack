@@ -156,7 +156,7 @@ def download_dataset_edc() -> dict:
     Optional params:
         provider_id    Connector ID asserted to the provider during
                        contract negotiation and transfer
-                       (default: "daliprovider")
+                       (default: "provider-facility")
 
     Returns {"content": ..., "asset_title": ...} — the same shape as
     download_dataset above, so either can feed the validation chain (see
@@ -237,7 +237,7 @@ def download_dataset_edc() -> dict:
     print(f"[edc] found offer {offer_id} for asset {asset_id}")
 
     # ── 2. Initiate contract negotiation ─────────────────────────────────────
-    provider_id = params.get("provider_id", "daliprovider")
+    provider_id = params.get("provider_id", "provider-facility")
     neg_resp = requests.post(
         f"{mgmt}/contractnegotiations",
         headers=EDC_MANAGEMENT_HEADERS,
