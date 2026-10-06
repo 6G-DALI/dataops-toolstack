@@ -91,7 +91,10 @@ async def list_run_artifacts(dag_id: str, run_id: str):
     if artifacts.get("report_json") and catalogue_id:
         body, _ = dlc.get_object(catalogue_id, artifacts["report_json"], max_bytes=_MAX_REPORT_BYTES)
         try:
-            report = json.loads(body)
+            # The pipeline writes report.json with Python's json, which emits NaN/Infinity
+            # for missing cells. They are not valid JSON and FastAPI refuses to serialise
+            # them (a 500 on this whole endpoint), so read them as null.
+            report = json.loads(body, parse_constant=lambda _constant: None)
         except ValueError:
             # A truncated or malformed report should not take the whole view
             # down: the artifact list and download links still work without it.
