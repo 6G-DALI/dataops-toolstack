@@ -8,6 +8,7 @@ import ErrorMessage from './ErrorMessage'
 import LoadingSpinner from './LoadingSpinner'
 import Modal from './Modal'
 import { TestbedStatusBadge } from './TestbedList'
+import TestbedTimeline from './TestbedTimeline'
 import type { NavigateFn, Testbed, TestbedAuditEntry } from '../types'
 
 interface TestbedDetailProps {
@@ -61,6 +62,8 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
     <div>
       {error && <ErrorMessage message={error} />}
       {notice && <div className="alert alert-success py-2">{notice}</div>}
+
+      <TestbedTimeline testbed={tb} />
 
       <div className="d-flex flex-wrap gap-2 mb-3">
         <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => act(() => downloadTestbedBundle(slug))}>

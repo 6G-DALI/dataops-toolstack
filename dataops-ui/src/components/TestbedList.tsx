@@ -6,7 +6,9 @@ import LoadingSpinner from './LoadingSpinner'
 import type { NavigateFn, Testbed } from '../types'
 
 export function TestbedStatusBadge({ status }: { status: string }) {
-  const cls = status === 'provisioned' ? 'text-bg-success' : status === 'draft' ? 'text-bg-secondary' : 'text-bg-warning'
+  const cls = status === 'provisioned' ? 'text-bg-success'
+    : status === 'adopted' ? 'text-bg-info'
+    : status === 'draft' ? 'text-bg-secondary' : 'text-bg-warning'
   return <span className={`badge ${cls}`}>{status}</span>
 }
 

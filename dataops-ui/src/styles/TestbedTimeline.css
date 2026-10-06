@@ -1,0 +1,93 @@
+.tb-timeline {
+  display: flex;
+  align-items: flex-start;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+}
+
+.tb-timeline__stage {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 110px;
+  text-align: center;
+  padding: 0 6px;
+}
+
+/* connector line to the previous stage */
+.tb-timeline__stage + .tb-timeline__stage::before {
+  content: '';
+  position: absolute;
+  top: 15px;
+  right: 50%;
+  width: 100%;
+  height: 3px;
+  background: var(--bs-border-color, #dee2e6);
+  z-index: 0;
+}
+
+.tb-timeline__stage--done + .tb-timeline__stage::before,
+.tb-timeline__stage--done + .tb-timeline__stage--current::before {
+  background: var(--bs-success, #198754);
+}
+
+.tb-timeline__dot {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 3px solid var(--bs-border-color, #dee2e6);
+  background: var(--bs-body-bg, #fff);
+  color: var(--bs-secondary-color, #6c757d);
+  font-size: 15px;
+}
+
+.tb-timeline__stage--done .tb-timeline__dot {
+  background: var(--bs-success, #198754);
+  border-color: var(--bs-success, #198754);
+  color: #fff;
+}
+
+.tb-timeline__stage--failed .tb-timeline__dot {
+  background: var(--bs-danger, #dc3545);
+  border-color: var(--bs-danger, #dc3545);
+  color: #fff;
+}
+
+.tb-timeline__stage--current .tb-timeline__dot {
+  border-color: var(--bs-primary, #0d6efd);
+  color: var(--bs-primary, #0d6efd);
+  box-shadow: 0 0 0 4px rgba(13, 110, 253, 0.15);
+}
+
+.tb-timeline__label {
+  margin-top: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.tb-timeline__stage--upcoming .tb-timeline__label,
+.tb-timeline__stage--unavailable .tb-timeline__label {
+  color: var(--bs-secondary-color, #6c757d);
+  font-weight: 500;
+}
+
+.tb-timeline__stage--unavailable .tb-timeline__dot {
+  border-style: dashed;
+}
+
+.tb-timeline__meta {
+  font-size: 0.75rem;
+  color: var(--bs-secondary-color, #6c757d);
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.tb-timeline__stage--failed .tb-timeline__meta {
+  color: var(--bs-danger, #dc3545);
+}
