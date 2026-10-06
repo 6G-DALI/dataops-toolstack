@@ -153,3 +153,35 @@ def test_contract_and_transfer_request_shapes(monkeypatch):
     assert body["transferType"] == "PiveauData-PUSH" and body["contractId"] == "ag"
     assert body["connectorId"] == "provider-kul"
     assert body["dataDestination"]["type"] == "PiveauData" and body["dataDestination"]["accessKey"] == "ak"
+
+
+def test_unreachable_connector_names_the_url_and_is_logged(monkeypatch, caplog):
+    import logging
+    import pytest
+    import edc_consumer_client as ec
+    monkeypatch.setattr(ec, "EDC_PROVIDER_MANAGEMENT_URL", "http://6gdali-facility-edc:20001/management")
+
+    def refuse(*a, **k):
+        raise httpx.ConnectError("[Errno -2] Name or service not known")
+    monkeypatch.setattr(ec.httpx, "request", refuse)
+    monkeypatch.setattr(ec.httpx, "post", refuse)
+    for call in (lambda: ec.start_negotiation(KUL_URL, "provider-kul", "a", "o"),
+                 lambda: ec.fetch_catalog(KUL_URL, "provider-kul"),
+                 lambda: ec.find_transfers("a", KUL_URL)):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="edc_consumer_client"):
+            with pytest.raises(HTTPException) as e:
+                call()
+        assert "http://6gdali-facility-edc:20001/management" in e.value.detail
+        assert "Name or service not known" in e.value.detail and "ConnectError" in e.value.detail
+        assert "6gdali-facility-edc" in caplog.text
+
+
+def test_a_rejected_request_reports_the_connectors_answer(monkeypatch):
+    import pytest
+    import edc_consumer_client as ec
+    monkeypatch.setattr(ec, "EDC_PROVIDER_MANAGEMENT_URL", "http://c/management")
+    monkeypatch.setattr(ec.httpx, "request", lambda *a, **k: httpx.Response(400, text='[{"message":"bad policy"}]'))
+    with pytest.raises(HTTPException) as e:
+        ec.start_negotiation(KUL_URL, "provider-kul", "a", "o")
+    assert "Contract negotiation failed: 400" in e.value.detail and "bad policy" in e.value.detail

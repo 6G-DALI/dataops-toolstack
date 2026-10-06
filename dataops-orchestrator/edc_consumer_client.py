@@ -7,6 +7,7 @@ central connector (EDC_PROVIDER_MANAGEMENT_URL / EDC_API_KEY, the same connector
 edc_client.py registers assets on; it acts as consumer for other participants).
 """
 
+import logging
 import time
 
 import httpx
@@ -15,6 +16,15 @@ from fastapi import HTTPException
 from config import EDC_API_KEY, EDC_PROVIDER_MANAGEMENT_URL
 
 _CONTEXT = {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}
+
+log = logging.getLogger(__name__)
+
+
+def _bad_gateway(detail: str) -> HTTPException:
+    """A failed call to the central connector: logged, because the HTTP response alone may not
+    survive the proxies in front of the orchestrator (they can replace 5xx bodies)."""
+    log.warning("[edc] %s", detail)
+    return HTTPException(status_code=502, detail=detail)
 
 
 def _as_list(value) -> list:
@@ -67,17 +77,15 @@ def fetch_catalog(dsp_url: str, participant_id: str) -> list[dict]:
     try:
         r = httpx.post(f"{EDC_PROVIDER_MANAGEMENT_URL.rstrip('/')}/v3/catalog/request", json=body,
                        headers=headers, timeout=30)
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Could not reach the central connector: {e}")
+    except httpx.HTTPError as e:
+        raise _bad_gateway(f"Could not reach the central connector at {EDC_PROVIDER_MANAGEMENT_URL}: {type(e).__name__}: {e}")
     if r.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Catalogue request to {dsp_url} failed: {r.status_code} {r.text[:300]}",
+        raise _bad_gateway(f"Catalogue request to {dsp_url} failed: {r.status_code} {r.text[:300]}",
         )
     try:
         return parse_catalog(r.json())
     except ValueError:
-        raise HTTPException(status_code=502, detail=f"Central connector answered with non-JSON: {r.text[:200]}")
+        raise _bad_gateway(f"Central connector answered with non-JSON: {r.text[:200]}")
 
 
 # Transfer-process states, per EDC: STARTED is the steady state of a running transfer (our PiveauData
@@ -140,14 +148,14 @@ def find_transfers(asset_id: str, dsp_url: str) -> list[dict]:
     try:
         r = httpx.post(f"{EDC_PROVIDER_MANAGEMENT_URL.rstrip('/')}/v3/transferprocesses/request", json=body,
                        headers=headers, timeout=30)
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Could not reach the central connector: {e}")
+    except httpx.HTTPError as e:
+        raise _bad_gateway(f"Could not reach the central connector at {EDC_PROVIDER_MANAGEMENT_URL}: {type(e).__name__}: {e}")
     if r.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Transfer query failed: {r.status_code} {r.text[:300]}")
+        raise _bad_gateway(f"Transfer query failed: {r.status_code} {r.text[:300]}")
     try:
         return parse_transfers(r.json(), dsp_url)
     except ValueError:
-        raise HTTPException(status_code=502, detail=f"Central connector answered with non-JSON: {r.text[:200]}")
+        raise _bad_gateway(f"Central connector answered with non-JSON: {r.text[:200]}")
 
 
 # --- contract agreements and negotiations -----------------------------------------------------
@@ -167,16 +175,19 @@ def _headers() -> dict:
 
 
 def _call(method: str, path: str, body: dict | None = None, what: str = "request"):
+    url = _mgmt(path)
+    started = time.monotonic()
     try:
-        r = httpx.request(method, _mgmt(path), json=body, headers=_headers(), timeout=30)
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Could not reach the central connector: {e}")
+        r = httpx.request(method, url, json=body, headers=_headers(), timeout=30)
+    except httpx.HTTPError as e:
+        raise _bad_gateway(f"{what}: could not reach the central connector at {url}: {type(e).__name__}: {e}")
+    log.info("[edc] %s %s -> %s (%.0f ms)", method, url, r.status_code, (time.monotonic() - started) * 1000)
     if r.status_code not in (200, 201):
-        raise HTTPException(status_code=502, detail=f"{what} failed: {r.status_code} {r.text[:300]}")
+        raise _bad_gateway(f"{what} failed: {r.status_code} {r.text[:300]}")
     try:
         return r.json()
     except ValueError:
-        raise HTTPException(status_code=502, detail=f"{what}: central connector answered with non-JSON: {r.text[:200]}")
+        raise _bad_gateway(f"{what}: central connector answered with non-JSON: {r.text[:200]}")
 
 
 def parse_agreements(items, provider_id: str | None = None) -> list[dict]:

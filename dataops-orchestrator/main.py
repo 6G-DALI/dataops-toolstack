@@ -1,16 +1,28 @@
+import logging
+import os
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 import rabbitmq_consumer
-from config import HOST, PORT, CORS_ORIGINS
+from config import HOST, PORT, CORS_ORIGINS, EDC_PROVIDER_MANAGEMENT_URL
 from routers import dags, runs, tasks, datasets, stats, services, testbeds
+
+
+# Uvicorn only configures its own loggers; without this our application logs (the "[edc] ..." lines)
+# would not appear in `docker logs` below WARNING.
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(levelname)s:     %(name)s: %(message)s")
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    log.info("Central connector management API: %s", EDC_PROVIDER_MANAGEMENT_URL or "(not configured)")
     rabbitmq_consumer.start()
     yield
     await rabbitmq_consumer.stop()
@@ -51,6 +63,18 @@ app.include_router(datasets.router)
 app.include_router(stats.router)
 app.include_router(services.router)
 app.include_router(testbeds.router)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def upstream_failures(request: Request, exc: StarletteHTTPException):
+    """The testbed registry talks to other systems (central connector, MinIO, piveau). When one of them
+    fails, the registry answers 424 Failed Dependency instead of 502/503/504: the production edge in
+    front of the UI replaces every 5xx body with a generic "Service temporarily unavailable" page,
+    which hid the real error. The original status travels in `upstream_status`."""
+    if request.url.path.startswith("/testbeds") and exc.status_code in (502, 503, 504):
+        log.warning("%s %s -> %s: %s", request.method, request.url.path, exc.status_code, exc.detail)
+        return JSONResponse({"detail": exc.detail, "upstream_status": exc.status_code}, status_code=424)
+    return await http_exception_handler(request, exc)
 
 
 @app.get("/health", tags=["Health"])

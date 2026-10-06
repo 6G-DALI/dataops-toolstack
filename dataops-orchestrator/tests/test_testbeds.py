@@ -164,7 +164,8 @@ def test_discover_failure_is_recorded(client, monkeypatch):
         raise HTTPException(status_code=502, detail="connection refused")
     monkeypatch.setattr(ec, "fetch_catalog", down)
     r = client.post("/testbeds/kul/assets/discover")
-    assert r.status_code == 502
+    assert r.status_code == 424 and r.json()["upstream_status"] == 502
+    assert "refused" in r.json()["detail"]
     step = client.get("/testbeds/kul").json()["steps"]["connector"]
     assert step["status"] == "failed" and "refused" in step["detail"]
 
