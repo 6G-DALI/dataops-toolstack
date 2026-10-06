@@ -21,8 +21,8 @@ function shortTime(iso: string | null | undefined): string {
  * The provisioning stages come from the registry's recorded steps, and the lifecycle
  * status (draft / adopted / provisioned) is shown as the first and "Provisioned" stages.
  * "Connector connected" and "Asset registered" come from "Find asset", a catalogue request
- * through the central connector. "Transfer active" is not tracked yet, so it is drawn as
- * unavailable rather than guessed.
+ * through the central connector; "Transfer active" comes from "Find transfer" on an asset, a
+ * transfer lookup on the central connector.
  */
 function buildStages(tb: Testbed, assets: TestbedAsset[]): Stage[] {
   const adopted = tb.status === 'adopted'
@@ -57,7 +57,7 @@ function buildStages(tb: Testbed, assets: TestbedAsset[]): Stage[] {
     },
     connectorStage(tb),
     assetStage(assets),
-    { key: 'transfer', label: 'Transfer active', state: 'unavailable', meta: 'not tracked yet' },
+    transferStage(assets),
   ]
 
   // The first stage that is neither done nor failed is where the testbed currently is.
@@ -81,6 +81,20 @@ function assetStage(assets: TestbedAsset[]): Stage {
   return offered.length > 0
     ? { key: 'asset', label: 'Asset registered', state: 'done', meta: `${offered.length} offered` }
     : { key: 'asset', label: 'Asset registered', state: 'upcoming', meta: 'none found yet' }
+}
+
+/** Set by "Find transfer" on an asset: a STARTED transfer from the testbed to the central connector. */
+function transferStage(assets: TestbedAsset[]): Stage {
+  const running = assets.filter(a => a.present && a.transfer_state === 'STARTED')
+  if (running.length > 0) {
+    return { key: 'transfer', label: 'Transfer active', state: 'done', meta: shortTime(running[0].transfer_checked_at) }
+  }
+  const checked = assets.filter(a => a.transfer_checked_at)
+  if (checked.length > 0) {
+    const state = checked.find(a => a.transfer_state)?.transfer_state
+    return { key: 'transfer', label: 'Transfer active', state: 'upcoming', meta: state ? `last state: ${state}` : 'no transfer found' }
+  }
+  return { key: 'transfer', label: 'Transfer active', state: 'upcoming', meta: 'use Find transfer' }
 }
 
 const ICONS: Record<StageState, JSX.Element> = {

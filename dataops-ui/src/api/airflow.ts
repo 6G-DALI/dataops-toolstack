@@ -27,6 +27,7 @@ import type {
   TaskLogResponse,
   TriggerConf,
   Testbed,
+  FindTransferResponse,
   TestbedAsset,
   TestbedAuditEntry,
   TestbedCreateRequest,
@@ -431,4 +432,9 @@ export function getTestbedAssets(slug: string): Promise<{ assets: TestbedAsset[]
 /** Asks the testbed's connector (through the central one) what it offers and stores each asset. */
 export function discoverTestbedAssets(slug: string): Promise<{ assets: TestbedAsset[]; total: number; offered: number }> {
   return request(`/testbeds/${encodeURIComponent(slug)}/assets/discover`, { method: 'POST' })
+}
+
+/** Looks for transfers of this asset from the testbed's connector to the central one. */
+export function findTestbedTransfer(slug: string, assetId: string): Promise<FindTransferResponse> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/assets/${encodeURIComponent(assetId)}/transfers/find`, { method: 'POST' })
 }

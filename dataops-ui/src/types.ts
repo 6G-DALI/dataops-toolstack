@@ -732,6 +732,23 @@ export interface TestbedAsset {
   present: boolean
   contract_agreement_id: string | null
   transfer_id: string | null
+  /** EDC transfer-process state of the transfer found for this asset (STARTED = running), or null. */
+  transfer_state: string | null
+  transfer_checked_at: string | null
   discovered_at: string
   last_seen_at: string
+}
+
+export interface TransferSummary {
+  transfer_id: string
+  state: string
+  active: boolean
+  contract_id: string
+  transfer_type: string
+}
+
+export interface FindTransferResponse {
+  asset: TestbedAsset
+  transfers: TransferSummary[]
+  active: boolean
 }

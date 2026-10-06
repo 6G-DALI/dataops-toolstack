@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch } from 'react-icons/fi'
+import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch, FiActivity } from 'react-icons/fi'
 import {
-  deleteTestbed, discoverTestbedAssets, downloadTestbedBundle, getTestbed, getTestbedAssets, getTestbedAudit,
+  deleteTestbed, discoverTestbedAssets, downloadTestbedBundle, findTestbedTransfer, getTestbed, getTestbedAssets, getTestbedAudit,
   provisionTestbed, rotateTestbedCredentials,
 } from '../api/airflow'
 import ErrorMessage from './ErrorMessage'
@@ -138,6 +138,24 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
                       {a.present ? a.status : 'no longer offered'}
                     </span>
                     {a.title && <div className="text-muted">{a.title}</div>}
+                    <div className="d-flex align-items-center gap-2 mt-1">
+                      <button className="btn btn-sm btn-outline-primary py-0" disabled={busy}
+                        title="Look for a transfer of this asset from the testbed to the central connector"
+                        onClick={() => act(async () => {
+                          const r = await findTestbedTransfer(slug, a.asset_id)
+                          setNotice(r.active ? `Transfer for ${a.asset_id} is running.`
+                            : r.transfers.length ? `No running transfer for ${a.asset_id} (latest: ${r.transfers[0].state}).`
+                            : `No transfer found for ${a.asset_id}.`)
+                        })}>
+                        <FiActivity className="me-1" />Find transfer
+                      </button>
+                      {a.transfer_state ? (
+                        <span className={`badge ${a.transfer_state === 'STARTED' ? 'text-bg-success' : 'text-bg-secondary'}`}
+                          title={a.transfer_id ?? undefined}>
+                          {a.transfer_state === 'STARTED' ? 'transfer active' : `transfer ${a.transfer_state.toLowerCase()}`}
+                        </span>
+                      ) : a.transfer_checked_at ? <span className="text-muted">no transfer found</span> : null}
+                    </div>
                   </li>
                 ))}
               </ul>
