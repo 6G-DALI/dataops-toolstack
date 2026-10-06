@@ -3,19 +3,13 @@ Data Lake administration for the testbed registry: create a testbed's bucket and
 a MinIO user whose policy is limited to that bucket.
 
 Buckets go through boto3 (datalake_client). Users and policies are MinIO admin
-operations that boto3 cannot do, so they use the `mc` client (baked into the
-image, see Dockerfile) - credentials passed through MC_HOST_<alias>, never a
-config file on disk. Needs DATASPACE_S3_ADMIN_* (or a DATASPACE_S3_* key that is
-an admin key).
+operations that boto3 cannot do, so they go through minio_admin (MinIO's admin
+API, called directly). Needs DATASPACE_S3_ADMIN_* (or a DATASPACE_S3_* key that
+is an admin key).
 """
 
-import json
-import os
 import re
 import secrets
-import subprocess
-import tempfile
-from urllib.parse import quote, urlparse
 
 from fastapi import HTTPException
 
@@ -24,8 +18,9 @@ from config import (
     DATASPACE_S3_ADMIN_ACCESS_KEY,
     DATASPACE_S3_ADMIN_SECRET_KEY,
     DATASPACE_S3_ENDPOINT_URL,
-    MC_BINARY,
+    DATASPACE_S3_REGION,
 )
+from minio_admin import MinioAdmin, MinioAdminError
 
 _BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 
@@ -62,20 +57,11 @@ def policy_document(bucket: str) -> dict:
     }
 
 
-def _mc(*args: str) -> str:
+def _admin() -> MinioAdmin:
     if not (DATASPACE_S3_ENDPOINT_URL and DATASPACE_S3_ADMIN_ACCESS_KEY and DATASPACE_S3_ADMIN_SECRET_KEY):
         raise HTTPException(status_code=503, detail="Data Lake admin credentials (DATASPACE_S3_ADMIN_*) not configured")
-    u = urlparse(DATASPACE_S3_ENDPOINT_URL)
-    host = (f"{u.scheme}://{quote(DATASPACE_S3_ADMIN_ACCESS_KEY, safe='')}:"
-            f"{quote(DATASPACE_S3_ADMIN_SECRET_KEY, safe='')}@{u.netloc}")
-    try:
-        r = subprocess.run([MC_BINARY, "--json", *args], capture_output=True, text=True, timeout=30,
-                           env={**os.environ, "MC_HOST_dl": host})
-    except FileNotFoundError:
-        raise HTTPException(status_code=503, detail=f"'{MC_BINARY}' (MinIO client) not found in the orchestrator image")
-    if r.returncode != 0:
-        raise HTTPException(status_code=502, detail=f"mc {' '.join(args[:3])} failed: {(r.stdout + r.stderr)[:400]}")
-    return r.stdout
+    return MinioAdmin(DATASPACE_S3_ENDPOINT_URL, DATASPACE_S3_ADMIN_ACCESS_KEY, DATASPACE_S3_ADMIN_SECRET_KEY,
+                      region=DATASPACE_S3_REGION)
 
 
 def create_scoped_user(slug: str, bucket: str) -> tuple[str, str]:
@@ -83,15 +69,18 @@ def create_scoped_user(slug: str, bucket: str) -> tuple[str, str]:
     access_key = f"tb-{slug}-{secrets.token_hex(4)}"[:40]
     secret_key = secrets.token_urlsafe(30)
     policy = f"dali-testbed-{slug}"
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "policy.json")
-        with open(path, "w") as f:
-            json.dump(policy_document(bucket), f)
-        _mc("admin", "policy", "create", "dl", policy, path)
-    _mc("admin", "user", "add", "dl", access_key, secret_key)
-    _mc("admin", "policy", "attach", "dl", policy, "--user", access_key)
+    admin = _admin()
+    try:
+        admin.add_canned_policy(policy, policy_document(bucket))
+        admin.add_user(access_key, secret_key)
+        admin.attach_policy(policy, access_key)
+    except MinioAdminError as e:
+        raise HTTPException(status_code=502, detail=f"MinIO admin call failed: {e}")
     return access_key, secret_key
 
 
 def remove_user(access_key: str) -> None:
-    _mc("admin", "user", "remove", "dl", access_key)
+    try:
+        _admin().remove_user(access_key)
+    except MinioAdminError as e:
+        raise HTTPException(status_code=502, detail=f"MinIO admin call failed: {e}")

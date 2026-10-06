@@ -77,11 +77,10 @@ TESTBED_DOMAIN_SUFFIX = os.getenv("TESTBED_DOMAIN_SUFFIX", "6gdali.eu")
 # properties as edc.dali.connector.url.
 CENTRAL_CONNECTOR_URL = os.getenv("CENTRAL_CONNECTOR_URL", "https://edc.dataspace.6gdali.eu")
 # Data lake admin credentials: able to create buckets, users and policies.
-# MinIO only (via the `mc` client baked into the image). Falls back to the
+# MinIO only (admin API, see minio_admin.py). Falls back to the
 # regular DATASPACE_S3_* key, which works only if that key is an admin key.
 DATASPACE_S3_ADMIN_ACCESS_KEY = os.getenv("DATASPACE_S3_ADMIN_ACCESS_KEY", "") or DATASPACE_S3_ACCESS_KEY
 DATASPACE_S3_ADMIN_SECRET_KEY = os.getenv("DATASPACE_S3_ADMIN_SECRET_KEY", "") or DATASPACE_S3_SECRET_KEY
-MC_BINARY = os.getenv("MC_BINARY", "mc")
 
 # --- Keycloak token validation for the admin-only endpoints -------------------
 # e.g. https://auth.dspace.sparkworks.net/auth/realms/dspace. Unset = the
