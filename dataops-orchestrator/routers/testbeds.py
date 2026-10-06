@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
 import datalake_admin
+import edc_consumer_client
 import piveau_catalogue_client
 import testbed_store as store
 from auth import require_testbed_admin
@@ -86,6 +87,37 @@ def register_testbed(body: TestbedCreate, claims: dict = Depends(require_testbed
 @router.get("/{slug}")
 def get_testbed(slug: str):
     return _get(slug)
+
+
+@router.get("/{slug}/assets")
+def list_assets(slug: str):
+    _get(slug)
+    assets = store.list_assets(slug)
+    return {"assets": assets, "total": len(assets)}
+
+
+@router.post("/{slug}/assets/discover")
+def discover_assets(slug: str, claims: dict = Depends(require_testbed_admin)):
+    """Ask the testbed's connector, through the central connector, what it offers, and store each offered
+    asset. These stored assets are what contract negotiation and transfers are started for later.
+
+    A successful catalogue request also proves the connector is reachable, so it is recorded as the
+    'connector' step; a failure is recorded there too and returned as an error.
+    """
+    tb = _get(slug)
+    steps = dict(tb["steps"])
+    try:
+        offered = edc_consumer_client.fetch_catalog(tb["dsp_url"], tb["participant_id"])
+    except HTTPException as e:
+        steps["connector"] = {"status": "failed", "detail": e.detail, "at": _now()}
+        store.update_testbed(slug, steps=steps)
+        store.audit(slug, _actor(claims), "discover-assets", f"failed: {e.detail}"[:200])
+        raise
+    steps["connector"] = {"status": "ok", "detail": "catalogue reachable", "at": _now()}
+    store.update_testbed(slug, steps=steps)
+    assets = store.sync_assets(slug, offered)
+    store.audit(slug, _actor(claims), "discover-assets", f"{len(offered)} offered")
+    return {"assets": assets, "total": len(assets), "offered": len(offered)}
 
 
 @router.get("/{slug}/audit")

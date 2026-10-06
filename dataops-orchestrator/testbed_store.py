@@ -72,6 +72,11 @@ _DDL = (
         bucket TEXT UNIQUE NOT NULL, catalogue_id TEXT UNIQUE NOT NULL, dsp_url TEXT NOT NULL,
         produced_by_iri TEXT, status TEXT NOT NULL, steps TEXT NOT NULL DEFAULT '{}',
         s3_access_key TEXT, s3_secret_enc TEXT, created_at TEXT, updated_at TEXT, created_by TEXT)""",
+    """CREATE TABLE IF NOT EXISTS testbed_assets (
+        slug TEXT NOT NULL, asset_id TEXT NOT NULL, title TEXT, offer_id TEXT,
+        status TEXT NOT NULL DEFAULT 'discovered', present INTEGER NOT NULL DEFAULT 1,
+        contract_agreement_id TEXT, transfer_id TEXT,
+        discovered_at TEXT, last_seen_at TEXT, PRIMARY KEY (slug, asset_id))""",
     """CREATE TABLE IF NOT EXISTS testbed_audit (
         id {id_type}, ts TEXT NOT NULL, slug TEXT NOT NULL,
         actor TEXT, action TEXT NOT NULL, detail TEXT)""",
@@ -172,7 +177,35 @@ def update_testbed(slug: str, **fields) -> dict:
 
 def delete_testbed(slug: str) -> None:
     with _db() as c:
+        c.execute("DELETE FROM testbed_assets WHERE slug=?", (slug,))
         c.execute("DELETE FROM testbeds WHERE slug=?", (slug,))
+
+
+def list_assets(slug: str) -> list[dict]:
+    with _db() as c:
+        rows = c.execute("SELECT * FROM testbed_assets WHERE slug=? ORDER BY asset_id", (slug,)).fetchall()
+    return [{**{k: r[k] for k in r.keys()}, "present": bool(r["present"])} for r in rows]
+
+
+def sync_assets(slug: str, offered: list[dict]) -> list[dict]:
+    """Record what the testbed's catalogue offers. New assets are stored as 'discovered'; known ones
+    keep their negotiation/transfer state and just get their title and offer refreshed. Assets that
+    are no longer offered are kept (they may have agreements) but flagged present=false."""
+    now = _now()
+    with _db() as c:
+        for a in offered:
+            c.execute(
+                """INSERT INTO testbed_assets (slug, asset_id, title, offer_id, status, present, discovered_at, last_seen_at)
+                   VALUES (?,?,?,?, 'discovered', 1, ?, ?)
+                   ON CONFLICT (slug, asset_id) DO UPDATE SET
+                     title=excluded.title, offer_id=excluded.offer_id, present=1, last_seen_at=excluded.last_seen_at""",
+                (slug, a["asset_id"], a.get("title"), a.get("offer_id"), now, now),
+            )
+        offered_ids = {a["asset_id"] for a in offered}
+        for row in c.execute("SELECT asset_id FROM testbed_assets WHERE slug=?", (slug,)).fetchall():
+            if row["asset_id"] not in offered_ids:
+                c.execute("UPDATE testbed_assets SET present=0 WHERE slug=? AND asset_id=?", (slug, row["asset_id"]))
+    return list_assets(slug)
 
 
 def get_s3_credentials(slug: str) -> tuple[str, str] | None:

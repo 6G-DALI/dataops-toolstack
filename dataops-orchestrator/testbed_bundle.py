@@ -253,7 +253,9 @@ Identity assigned by the registry (do not change):
 2. `docker compose up -d`, then check `curl -s http://localhost:18190/api/check/health`.
 3. Open `https://{domain}/api/catalog/register-asset` (or http://localhost:18190/api/catalog/register-asset), enter the
    admin key (`edc.catalog.ui.asset.admin.key` in the properties file) and register your bucket as an asset.
-4. Tell the platform administrator the connector is up; they connect it from the DataOps UI.
+4. Tell the platform administrator the connector is up and the asset is registered. Until the asset
+   exists your testbed offers nothing to the data space; the administrator checks this with
+   "Find asset" in the DataOps UI and then connects it.
 5. Upload a dataset to the bucket: `<dataset>/metadata.json` first, then the CSV files.
    Use `template/metadata.json` as a starting point.
 
