@@ -75,7 +75,10 @@ def test_negotiate_flow(client, monkeypatch):
 def test_negotiate_failure_and_in_progress(client, monkeypatch):
     ec = _discovered(client, monkeypatch)
     starts = []
+    known = {"state": "REQUESTED"}  # what the connector reports for the negotiation we hold
     monkeypatch.setattr(ec, "start_negotiation", lambda *a: starts.append(1) or f"neg-{len(starts)}")
+    monkeypatch.setattr(ec, "get_negotiation",
+                        lambda n: {"negotiation_id": n, "state": known["state"], "agreement_id": None})
     monkeypatch.setattr(ec, "wait_negotiation",
                         lambda n: {"negotiation_id": n, "state": "REQUESTED", "agreement_id": None})
     r = client.post("/testbeds/kul/assets/kul-experiments-1/negotiate").json()
@@ -83,11 +86,82 @@ def test_negotiate_failure_and_in_progress(client, monkeypatch):
     client.post("/testbeds/kul/assets/kul-experiments-1/negotiate")  # continues, does not start another
     assert len(starts) == 1
 
+    known["state"] = "TERMINATED"
     monkeypatch.setattr(ec, "wait_negotiation",
                         lambda n: {"negotiation_id": n, "state": "TERMINATED", "agreement_id": None})
-    assert client.post("/testbeds/kul/assets/kul-experiments-1/negotiate").json()["result"] == "failed"
-    client.post("/testbeds/kul/assets/kul-experiments-1/negotiate")  # terminated: a fresh attempt is allowed
-    assert len(starts) == 2
+    r = client.post("/testbeds/kul/assets/kul-experiments-1/negotiate").json()  # known as terminated: a fresh attempt
+    assert len(starts) == 2 and r["result"] == "failed" and "terminated" in r["message"]
+
+
+def test_stale_negotiation_id_is_dropped_and_a_new_one_started(client, monkeypatch):
+    ec = _discovered(client, monkeypatch)
+    starts = []
+    monkeypatch.setattr(ec, "start_negotiation", lambda *a: starts.append(1) or f"neg-{len(starts)}")
+    monkeypatch.setattr(ec, "wait_negotiation",
+                        lambda n: {"negotiation_id": n, "state": "REQUESTED", "agreement_id": None})
+    monkeypatch.setattr(ec, "get_negotiation", lambda n: None)
+    client.post("/testbeds/kul/assets/kul-experiments-1/negotiate")  # stores neg-1
+    r = client.post("/testbeds/kul/assets/kul-experiments-1/negotiate").json()  # neg-1 is unknown to the connector
+    assert len(starts) == 2 and r["asset"]["negotiation_id"] == "neg-2"
+
+
+def test_negotiation_that_vanishes_right_after_creation_is_reported(client, monkeypatch):
+    ec = _discovered(client, monkeypatch)
+    monkeypatch.setattr(ec, "start_negotiation", lambda *a: "neg-1")
+    monkeypatch.setattr(ec, "wait_negotiation",
+                        lambda n: {"negotiation_id": n, "state": "NOT_FOUND", "agreement_id": None})
+    r = client.post("/testbeds/kul/assets/kul-experiments-1/negotiate").json()
+    assert r["result"] == "failed" and "did not know it" in r["message"]
+    assert r["asset"]["negotiation_id"] is None and r["asset"]["status"] == "discovered"  # nothing stale is kept
+
+
+def test_negotiation_finished_since_last_look_is_picked_up(client, monkeypatch):
+    ec = _discovered(client, monkeypatch)
+    starts = []
+    monkeypatch.setattr(ec, "start_negotiation", lambda *a: starts.append(1) or "neg-1")
+    monkeypatch.setattr(ec, "wait_negotiation",
+                        lambda n: {"negotiation_id": n, "state": "REQUESTED", "agreement_id": None})
+    monkeypatch.setattr(ec, "get_negotiation", lambda n: {"negotiation_id": n, "state": "REQUESTED", "agreement_id": None})
+    client.post("/testbeds/kul/assets/kul-experiments-1/negotiate")
+    monkeypatch.setattr(ec, "get_negotiation",
+                        lambda n: {"negotiation_id": n, "state": "FINALIZED", "agreement_id": "ag-9"})
+    r = client.post("/testbeds/kul/assets/kul-experiments-1/negotiate").json()
+    assert r["result"] == "already_agreed" and r["asset"]["contract_agreement_id"] == "ag-9" and len(starts) == 1
+
+
+def test_find_forgets_a_stale_negotiation(client, monkeypatch):
+    ec = _discovered(client, monkeypatch)
+    monkeypatch.setattr(ec, "start_negotiation", lambda *a: "neg-1")
+    monkeypatch.setattr(ec, "get_negotiation", lambda n: None)
+    monkeypatch.setattr(ec, "wait_negotiation",
+                        lambda n: {"negotiation_id": n, "state": "REQUESTED", "agreement_id": None})
+    client.post("/testbeds/kul/assets/kul-experiments-1/negotiate")
+    monkeypatch.setattr(ec, "find_agreements", lambda a, p: [])
+    monkeypatch.setattr(ec, "find_transfers", lambda a, u: [])
+    asset = client.post("/testbeds/kul/assets/kul-experiments-1/transfers/find").json()["asset"]
+    assert asset["negotiation_id"] is None and asset["status"] == "discovered"
+
+
+def test_not_found_is_distinguished_from_other_connector_errors(monkeypatch):
+    import pytest
+    import edc_consumer_client as ec
+    monkeypatch.setattr(ec, "EDC_PROVIDER_MANAGEMENT_URL", "http://c/management")
+    monkeypatch.setattr(ec.httpx, "request", lambda *a, **k: httpx.Response(404, text="not found"))
+    assert ec.get_negotiation("x") is None  # unknown id: None, not an error
+    monkeypatch.setattr(ec.httpx, "request", lambda *a, **k: httpx.Response(500, text="boom"))
+    with pytest.raises(HTTPException):
+        ec.get_negotiation("x")  # a real failure still raises
+
+
+def test_wait_reports_not_found_after_the_grace_period(monkeypatch):
+    import edc_consumer_client as ec
+    monkeypatch.setattr(ec, "get_negotiation", lambda n: None)
+    assert ec.wait_negotiation("x", timeout=5, interval=0, not_found_grace=0)["state"] == "NOT_FOUND"
+    calls = []
+    monkeypatch.setattr(ec, "get_negotiation",  # appears on the second poll: within the grace period, so no failure
+                        lambda n: calls.append(1) or (None if len(calls) < 2 else
+                                                      {"negotiation_id": n, "state": "FINALIZED", "agreement_id": "a"}))
+    assert ec.wait_negotiation("x", timeout=5, interval=0, not_found_grace=60)["state"] == "FINALIZED"
 
 
 def test_negotiate_needs_an_offer(client, monkeypatch):

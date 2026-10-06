@@ -224,6 +224,15 @@ def record_contract(slug: str, asset_id: str, negotiation_id: str | None, negoti
     return next((a for a in list_assets(slug) if a["asset_id"] == asset_id), None)
 
 
+def clear_negotiation(slug: str, asset_id: str) -> None:
+    """Forget a negotiation the central connector no longer knows, so a fresh one can be started."""
+    with _db() as c:
+        c.execute(
+            """UPDATE testbed_assets SET negotiation_id=NULL, negotiation_state=NULL,
+               status=CASE WHEN status='negotiating' THEN 'discovered' ELSE status END
+               WHERE slug=? AND asset_id=?""", (slug, asset_id))
+
+
 def record_transfer(slug: str, asset_id: str, transfer: dict | None) -> dict | None:
     """Remember the transfer found for an asset (or that there is none). A STARTED transfer moves the
     asset to status 'transferring'; the agreement id comes from the transfer's contract."""

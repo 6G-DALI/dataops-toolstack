@@ -152,6 +152,8 @@ def find_transfers(slug: str, asset_id: str, claims: dict = Depends(require_test
             negotiation = edc_consumer_client.get_agreement_negotiation(agreement["agreement_id"])
         elif asset["negotiation_id"]:  # a negotiation we started that has no agreement yet
             negotiation = edc_consumer_client.get_negotiation(asset["negotiation_id"])
+            if negotiation is None:  # the connector does not know it any more: forget it
+                store.clear_negotiation(slug, asset_id)
     except HTTPException:
         pass  # the contract lookup must not stop the transfer lookup
 
@@ -186,20 +188,39 @@ def negotiate_asset(slug: str, asset_id: str, claims: dict = Depends(require_tes
         raise HTTPException(status_code=409, detail="The testbed is not offering this asset right now. Run Find asset first.")
 
     negotiation_id = asset["negotiation_id"]
-    if negotiation_id and asset["negotiation_state"] not in ("TERMINATED", "TERMINATING", "FINALIZED"):
-        pass  # keep waiting on the negotiation already in progress
-    else:
+    if negotiation_id:
+        known = edc_consumer_client.get_negotiation(negotiation_id)
+        if known is None:  # stale id from an earlier attempt: the connector no longer has it
+            store.clear_negotiation(slug, asset_id)
+            negotiation_id = None
+        elif known["state"] in edc_consumer_client.NEGOTIATION_DONE:  # it finished since we last looked
+            asset = store.record_contract(slug, asset_id, negotiation_id, known["state"], known["agreement_id"])
+            return {"result": "already_agreed", "asset": asset, "agreement": _contract_info(asset)}
+        elif known["state"] in edc_consumer_client.NEGOTIATION_FAILED:
+            negotiation_id = None  # ended without an agreement: negotiate again
+    if not negotiation_id:
         negotiation_id = edc_consumer_client.start_negotiation(
             tb["dsp_url"], tb["participant_id"], asset_id, asset["offer_id"])
         store.record_contract(slug, asset_id, negotiation_id, "REQUESTING", None)
 
     outcome = edc_consumer_client.wait_negotiation(negotiation_id)
     finalized = outcome["state"] in edc_consumer_client.NEGOTIATION_DONE
-    asset = store.record_contract(slug, asset_id, outcome["negotiation_id"] or negotiation_id, outcome["state"],
-                                  outcome["agreement_id"] if finalized else None)
+    if outcome["state"] == "NOT_FOUND":
+        store.clear_negotiation(slug, asset_id)
+        asset = _asset(slug, asset_id)
+    else:
+        asset = store.record_contract(slug, asset_id, outcome["negotiation_id"] or negotiation_id, outcome["state"],
+                                      outcome["agreement_id"] if finalized else None)
     result = "agreed" if finalized else "failed" if outcome["state"] in edc_consumer_client.NEGOTIATION_FAILED else "in_progress"
     store.audit(slug, _actor(claims), "negotiate", f"{asset_id}: {outcome['state']}")
-    return {"result": result, "asset": asset, "agreement": _contract_info(asset)}
+    message = None
+    if outcome["state"] == "NOT_FOUND":
+        message = (f"The central connector accepted negotiation {negotiation_id} but then did not know it. "
+                   "Check the connector's log and that the management URL points at the same connector that "
+                   "received the request.")
+    elif outcome["state"] in edc_consumer_client.NEGOTIATION_FAILED:
+        message = "The negotiation was terminated by the testbed's connector or the central one. Check their logs."
+    return {"result": result, "asset": asset, "agreement": _contract_info(asset), "message": message}
 
 
 @router.post("/{slug}/assets/{asset_id}/transfers/start")

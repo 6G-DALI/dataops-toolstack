@@ -20,6 +20,10 @@ _CONTEXT = {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"}
 log = logging.getLogger(__name__)
 
 
+class UpstreamNotFound(HTTPException):
+    """The central connector answered 404 (an object it does not know). Still a 502 to our callers."""
+
+
 def _bad_gateway(detail: str) -> HTTPException:
     """A failed call to the central connector: logged, because the HTTP response alone may not
     survive the proxies in front of the orchestrator (they can replace 5xx bodies)."""
@@ -161,7 +165,8 @@ def find_transfers(asset_id: str, dsp_url: str) -> list[dict]:
 # --- contract agreements and negotiations -----------------------------------------------------
 
 NEGOTIATION_DONE = {"FINALIZED"}
-NEGOTIATION_FAILED = {"TERMINATED", "TERMINATING"}
+# NOT_FOUND is ours, not EDC's: the connector does not know a negotiation id we hold.
+NEGOTIATION_FAILED = {"TERMINATED", "TERMINATING", "NOT_FOUND"}
 
 
 def _mgmt(path: str) -> str:
@@ -182,6 +187,10 @@ def _call(method: str, path: str, body: dict | None = None, what: str = "request
     except httpx.HTTPError as e:
         raise _bad_gateway(f"{what}: could not reach the central connector at {url}: {type(e).__name__}: {e}")
     log.info("[edc] %s %s -> %s (%.0f ms)", method, url, r.status_code, (time.monotonic() - started) * 1000)
+    if r.status_code == 404:
+        detail = f"{what} failed: 404 {r.text[:300]}"
+        log.warning("[edc] %s", detail)
+        raise UpstreamNotFound(status_code=502, detail=detail)
     if r.status_code not in (200, 201):
         raise _bad_gateway(f"{what} failed: {r.status_code} {r.text[:300]}")
     try:
@@ -220,8 +229,12 @@ def _negotiation_summary(n: dict) -> dict:
     }
 
 
-def get_negotiation(negotiation_id: str) -> dict:
-    return _negotiation_summary(_call("GET", f"/v3/contractnegotiations/{negotiation_id}", what="Negotiation lookup"))
+def get_negotiation(negotiation_id: str) -> dict | None:
+    """The negotiation's summary, or None when the connector does not know that id."""
+    try:
+        return _negotiation_summary(_call("GET", f"/v3/contractnegotiations/{negotiation_id}", what="Negotiation lookup"))
+    except UpstreamNotFound:
+        return None
 
 
 def get_agreement_negotiation(agreement_id: str) -> dict | None:
@@ -253,13 +266,22 @@ def start_negotiation(dsp_url: str, provider_id: str, asset_id: str, offer_id: s
     return result.get("@id") or _scalar(result.get("id"))
 
 
-def wait_negotiation(negotiation_id: str, timeout: float = 30, interval: float = 1) -> dict:
+def wait_negotiation(negotiation_id: str, timeout: float = 30, interval: float = 1, not_found_grace: float = 5) -> dict:
     """Poll until the negotiation is FINALIZED or TERMINATED, or `timeout` runs out (then returns the
-    latest state, which is still in progress)."""
-    deadline = time.monotonic() + timeout
+    latest state, which is still in progress).
+
+    A negotiation the connector does not know is retried for `not_found_grace` seconds (it may not be
+    visible yet right after creation) and then reported as state NOT_FOUND.
+    """
+    started = time.monotonic()
+    deadline = started + timeout
     while True:
         n = get_negotiation(negotiation_id)
-        if n["state"] in NEGOTIATION_DONE or n["state"] in NEGOTIATION_FAILED or time.monotonic() >= deadline:
+        if n is None:
+            if time.monotonic() - started >= not_found_grace:
+                log.warning("[edc] negotiation %s is unknown to the central connector", negotiation_id)
+                return {"negotiation_id": negotiation_id, "state": "NOT_FOUND", "agreement_id": None}
+        elif n["state"] in NEGOTIATION_DONE or n["state"] in NEGOTIATION_FAILED or time.monotonic() >= deadline:
             return n
         time.sleep(interval)
 
