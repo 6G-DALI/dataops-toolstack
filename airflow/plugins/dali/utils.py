@@ -21,19 +21,22 @@ DATASPACE_S3_CONN_ID = os.getenv("DATASPACE_S3_CONN_ID", DEFAULT_CONN_ID)
 DATAOPS_S3_CONN_ID   = os.getenv("DATAOPS_S3_CONN_ID", "dali-dataops")
 
 # EDC connector base URLs — fixed per deployment, not DAG params, so a triggering user can't
-# point a run at an arbitrary connector. Each connector API is served under its own path on the
-# same host, routed by the edge nginx (edc.dataspace.6gdali.eu.conf): {url}/management for the
-# management API and {url}/protocol for DSP, so a base URL is all that is needed - no ports.
+# point a run at an arbitrary connector. The defaults are the connector's tailnet address
+# (6gdali-facility-edc): the connector cannot reach its own public name (edc.dataspace.6gdali.eu)
+# from inside the NAT, and the provider is this same connector. Management is on port 20001
+# ({url}/management) and DSP on 20002 ({url}/protocol); the base URLs below carry the port.
 #   EDC_CONSUMER_URL          our consumer connector; Airflow calls {url}/management/v3
 #   EDC_PROVIDER_PROTOCOL_URL the provider connector; sent as counterPartyAddress ({url}/protocol)
-EDC_CONSUMER_URL          = os.getenv("EDC_CONSUMER_URL", "https://edc.dataspace.6gdali.eu").rstrip("/")
-EDC_PROVIDER_PROTOCOL_URL = os.getenv("EDC_PROVIDER_PROTOCOL_URL", "https://edc.dataspace.6gdali.eu").rstrip("/")
+EDC_CONSUMER_URL          = os.getenv("EDC_CONSUMER_URL", "http://6gdali-facility-edc:20001").rstrip("/")
+EDC_PROVIDER_PROTOCOL_URL = os.getenv("EDC_PROVIDER_PROTOCOL_URL", "http://6gdali-facility-edc:20002").rstrip("/")
 
 # API key for our consumer's management API, sent as a header on every call to it. Leave
 # EDC_API_KEY unset for a connector that has no key. EDC_API_KEY_HEADER is EDC's default.
 EDC_API_KEY        = os.getenv("EDC_API_KEY", "")
 EDC_API_KEY_HEADER = os.getenv("EDC_API_KEY_HEADER", "X-Api-Key")
 EDC_MANAGEMENT_HEADERS = {EDC_API_KEY_HEADER: EDC_API_KEY} if EDC_API_KEY else {}
+
+print(f"EDC_API_KEY: {EDC_API_KEY}")
 
 PIVEAU_DATASETS_URL = "https://dspace.sparkworks.net/datasets"
 DALI_NS             = "https://dali-project.eu/ns#"
