@@ -1,5 +1,5 @@
 import { FiCheck, FiX, FiMinus, FiCircle } from 'react-icons/fi'
-import type { Testbed } from '../types'
+import type { Testbed, TestbedAsset } from '../types'
 import '../styles/TestbedTimeline.css'
 
 type StageState = 'done' | 'failed' | 'current' | 'upcoming' | 'unavailable'
@@ -20,10 +20,11 @@ function shortTime(iso: string | null | undefined): string {
  *
  * The provisioning stages come from the registry's recorded steps, and the lifecycle
  * status (draft / adopted / provisioned) is shown as the first and "Provisioned" stages.
- * "Connector connected" and "Transfer active" are part of the lifecycle but the orchestrator does not track them yet (that needs the central connector
- * integration), so they are drawn as unavailable rather than guessed.
+ * "Connector connected" and "Asset registered" come from "Find asset", a catalogue request
+ * through the central connector. "Transfer active" is not tracked yet, so it is drawn as
+ * unavailable rather than guessed.
  */
-function buildStages(tb: Testbed): Stage[] {
+function buildStages(tb: Testbed, assets: TestbedAsset[]): Stage[] {
   const adopted = tb.status === 'adopted'
   const provisioning: Stage[] = [
     ['bucket', 'Data Lake bucket'],
@@ -54,7 +55,8 @@ function buildStages(tb: Testbed): Stage[] {
       state: tb.status === 'provisioned' ? 'done' : 'upcoming',
       meta: tb.status === 'provisioned' ? shortTime(tb.updated_at) : 'run provisioning',
     },
-    { key: 'connected', label: 'Connector connected', state: 'unavailable', meta: 'not tracked yet' },
+    connectorStage(tb),
+    assetStage(assets),
     { key: 'transfer', label: 'Transfer active', state: 'unavailable', meta: 'not tracked yet' },
   ]
 
@@ -62,6 +64,23 @@ function buildStages(tb: Testbed): Stage[] {
   const next = stages.findIndex(s => s.state === 'upcoming')
   if (next >= 0) stages[next] = { ...stages[next], state: 'current' }
   return stages
+}
+
+/** Set by "Find asset": a catalogue request reaching the testbed's connector proves it is up. */
+function connectorStage(tb: Testbed): Stage {
+  const step = tb.steps.connector
+  if (step?.status === 'ok') return { key: 'connected', label: 'Connector connected', state: 'done', meta: shortTime(step.at) }
+  if (step?.status === 'failed') {
+    return { key: 'connected', label: 'Connector connected', state: 'failed', meta: String(step.detail).slice(0, 80) }
+  }
+  return { key: 'connected', label: 'Connector connected', state: 'upcoming', meta: 'use Find asset' }
+}
+
+function assetStage(assets: TestbedAsset[]): Stage {
+  const offered = assets.filter(a => a.present)
+  return offered.length > 0
+    ? { key: 'asset', label: 'Asset registered', state: 'done', meta: `${offered.length} offered` }
+    : { key: 'asset', label: 'Asset registered', state: 'upcoming', meta: 'none found yet' }
 }
 
 const ICONS: Record<StageState, JSX.Element> = {
@@ -72,8 +91,8 @@ const ICONS: Record<StageState, JSX.Element> = {
   unavailable: <FiMinus />,
 }
 
-export default function TestbedTimeline({ testbed }: { testbed: Testbed }) {
-  const stages = buildStages(testbed)
+export default function TestbedTimeline({ testbed, assets }: { testbed: Testbed; assets: TestbedAsset[] }) {
+  const stages = buildStages(testbed, assets)
   return (
     <div className="card mb-3">
       <div className="card-body">

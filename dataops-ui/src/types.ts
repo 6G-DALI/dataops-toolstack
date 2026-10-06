@@ -722,3 +722,16 @@ export interface TestbedAuditEntry {
   action: string
   detail: string | null
 }
+
+export interface TestbedAsset {
+  slug: string
+  asset_id: string
+  title: string | null
+  offer_id: string | null
+  status: 'discovered' | string
+  present: boolean
+  contract_agreement_id: string | null
+  transfer_id: string | null
+  discovered_at: string
+  last_seen_at: string
+}

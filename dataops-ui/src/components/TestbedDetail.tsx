@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2 } from 'react-icons/fi'
+import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch } from 'react-icons/fi'
 import {
-  deleteTestbed, downloadTestbedBundle, getTestbed, getTestbedAudit,
+  deleteTestbed, discoverTestbedAssets, downloadTestbedBundle, getTestbed, getTestbedAssets, getTestbedAudit,
   provisionTestbed, rotateTestbedCredentials,
 } from '../api/airflow'
 import ErrorMessage from './ErrorMessage'
@@ -9,7 +9,7 @@ import LoadingSpinner from './LoadingSpinner'
 import Modal from './Modal'
 import { TestbedStatusBadge } from './TestbedList'
 import TestbedTimeline from './TestbedTimeline'
-import type { NavigateFn, Testbed, TestbedAuditEntry } from '../types'
+import type { NavigateFn, Testbed, TestbedAsset, TestbedAuditEntry } from '../types'
 
 interface TestbedDetailProps {
   slug: string
@@ -28,14 +28,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) {
   const [tb, setTb] = useState<Testbed | null>(null)
   const [audit, setAudit] = useState<TestbedAuditEntry[]>([])
+  const [assets, setAssets] = useState<TestbedAsset[]>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   const load = useCallback(() => {
-    Promise.all([getTestbed(slug), getTestbedAudit(slug)])
-      .then(([t, a]) => { setTb(t); setAudit(a.entries) })
+    Promise.all([getTestbed(slug), getTestbedAudit(slug), getTestbedAssets(slug)])
+      .then(([t, a, as]) => { setTb(t); setAudit(a.entries); setAssets(as.assets) })
       .catch(e => setError(e instanceof Error ? e.message : String(e)))
   }, [slug])
 
@@ -63,11 +64,19 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
       {error && <ErrorMessage message={error} />}
       {notice && <div className="alert alert-success py-2">{notice}</div>}
 
-      <TestbedTimeline testbed={tb} />
+      <TestbedTimeline testbed={tb} assets={assets} />
 
       <div className="d-flex flex-wrap gap-2 mb-3">
         <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => act(() => downloadTestbedBundle(slug))}>
           <FiDownload className="me-1" />Connector bundle
+        </button>
+        <button className="btn btn-sm btn-primary" disabled={busy}
+          title="Ask the testbed's connector, through the central connector, which assets it offers"
+          onClick={() => act(async () => {
+            const r = await discoverTestbedAssets(slug)
+            setNotice(r.offered > 0 ? `Found ${r.offered} offered asset${r.offered !== 1 ? 's' : ''}.` : 'Connector reachable, but it offers no assets yet.')
+          })}>
+          <FiSearch className="me-1" />Find asset
         </button>
         <button className="btn btn-sm btn-outline-primary" disabled={busy}
           onClick={() => act(() => provisionTestbed(slug), 'Provisioning re-run.')}>
@@ -114,6 +123,25 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
                 )
               })}
             </ul>
+          </div></div>
+
+          <div className="card mb-3"><div className="card-body">
+            <h6 className="mb-3">Assets</h6>
+            {assets.length === 0 ? (
+              <span className="text-muted small">None yet. Register the asset on the testbed's connector, then click “Find asset”.</span>
+            ) : (
+              <ul className="list-unstyled small mb-0">
+                {assets.map(a => (
+                  <li key={a.asset_id} className="mb-2">
+                    <code>{a.asset_id}</code>{' '}
+                    <span className={`badge ${a.present ? 'text-bg-info' : 'text-bg-warning'}`}>
+                      {a.present ? a.status : 'no longer offered'}
+                    </span>
+                    {a.title && <div className="text-muted">{a.title}</div>}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div></div>
 
           <div className="card"><div className="card-body">
