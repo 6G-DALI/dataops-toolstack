@@ -693,6 +693,8 @@ export interface Testbed {
   produced_by_iri: string | null
   status: 'draft' | 'provisioned' | string
   steps: Record<string, TestbedStep>
+  /** Access key of the testbed's bucket-scoped Data Lake user. Not secret; the secret key is never returned. */
+  s3_access_key: string | null
   has_credentials: boolean
   created_at: string
   updated_at: string

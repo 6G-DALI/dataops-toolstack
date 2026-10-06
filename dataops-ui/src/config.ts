@@ -30,6 +30,8 @@ export interface DataopsConfig extends DaliBaseConfig {
   orchestratorUrl: string
   /** piveau catalogue front end; links are built as <base>/datasets/<id>. */
   catalogueBaseUrl: string
+  /** Data Lake (MinIO) web console; a bucket's link is <base>/browser/<bucket>. */
+  datalakeConsoleUrl: string
   /** DALI Dataset Descriptor Lambda Function URL — normalises a Zenodo record
    *  into MAP-shaped metadata for the Create-Dataset form's "Import from Zenodo". */
   descriptorUrl: string
@@ -51,6 +53,7 @@ const resolved = resolveConfig<DataopsConfig>({
 
     orchestratorUrl: '',
     catalogueBaseUrl: '',
+    datalakeConsoleUrl: '',
     // Empty by default so the deployed URL is never baked into the source — it
     // is supplied per environment via VITE_DESCRIPTOR_URL (.env / the image's
     // config.js). With it unset the "Import from Zenodo" tool reports that the
@@ -64,6 +67,7 @@ const resolved = resolveConfig<DataopsConfig>({
 
     orchestratorUrl: 'VITE_ORCHESTRATOR_URL',
     catalogueBaseUrl: 'VITE_CATALOGUE_BASE_URL',
+    datalakeConsoleUrl: 'VITE_DATALAKE_CONSOLE_URL',
     descriptorUrl: 'VITE_DESCRIPTOR_URL',
   },
   // Passed in rather than read inside the package: `import.meta.env` is
@@ -79,5 +83,19 @@ export const config: DataopsConfig = resolved
 export function catalogueDatasetUrl(datasetId: string): string | null {
   return config.catalogueBaseUrl
     ? `${config.catalogueBaseUrl.replace(/\/$/, '')}/datasets/${encodeURIComponent(datasetId)}`
+    : null
+}
+
+/** Link to a catalogue's page on the piveau front end, or null when no base URL is configured. */
+export function catalogueUrl(catalogueId: string): string | null {
+  return config.catalogueBaseUrl
+    ? `${config.catalogueBaseUrl.replace(/\/$/, '')}/catalogues/${encodeURIComponent(catalogueId)}`
+    : null
+}
+
+/** Link to a bucket in the Data Lake web console, or null when no console URL is configured. */
+export function bucketUrl(bucket: string): string | null {
+  return config.datalakeConsoleUrl
+    ? `${config.datalakeConsoleUrl.replace(/\/$/, '')}/browser/${encodeURIComponent(bucket)}`
     : null
 }

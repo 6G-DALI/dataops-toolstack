@@ -15,6 +15,9 @@ window.__DALI_CONFIG__ = {
   // piveau catalogue front end; dataset links are <base>/datasets/<id>.
   catalogueBaseUrl: '',
 
+  // Data Lake (MinIO) web console; a bucket's link is <base>/browser/<bucket>.
+  datalakeConsoleUrl: '',
+
   // DALI Dataset Descriptor Lambda Function URL — "Import from Zenodo".
   descriptorUrl: '',
 

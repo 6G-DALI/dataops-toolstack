@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch, FiActivity } from 'react-icons/fi'
+import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch, FiActivity, FiExternalLink } from 'react-icons/fi'
 import {
   deleteTestbed, discoverTestbedAssets, downloadTestbedBundle, findTestbedTransfer, getTestbed, getTestbedAssets, getTestbedAudit,
   provisionTestbed, rotateTestbedCredentials,
 } from '../api/airflow'
+import { bucketUrl, catalogueUrl } from '../config'
+import CopyableId from './ui/CopyableId'
 import ErrorMessage from './ErrorMessage'
 import LoadingSpinner from './LoadingSpinner'
 import Modal from './Modal'
@@ -59,6 +61,12 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
 
   if (!tb) return error ? <ErrorMessage message={error} /> : <LoadingSpinner />
 
+  // Where each provisioned thing can be looked at. Omitted when the matching URL is not configured.
+  const links: Record<string, string | null> = {
+    bucket: bucketUrl(tb.bucket),
+    catalogue: catalogueUrl(tb.catalogue_id),
+  }
+
   return (
     <div>
       {error && <ErrorMessage message={error} />}
@@ -100,6 +108,16 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
             <Field label="Participant ID"><code>{tb.participant_id}</code></Field>
             <Field label="Experiment prefix"><code>{tb.experiment_prefix}</code></Field>
             <Field label="Bucket / catalogue"><code>{tb.bucket}</code></Field>
+            <Field label="Data Lake access key">
+              {tb.s3_access_key ? (
+                <>
+                  <CopyableId value={tb.s3_access_key} />
+                  <div className="text-muted small">Scoped to this bucket. The secret key is kept encrypted and not shown.</div>
+                </>
+              ) : (
+                <span className="text-muted">{tb.status === 'adopted' ? 'none yet (run provisioning)' : '—'}</span>
+              )}
+            </Field>
             <Field label="DSP endpoint"><span className="text-break">{tb.dsp_url}</span></Field>
             <Field label="produced_by">{tb.produced_by_iri ? <span className="text-break">{tb.produced_by_iri}</span> : '—'}</Field>
             <Field label="Registered">{tb.created_at}{tb.created_by ? ` by ${tb.created_by}` : ''}</Field>
@@ -118,6 +136,12 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
                       : s.status === 'ok' ? <FiCheckCircle className="text-success me-2" />
                       : <FiXCircle className="text-danger me-2" />}
                     <strong className="text-capitalize">{key}</strong>
+                    {links[key] && (
+                      <a href={links[key]!} target="_blank" rel="noreferrer" className="ms-1 small"
+                        title={`Open ${tb.bucket} (${key})`}>
+                        <FiExternalLink />
+                      </a>
+                    )}
                     <span className="text-muted small ms-2">{s ? s.detail : 'not run'}</span>
                   </li>
                 )

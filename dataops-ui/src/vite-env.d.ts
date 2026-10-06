@@ -6,6 +6,7 @@ interface ImportMetaEnv {
   readonly VITE_KEYCLOAK_REALM?: string
   readonly VITE_KEYCLOAK_CLIENT_ID?: string
   readonly VITE_CATALOGUE_BASE_URL?: string
+  readonly VITE_DATALAKE_CONSOLE_URL?: string
   // The 6G-DALI tool suite, linked from the navbar. Each link is rendered only
   // when its variable is set, so an unconfigured environment shows no dead links.
   readonly VITE_DALI_URL?: string
