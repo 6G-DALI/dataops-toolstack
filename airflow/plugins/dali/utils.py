@@ -20,22 +20,14 @@ DEFAULT_CONN_ID     = "dali-dataspace"
 DATASPACE_S3_CONN_ID = os.getenv("DATASPACE_S3_CONN_ID", DEFAULT_CONN_ID)
 DATAOPS_S3_CONN_ID   = os.getenv("DATAOPS_S3_CONN_ID", "dali-dataops")
 
-# EDC connector endpoints — fixed per deployment, not DAG params, so a
-# triggering user can't point a run at an arbitrary connector. Port layout
-# matches tests/edc_test_files/1-prepare-contract-cloud.py:
-#   consumer_http_management_port=18181, provider_http_management_port=20001,
-#   provider_http_protocol_port=20002.
-# Only the consumer's management port and the provider's protocol port are
-# actually used by the DataOps pipelines — the provider's management/control
-# ports, and the consumer's protocol/control ports, are the respective
-# connector operators' concern, not something these pipelines call directly.
-EDC_CONSUMER_DOMAIN          = os.getenv("EDC_CONSUMER_DOMAIN", "http://edc.6gdali.sparkworks.net")
-EDC_CONSUMER_MANAGEMENT_PORT = int(os.getenv("EDC_CONSUMER_MANAGEMENT_PORT", "20001"))
-EDC_CONSUMER_URL             = f"{EDC_CONSUMER_DOMAIN}:{EDC_CONSUMER_MANAGEMENT_PORT}"
-
-EDC_PROVIDER_DOMAIN         = os.getenv("EDC_PROVIDER_DOMAIN", "http://edc.6gdali.sparkworks.net")
-EDC_PROVIDER_PROTOCOL_PORT  = int(os.getenv("EDC_PROVIDER_PROTOCOL_PORT", "20002"))
-EDC_PROVIDER_PROTOCOL_URL   = f"{EDC_PROVIDER_DOMAIN}:{EDC_PROVIDER_PROTOCOL_PORT}"
+# EDC connector base URLs — fixed per deployment, not DAG params, so a triggering user can't
+# point a run at an arbitrary connector. Each connector API is served under its own path on the
+# same host, routed by the edge nginx (edc.dataspace.6gdali.eu.conf): {url}/management for the
+# management API and {url}/protocol for DSP, so a base URL is all that is needed - no ports.
+#   EDC_CONSUMER_URL          our consumer connector; Airflow calls {url}/management/v3
+#   EDC_PROVIDER_PROTOCOL_URL the provider connector; sent as counterPartyAddress ({url}/protocol)
+EDC_CONSUMER_URL          = os.getenv("EDC_CONSUMER_URL", "https://edc.dataspace.6gdali.eu").rstrip("/")
+EDC_PROVIDER_PROTOCOL_URL = os.getenv("EDC_PROVIDER_PROTOCOL_URL", "https://edc.dataspace.6gdali.eu").rstrip("/")
 
 PIVEAU_DATASETS_URL = "https://dspace.sparkworks.net/datasets"
 DALI_NS             = "https://dali-project.eu/ns#"
