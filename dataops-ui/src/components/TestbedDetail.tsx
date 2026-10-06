@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch, FiActivity, FiExternalLink } from 'react-icons/fi'
+import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch, FiActivity, FiExternalLink, FiFileText, FiPlay } from 'react-icons/fi'
 import {
-  deleteTestbed, discoverTestbedAssets, downloadTestbedBundle, findTestbedTransfer, getTestbed, getTestbedAssets, getTestbedAudit,
+  deleteTestbed, discoverTestbedAssets, downloadTestbedBundle, findTestbedTransfer, negotiateTestbedAsset, startTestbedTransfer, getTestbed, getTestbedAssets, getTestbedAudit,
   provisionTestbed, rotateTestbedCredentials,
 } from '../api/airflow'
 import { bucketUrl, catalogueUrl } from '../config'
@@ -35,6 +35,7 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmStart, setConfirmStart] = useState<TestbedAsset | null>(null)
 
   const load = useCallback(() => {
     Promise.all([getTestbed(slug), getTestbedAudit(slug), getTestbedAssets(slug)])
@@ -162,24 +163,71 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
                       {a.present ? a.status : 'no longer offered'}
                     </span>
                     {a.title && <div className="text-muted">{a.title}</div>}
-                    <div className="d-flex align-items-center gap-2 mt-1">
-                      <button className="btn btn-sm btn-outline-primary py-0" disabled={busy}
-                        title="Look for a transfer of this asset from the testbed to the central connector"
-                        onClick={() => act(async () => {
-                          const r = await findTestbedTransfer(slug, a.asset_id)
-                          setNotice(r.active ? `Transfer for ${a.asset_id} is running.`
-                            : r.transfers.length ? `No running transfer for ${a.asset_id} (latest: ${r.transfers[0].state}).`
-                            : `No transfer found for ${a.asset_id}.`)
-                        })}>
-                        <FiActivity className="me-1" />Find transfer
-                      </button>
-                      {a.transfer_state ? (
-                        <span className={`badge ${a.transfer_state === 'STARTED' ? 'text-bg-success' : 'text-bg-secondary'}`}
-                          title={a.transfer_id ?? undefined}>
-                          {a.transfer_state === 'STARTED' ? 'transfer active' : `transfer ${a.transfer_state.toLowerCase()}`}
-                        </span>
-                      ) : a.transfer_checked_at ? <span className="text-muted">no transfer found</span> : null}
-                    </div>
+                    {(() => {
+                      const agreed = !!a.contract_agreement_id && a.negotiation_state === 'FINALIZED'
+                      const running = a.transfer_state === 'STARTED'
+                      return (
+                        <>
+                          <div className="d-flex flex-wrap align-items-center gap-2 mt-1">
+                            <button className="btn btn-sm btn-outline-primary py-0" disabled={busy || !a.present || agreed}
+                              title={agreed ? 'A contract is already agreed' : 'Negotiate a contract for this asset through the central connector'}
+                              onClick={() => act(async () => {
+                                const r = await negotiateTestbedAsset(slug, a.asset_id)
+                                setNotice(r.result === 'agreed' ? `Contract agreed for ${a.asset_id}.`
+                                  : r.result === 'already_agreed' ? `${a.asset_id} already has an agreed contract.`
+                                  : r.result === 'in_progress'
+                                    ? `Negotiation for ${a.asset_id} is still running (${r.asset.negotiation_state}). Use Find transfer to refresh.`
+                                    : `The negotiation for ${a.asset_id} was terminated. Check the offer and try again.`)
+                              })}>
+                              <FiFileText className="me-1" />Negotiate contract
+                            </button>
+                            <button className="btn btn-sm btn-outline-success py-0"
+                              disabled={busy || !agreed || running || !tb.has_credentials}
+                              title={running ? 'A transfer is already running'
+                                : !tb.has_credentials ? 'Run provisioning first: this testbed has no Data Lake key'
+                                : !agreed ? 'Negotiate a contract first'
+                                : 'Start the transfer from the testbed to the central data lake'}
+                              onClick={() => setConfirmStart(a)}>
+                              <FiPlay className="me-1" />Start transfer
+                            </button>
+                            <button className="btn btn-sm btn-outline-secondary py-0" disabled={busy}
+                              title="Look up this asset's contract and transfer on the central connector"
+                              onClick={() => act(async () => {
+                                const r = await findTestbedTransfer(slug, a.asset_id)
+                                const contract = r.agreement?.agreement_id
+                                  ? `Contract ${r.agreement.negotiation_state ?? 'found'}`
+                                  : 'No contract found'
+                                const transfer = r.active ? 'transfer running'
+                                  : r.transfers.length ? `no running transfer (latest: ${r.transfers[0].state})`
+                                  : 'no transfer found'
+                                setNotice(`${a.asset_id}: ${contract}, ${transfer}.`)
+                              })}>
+                              <FiActivity className="me-1" />Find transfer
+                            </button>
+                          </div>
+                          <div className="d-flex flex-wrap align-items-center gap-2 mt-1">
+                            {a.contract_agreement_id ? (
+                              <>
+                                <span className={`badge ${a.negotiation_state === 'FINALIZED' ? 'text-bg-success' : 'text-bg-secondary'}`}
+                                  title={a.negotiation_id ? `negotiation ${a.negotiation_id}` : undefined}>
+                                  contract {(a.negotiation_state ?? 'agreed').toLowerCase()}
+                                </span>
+                                <CopyableId value={a.contract_agreement_id} maxWidth={170} />
+                              </>
+                            ) : a.negotiation_state ? (
+                              <span className="badge text-bg-secondary" title={a.negotiation_id ?? undefined}>
+                                negotiation {a.negotiation_state.toLowerCase()}
+                              </span>
+                            ) : null}
+                            {a.transfer_state ? (
+                              <span className={`badge ${running ? 'text-bg-success' : 'text-bg-secondary'}`} title={a.transfer_id ?? undefined}>
+                                {running ? 'transfer active' : `transfer ${a.transfer_state.toLowerCase()}`}
+                              </span>
+                            ) : a.transfer_checked_at ? <span className="text-muted">no transfer found</span> : null}
+                          </div>
+                        </>
+                      )
+                    })()}
                   </li>
                 ))}
               </ul>
@@ -201,6 +249,38 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
           </div></div>
         </div>
       </div>
+
+      {confirmStart && (
+        <Modal
+          title="Start transfer"
+          onClose={() => setConfirmStart(null)}
+          footer={
+            <>
+              <button className="btn btn-outline-secondary" onClick={() => setConfirmStart(null)}>Cancel</button>
+              <button className="btn btn-success" disabled={busy}
+                onClick={async () => {
+                  const asset = confirmStart
+                  setConfirmStart(null)
+                  await act(async () => {
+                    const r = await startTestbedTransfer(slug, asset.asset_id)
+                    setNotice(r.result === 'started' ? `Transfer for ${asset.asset_id} started and running.`
+                      : r.result === 'already_running' ? `A transfer for ${asset.asset_id} is already running.`
+                      : `Transfer for ${asset.asset_id} requested (${r.state}). Use Find transfer to refresh.`)
+                  })
+                }}>
+                Start transfer
+              </button>
+            </>
+          }
+        >
+          <p>
+            This starts a long-running transfer that streams <strong>{tb.name}</strong>&rsquo;s bucket
+            into the central Data Lake and registers each file in the catalogue, using the testbed&rsquo;s own
+            Data Lake key. It keeps running until it is terminated.
+          </p>
+          <p className="mb-0 small text-muted">Asset <code>{confirmStart.asset_id}</code> &middot; contract <code>{confirmStart.contract_agreement_id}</code></p>
+        </Modal>
+      )}
 
       {confirmDelete && (
         <Modal

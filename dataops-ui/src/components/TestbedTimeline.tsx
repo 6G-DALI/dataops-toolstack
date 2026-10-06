@@ -57,6 +57,7 @@ function buildStages(tb: Testbed, assets: TestbedAsset[]): Stage[] {
     },
     connectorStage(tb),
     assetStage(assets),
+    contractStage(assets),
     transferStage(assets),
   ]
 
@@ -81,6 +82,17 @@ function assetStage(assets: TestbedAsset[]): Stage {
   return offered.length > 0
     ? { key: 'asset', label: 'Asset registered', state: 'done', meta: `${offered.length} offered` }
     : { key: 'asset', label: 'Asset registered', state: 'upcoming', meta: 'none found yet' }
+}
+
+/** Set by "Negotiate contract" (or found by "Find transfer"): a finalized agreement for an offered asset. */
+function contractStage(assets: TestbedAsset[]): Stage {
+  const agreed = assets.filter(a => a.present && a.contract_agreement_id && a.negotiation_state !== 'TERMINATED')
+  if (agreed.length > 0) return { key: 'contract', label: 'Contract agreed', state: 'done', meta: `${agreed.length} agreed` }
+  const negotiating = assets.find(a => a.present && a.negotiation_state && a.negotiation_state !== 'TERMINATED')
+  if (negotiating) {
+    return { key: 'contract', label: 'Contract agreed', state: 'upcoming', meta: `negotiation ${negotiating.negotiation_state?.toLowerCase()}` }
+  }
+  return { key: 'contract', label: 'Contract agreed', state: 'upcoming', meta: 'use Negotiate contract' }
 }
 
 /** Set by "Find transfer" on an asset: a STARTED transfer from the testbed to the central connector. */

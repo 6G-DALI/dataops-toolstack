@@ -28,6 +28,8 @@ import type {
   TriggerConf,
   Testbed,
   FindTransferResponse,
+  NegotiateResponse,
+  StartTransferResponse,
   TestbedAsset,
   TestbedAuditEntry,
   TestbedCreateRequest,
@@ -437,4 +439,14 @@ export function discoverTestbedAssets(slug: string): Promise<{ assets: TestbedAs
 /** Looks for transfers of this asset from the testbed's connector to the central one. */
 export function findTestbedTransfer(slug: string, assetId: string): Promise<FindTransferResponse> {
   return request(`/testbeds/${encodeURIComponent(slug)}/assets/${encodeURIComponent(assetId)}/transfers/find`, { method: 'POST' })
+}
+
+/** Negotiates a contract for the asset's offer through the central connector (waits ~30 s). */
+export function negotiateTestbedAsset(slug: string, assetId: string): Promise<NegotiateResponse> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/assets/${encodeURIComponent(assetId)}/negotiate`, { method: 'POST' })
+}
+
+/** Starts the PiveauData PUSH transfer for an asset that has a finalized contract. */
+export function startTestbedTransfer(slug: string, assetId: string): Promise<StartTransferResponse> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/assets/${encodeURIComponent(assetId)}/transfers/start`, { method: 'POST' })
 }

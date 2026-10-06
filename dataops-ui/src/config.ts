@@ -86,10 +86,11 @@ export function catalogueDatasetUrl(datasetId: string): string | null {
     : null
 }
 
-/** Link to a catalogue's page on the piveau front end, or null when no base URL is configured. */
+/** Link to the dataset list of one catalogue on the piveau front end (<base>/datasets?catalog=<id>), or null
+ *  when no base URL is configured. */
 export function catalogueUrl(catalogueId: string): string | null {
   return config.catalogueBaseUrl
-    ? `${config.catalogueBaseUrl.replace(/\/$/, '')}/catalogues/${encodeURIComponent(catalogueId)}`
+    ? `${config.catalogueBaseUrl.replace(/\/$/, '')}/datasets?catalog=${encodeURIComponent(catalogueId)}`
     : null
 }
 

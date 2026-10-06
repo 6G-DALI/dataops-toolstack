@@ -737,6 +737,9 @@ export interface TestbedAsset {
   /** EDC transfer-process state of the transfer found for this asset (STARTED = running), or null. */
   transfer_state: string | null
   transfer_checked_at: string | null
+  /** The contract negotiation for this asset, and its EDC state (FINALIZED = agreement reached). */
+  negotiation_id: string | null
+  negotiation_state: string | null
   discovered_at: string
   last_seen_at: string
 }
@@ -749,8 +752,28 @@ export interface TransferSummary {
   transfer_type: string
 }
 
+export interface ContractInfo {
+  agreement_id: string | null
+  negotiation_id: string | null
+  negotiation_state: string | null
+}
+
 export interface FindTransferResponse {
   asset: TestbedAsset
   transfers: TransferSummary[]
   active: boolean
+  agreement: ContractInfo | null
+}
+
+export interface NegotiateResponse {
+  result: 'agreed' | 'already_agreed' | 'in_progress' | 'failed'
+  asset: TestbedAsset
+  agreement: ContractInfo | null
+}
+
+export interface StartTransferResponse {
+  result: 'started' | 'already_running' | 'in_progress'
+  asset: TestbedAsset
+  transfer_id: string
+  state: string
 }
