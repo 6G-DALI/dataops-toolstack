@@ -54,3 +54,5 @@ RABBITMQ_QUEUE = os.getenv("RABBITMQ_QUEUE", "dataops.dag-triggers")
 # consumer DAG run happens to be pulling from). Registration is skipped
 # (with a log message, not an error) when left unset.
 EDC_PROVIDER_MANAGEMENT_URL = os.getenv("EDC_PROVIDER_MANAGEMENT_URL", "")
+# API key for that Management API, sent as X-Api-Key. Empty = no header.
+EDC_API_KEY = os.getenv("EDC_API_KEY", "")

@@ -25,6 +25,7 @@ from config import (
     DATASPACE_S3_ACCESS_KEY,
     DATASPACE_S3_ENDPOINT_URL,
     DATASPACE_S3_SECRET_KEY,
+    EDC_API_KEY,
     EDC_PROVIDER_MANAGEMENT_URL,
 )
 
@@ -46,7 +47,8 @@ def _configured() -> bool:
 
 
 async def _post(client: httpx.AsyncClient, path: str, body: dict) -> httpx.Response:
-    return await client.post(f"{EDC_PROVIDER_MANAGEMENT_URL.rstrip('/')}{path}", json=body)
+    headers = {"X-Api-Key": EDC_API_KEY} if EDC_API_KEY else {}
+    return await client.post(f"{EDC_PROVIDER_MANAGEMENT_URL.rstrip('/')}{path}", json=body, headers=headers)
 
 
 async def _ensure_policy_and_contract_definition(client: httpx.AsyncClient) -> None:

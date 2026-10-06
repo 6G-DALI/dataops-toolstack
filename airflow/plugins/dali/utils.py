@@ -29,6 +29,12 @@ DATAOPS_S3_CONN_ID   = os.getenv("DATAOPS_S3_CONN_ID", "dali-dataops")
 EDC_CONSUMER_URL          = os.getenv("EDC_CONSUMER_URL", "https://edc.dataspace.6gdali.eu").rstrip("/")
 EDC_PROVIDER_PROTOCOL_URL = os.getenv("EDC_PROVIDER_PROTOCOL_URL", "https://edc.dataspace.6gdali.eu").rstrip("/")
 
+# API key for our consumer's management API, sent as a header on every call to it. Leave
+# EDC_API_KEY unset for a connector that has no key. EDC_API_KEY_HEADER is EDC's default.
+EDC_API_KEY        = os.getenv("EDC_API_KEY", "")
+EDC_API_KEY_HEADER = os.getenv("EDC_API_KEY_HEADER", "X-Api-Key")
+EDC_MANAGEMENT_HEADERS = {EDC_API_KEY_HEADER: EDC_API_KEY} if EDC_API_KEY else {}
+
 PIVEAU_DATASETS_URL = "https://dspace.sparkworks.net/datasets"
 DALI_NS             = "https://dali-project.eu/ns#"
 
