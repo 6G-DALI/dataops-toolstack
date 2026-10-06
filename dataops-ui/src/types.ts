@@ -769,6 +769,8 @@ export interface NegotiateResponse {
   result: 'agreed' | 'already_agreed' | 'in_progress' | 'failed'
   asset: TestbedAsset
   agreement: ContractInfo | null
+  /** Why a negotiation failed, when the server knows. */
+  message?: string | null
 }
 
 export interface StartTransferResponse {

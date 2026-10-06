@@ -177,7 +177,7 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
                                   : r.result === 'already_agreed' ? `${a.asset_id} already has an agreed contract.`
                                   : r.result === 'in_progress'
                                     ? `Negotiation for ${a.asset_id} is still running (${r.asset.negotiation_state}). Use Find transfer to refresh.`
-                                    : `The negotiation for ${a.asset_id} was terminated. Check the offer and try again.`)
+                                    : r.message ?? `The negotiation for ${a.asset_id} failed. Check the offer and try again.`)
                               })}>
                               <FiFileText className="me-1" />Negotiate contract
                             </button>
