@@ -2,10 +2,10 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# MinIO client: the testbed registry uses it to create per-testbed users and
+# MinIO client (copied from the official image: the dl.min.io download URL answered 410
+# to BuildKit): the testbed registry uses it to create per-testbed users and
 # policies on the Data Lake (boto3 cannot do MinIO admin calls).
-ARG TARGETARCH=amd64
-ADD --chmod=755 https://dl.min.io/client/mc/release/linux-${TARGETARCH}/mc /usr/local/bin/mc
+COPY --from=minio/mc:latest /usr/bin/mc /usr/local/bin/mc
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
