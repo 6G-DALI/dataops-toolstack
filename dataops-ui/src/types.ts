@@ -779,3 +779,30 @@ export interface StartTransferResponse {
   transfer_id: string
   state: string
 }
+
+export interface DeletionPreview {
+  slug: string
+  bucket: string
+  catalogue_id: string
+  /** Assets with a running transfer: it fails once the testbed's Data Lake key is removed. */
+  running_transfers: string[]
+  datasets: number | null
+  datasets_error?: string
+  objects: number | null
+  objects_truncated?: boolean
+  objects_error?: string
+}
+
+export interface DeregisterOptions {
+  deleteBucket?: boolean
+  deleteCatalogue?: boolean
+  /** The testbed's slug, required for deleting the bucket or the catalogue. */
+  confirm?: string
+}
+
+export interface DeregisterResponse {
+  slug: string
+  status: string
+  results: Record<string, { status: string; objects_deleted?: number; detail?: string }>
+  followups: string[]
+}

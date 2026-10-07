@@ -27,6 +27,9 @@ import type {
   TaskLogResponse,
   TriggerConf,
   Testbed,
+  DeletionPreview,
+  DeregisterOptions,
+  DeregisterResponse,
   FindTransferResponse,
   NegotiateResponse,
   StartTransferResponse,
@@ -429,8 +432,19 @@ export function rotateTestbedCredentials(slug: string): Promise<{ note: string }
   return request(`/testbeds/${encodeURIComponent(slug)}/credentials/rotate`, { method: 'POST' })
 }
 
-export function deleteTestbed(slug: string): Promise<unknown> {
-  return request(`/testbeds/${encodeURIComponent(slug)}`, { method: 'DELETE' })
+/** What deregistering could also delete: datasets in its catalogue, objects in its bucket, running transfers. */
+export function getTestbedDeletionPreview(slug: string): Promise<DeletionPreview> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/deletion-preview`)
+}
+
+/** Deregisters the testbed; optionally deletes its bucket and catalogue too (irreversible, needs `confirm`). */
+export function deleteTestbed(slug: string, options: DeregisterOptions = {}): Promise<DeregisterResponse> {
+  const params = new URLSearchParams()
+  if (options.deleteBucket) params.set('delete_bucket', 'true')
+  if (options.deleteCatalogue) params.set('delete_catalogue', 'true')
+  if (options.confirm) params.set('confirm', options.confirm)
+  const query = params.toString()
+  return request(`/testbeds/${encodeURIComponent(slug)}${query ? `?${query}` : ''}`, { method: 'DELETE' })
 }
 
 export function getTestbedAudit(slug: string): Promise<{ entries: TestbedAuditEntry[] }> {

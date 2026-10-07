@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch, FiActivity, FiExternalLink, FiFileText, FiPlay } from 'react-icons/fi'
 import {
-  deleteTestbed, discoverTestbedAssets, downloadTestbedBundle, findTestbedTransfer, negotiateTestbedAsset, startTestbedTransfer, getTestbed, getTestbedAssets, getTestbedAudit,
+  deleteTestbed, discoverTestbedAssets, getTestbedDeletionPreview, downloadTestbedBundle, findTestbedTransfer, negotiateTestbedAsset, startTestbedTransfer, getTestbed, getTestbedAssets, getTestbedAudit,
   provisionTestbed, rotateTestbedCredentials,
 } from '../api/airflow'
 import { bucketUrl, catalogueUrl } from '../config'
@@ -11,7 +11,7 @@ import LoadingSpinner from './LoadingSpinner'
 import Modal from './Modal'
 import { TestbedStatusBadge } from './TestbedList'
 import TestbedTimeline from './TestbedTimeline'
-import type { NavigateFn, Testbed, TestbedAsset, TestbedAuditEntry } from '../types'
+import type { DeletionPreview, DeregisterResponse, NavigateFn, Testbed, TestbedAsset, TestbedAuditEntry } from '../types'
 
 interface TestbedDetailProps {
   slug: string
@@ -35,6 +35,11 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleteBucket, setDeleteBucket] = useState(false)
+  const [deleteCatalogue, setDeleteCatalogue] = useState(false)
+  const [confirmText, setConfirmText] = useState('')
+  const [preview, setPreview] = useState<DeletionPreview | null>(null)
+  const [deregistered, setDeregistered] = useState<DeregisterResponse | null>(null)
   const [confirmStart, setConfirmStart] = useState<TestbedAsset | null>(null)
 
   const load = useCallback(() => {
@@ -44,6 +49,40 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
   }, [slug])
 
   useEffect(load, [load])
+
+  // Opening the deregister dialog starts from the safe choice and looks up what could be deleted.
+  useEffect(() => {
+    if (!confirmDelete) return
+    setDeleteBucket(false)
+    setDeleteCatalogue(false)
+    setConfirmText('')
+    setPreview(null)
+    getTestbedDeletionPreview(slug).then(setPreview).catch(() => setPreview(null))
+  }, [confirmDelete, slug])
+
+  const deletingData = deleteBucket || deleteCatalogue
+
+  async function handleDeregister() {
+    setBusy(true)
+    setError(null)
+    try {
+      setDeregistered(await deleteTestbed(slug, {
+        deleteBucket, deleteCatalogue, confirm: deletingData ? confirmText : undefined,
+      }))
+    } catch (e) {
+      // Nothing is removed from the registry on a failure, so show the error on the page and refresh it.
+      setConfirmDelete(false)
+      setError(e instanceof Error ? e.message : String(e))
+      load()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function closeDeregister() {
+    if (deregistered) onNavigate('testbeds')
+    else setConfirmDelete(false)
+  }
 
   async function act(fn: () => Promise<unknown>, done?: string) {
     setBusy(true)
@@ -284,26 +323,75 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
 
       {confirmDelete && (
         <Modal
-          title="Deregister testbed"
-          onClose={() => setConfirmDelete(false)}
-          footer={
+          title={deregistered ? 'Testbed deregistered' : 'Deregister testbed'}
+          onClose={closeDeregister}
+          footer={deregistered ? (
+            <button className="btn btn-primary" onClick={closeDeregister}>Close</button>
+          ) : (
             <>
               <button className="btn btn-outline-secondary" onClick={() => setConfirmDelete(false)}>Cancel</button>
-              <button className="btn btn-danger" disabled={busy}
-                onClick={async () => {
-                  setConfirmDelete(false)
-                  await act(() => deleteTestbed(slug))
-                  onNavigate('testbeds')
-                }}>
-                Deregister
+              <button className="btn btn-danger" disabled={busy || (deletingData && confirmText !== slug)} onClick={handleDeregister}>
+                {busy && <span className="spinner-border spinner-border-sm me-1" />}
+                {deletingData ? 'Deregister and delete' : 'Deregister'}
               </button>
             </>
-          }
+          )}
         >
-          <p>
-            This disables <strong>{tb.name}</strong>&rsquo;s Data Lake key and removes it from the registry.
-            Its bucket, catalogue and the data in them are left untouched.
-          </p>
+          {deregistered ? (
+            <>
+              <ul className="small">
+                {Object.entries(deregistered.results).map(([step, r]) => (
+                  <li key={step}>
+                    <strong className="text-capitalize">{step === 'key' ? 'Data Lake key' : step}</strong>: {r.status.replace('_', ' ')}
+                    {r.objects_deleted ? ` (${r.objects_deleted} objects)` : ''}
+                  </li>
+                ))}
+              </ul>
+              {deregistered.followups.map(f => <div key={f} className="alert alert-warning py-2 small">{f}</div>)}
+            </>
+          ) : (
+            <>
+              <p>
+                This disables <strong>{tb.name}</strong>&rsquo;s Data Lake key and removes it from the registry.
+                {!deletingData && ' Its bucket, catalogue and the data in them are left untouched.'}
+              </p>
+              {preview && preview.running_transfers.length > 0 && (
+                <div className="alert alert-warning py-2 small">
+                  A transfer is running for <code>{preview.running_transfers.join(', ')}</code>. It will fail once the key is removed.
+                </div>
+              )}
+              <div className="form-check mb-2">
+                <input className="form-check-input" type="checkbox" id="del-catalogue" checked={deleteCatalogue}
+                  onChange={e => setDeleteCatalogue(e.target.checked)} />
+                <label className="form-check-label" htmlFor="del-catalogue">
+                  Also delete the catalogue <code>{tb.catalogue_id}</code> in piveau
+                  {preview?.datasets != null && <> and its <strong>{preview.datasets}</strong> dataset{preview.datasets !== 1 ? 's' : ''}</>}
+                  {preview?.datasets_error && <span className="text-muted"> (could not count its datasets)</span>}
+                </label>
+              </div>
+              <div className="form-check mb-2">
+                <input className="form-check-input" type="checkbox" id="del-bucket" checked={deleteBucket}
+                  onChange={e => setDeleteBucket(e.target.checked)} />
+                <label className="form-check-label" htmlFor="del-bucket">
+                  Also delete the Data Lake bucket <code>{tb.bucket}</code>
+                  {preview?.objects != null && <> with all <strong>{preview.objects}{preview.objects_truncated ? '+' : ''}</strong> object{preview.objects !== 1 ? 's' : ''} in it</>}
+                  {preview?.objects_error && <span className="text-muted"> (could not count its objects)</span>}
+                </label>
+              </div>
+              {deletingData && (
+                <div className="mt-3">
+                  <div className="alert alert-danger py-2 small">
+                    This cannot be undone. {deleteCatalogue && 'Deleting the catalogue removes the datasets in it. '}
+                    {deleteBucket && 'Deleting the bucket removes every file in it. '}
+                    EDC assets registered for those files on the central connector are not removed.
+                  </div>
+                  <label className="form-label small" htmlFor="del-confirm">Type <code>{slug}</code> to confirm</label>
+                  <input id="del-confirm" className="form-control" autoComplete="off" value={confirmText}
+                    onChange={e => setConfirmText(e.target.value)} />
+                </div>
+              )}
+            </>
+          )}
         </Modal>
       )}
     </div>
