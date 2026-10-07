@@ -346,14 +346,83 @@ def download_bundle(slug: str, claims: dict = Depends(require_testbed_admin)):
     )
 
 
+@router.get("/{slug}/deletion-preview")
+def deletion_preview(slug: str):
+    """What deregistering this testbed could also delete: the datasets in its catalogue, the objects in its
+    bucket, and whether a transfer is running (it fails once the testbed's key is removed). Each part is
+    reported separately, so one unreachable system does not hide the others."""
+    tb = _get(slug)
+    preview = {
+        "slug": slug, "bucket": tb["bucket"], "catalogue_id": tb["catalogue_id"],
+        "running_transfers": [a["asset_id"] for a in store.list_assets(slug) if a["transfer_state"] == "STARTED"],
+    }
+    try:
+        preview["datasets"] = piveau_catalogue_client.count_datasets(tb["catalogue_id"])
+    except HTTPException as e:
+        preview["datasets"], preview["datasets_error"] = None, e.detail
+    try:
+        objects, truncated = datalake_admin.count_objects(tb["bucket"])
+        preview["objects"], preview["objects_truncated"] = objects, truncated
+    except HTTPException as e:
+        preview["objects"], preview["objects_error"] = None, e.detail
+    return preview
+
+
 @router.delete("/{slug}")
-def deregister(slug: str, claims: dict = Depends(require_testbed_admin)):
+def deregister(slug: str, delete_bucket: bool = False, delete_catalogue: bool = False, confirm: str | None = None,
+               claims: dict = Depends(require_testbed_admin)):
     """Disable the testbed's data-lake key and remove it from the registry.
-    Its bucket and catalogue (and the data in them) are left untouched."""
-    _get(slug)
+
+    By default its bucket and catalogue (and the data in them) are left untouched. `delete_catalogue` also
+    deletes the catalogue in piveau (with the datasets in it) and `delete_bucket` empties and deletes the
+    data-lake bucket. Both are irreversible, so they need `confirm=<slug>`.
+
+    The registry entry is removed only when every requested step succeeded; otherwise it stays, so the
+    request can be repeated (the steps are safe to repeat) and nothing is left unmanaged.
+    """
+    tb = _get(slug)
+    if (delete_bucket or delete_catalogue) and confirm != slug:
+        raise HTTPException(status_code=409, detail=f"Deleting the bucket or the catalogue is irreversible: pass confirm={slug}")
+
+    results: dict = {}
+    failures: list[str] = []
+
     creds = store.get_s3_credentials(slug)
     if creds:
-        datalake_admin.remove_user(creds[0])
-    store.audit(slug, _actor(claims), "deregister")
+        try:
+            datalake_admin.remove_user(creds[0])
+            store.set_s3_credentials(slug, None, None)
+            results["key"] = {"status": "removed"}
+        except HTTPException as e:
+            results["key"] = {"status": "failed", "detail": e.detail}
+            failures.append(f"Data Lake key: {e.detail}")
+    else:
+        results["key"] = {"status": "none"}
+    if not failures:
+        datalake_admin.remove_policy(slug)
+
+    for requested, name, step in (
+        (delete_catalogue, "catalogue", lambda: piveau_catalogue_client.delete_catalogue(tb["catalogue_id"])),
+        (delete_bucket, "bucket", lambda: datalake_admin.delete_bucket(tb["bucket"])),
+    ):
+        if not requested:
+            continue
+        try:
+            results[name] = step()
+        except HTTPException as e:
+            results[name] = {"status": "failed", "detail": e.detail}
+            failures.append(f"{name}: {e.detail}")
+
+    store.audit(slug, _actor(claims), "deregister",
+                f"bucket={delete_bucket} catalogue={delete_catalogue} " + ("failed" if failures else "ok"))
+    if failures:
+        raise HTTPException(status_code=502, detail="Deregistration is incomplete and the testbed stays registered; "
+                            "repeat it to retry. " + "; ".join(failures))
     store.delete_testbed(slug)
-    return {"slug": slug, "status": "deregistered"}
+
+    followups = []
+    if delete_bucket:
+        followups.append(f"Remove '{tb['bucket']}' from MONITOR_BUCKETS of the s3-asset-monitor service and restart it.")
+    if delete_bucket or delete_catalogue:
+        followups.append("EDC assets that were registered on the central connector for the deleted files are not removed.")
+    return {"slug": slug, "status": "deregistered", "results": results, "followups": followups}

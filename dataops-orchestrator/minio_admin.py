@@ -10,6 +10,7 @@ form we can build an image from. Written against madmin-go v3
   PUT    /minio/admin/v3/add-user?accessKey=<ak>                      body: encrypted JSON
   PUT    /minio/admin/v3/set-user-or-group-policy?policyName=..&userOrGroup=..&isGroup=false
   DELETE /minio/admin/v3/remove-user?accessKey=<ak>
+  DELETE /minio/admin/v3/remove-canned-policy?name=<policy>
 
 Requests are AWS SigV4-signed (service "s3") with the admin key. The add-user
 body is encrypted with the *admin secret key* (madmin.EncryptData), which is the
@@ -96,3 +97,6 @@ class MinioAdmin:
 
     def remove_user(self, access_key: str) -> None:
         self._call("DELETE", "remove-user", {"accessKey": access_key})
+
+    def remove_canned_policy(self, name: str) -> None:
+        self._call("DELETE", "remove-canned-policy", {"name": name})

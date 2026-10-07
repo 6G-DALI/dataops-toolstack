@@ -84,3 +84,48 @@ def remove_user(access_key: str) -> None:
         _admin().remove_user(access_key)
     except MinioAdminError as e:
         raise HTTPException(status_code=502, detail=f"MinIO admin call failed: {e}")
+
+
+def remove_policy(slug: str) -> None:
+    """Drop the testbed's bucket-scoped policy. Best effort: a policy that is already gone is not an error."""
+    try:
+        _admin().remove_canned_policy(f"dali-testbed-{slug}")
+    except (MinioAdminError, HTTPException):
+        pass
+
+
+def count_objects(bucket: str, limit: int = 10000) -> tuple[int, bool]:
+    """(objects in the bucket, whether counting stopped at `limit`). (0, False) for a missing bucket."""
+    client = datalake_client._client()
+    count = 0
+    try:
+        for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket):
+            count += len(page.get("Contents", []))
+            if count >= limit:
+                return count, True
+    except client.exceptions.NoSuchBucket:
+        return 0, False
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not list bucket '{bucket}': {e}")
+    return count, False
+
+
+def delete_bucket(bucket: str) -> dict:
+    """Delete every object (and version) in the bucket, then the bucket itself. Irreversible."""
+    client = datalake_client._client()
+    deleted = 0
+    try:
+        client.head_bucket(Bucket=bucket)
+    except Exception:
+        return {"status": "not_found", "objects_deleted": 0}
+    try:
+        for page in client.get_paginator("list_object_versions").paginate(Bucket=bucket):
+            doomed = [{"Key": v["Key"], "VersionId": v["VersionId"]}
+                      for v in page.get("Versions", []) + page.get("DeleteMarkers", [])]
+            for i in range(0, len(doomed), 1000):  # delete_objects caps at 1000 keys per call
+                client.delete_objects(Bucket=bucket, Delete={"Objects": doomed[i:i + 1000], "Quiet": True})
+            deleted += len(doomed)
+        client.delete_bucket(Bucket=bucket)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not delete bucket '{bucket}': {e}")
+    return {"status": "deleted", "objects_deleted": deleted}

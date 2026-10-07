@@ -20,6 +20,33 @@ def _turtle(catalogue_id: str, title: str, description: str, publisher: str) -> 
     )
 
 
+def count_datasets(catalogue_id: str) -> int:
+    """How many datasets the search index holds for the catalogue."""
+    import piveau_client as pc
+    try:
+        r = httpx.get(f"{pc.PIVEAU_URL.rstrip('/')}/search",
+                      params={"filter": "dataset", "catalog": catalogue_id, "limit": 1}, timeout=15)
+        r.raise_for_status()
+        return int(r.json().get("result", {}).get("count", 0))
+    except (httpx.HTTPError, ValueError) as e:
+        raise HTTPException(status_code=502, detail=f"Could not count the datasets of '{catalogue_id}' in piveau: {e}")
+
+
+def delete_catalogue(catalogue_id: str) -> dict:
+    """Delete the catalogue from piveau-hub-repo. piveau removes the datasets inside it with it."""
+    pdc._require_piveau_config()
+    url = f"{pdc.PIVEAU_HUB_URL.rstrip('/')}/catalogues/{catalogue_id}"
+    try:
+        r = httpx.delete(url, headers={"X-API-Key": pdc.PIVEAU_API_KEY}, timeout=60)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach piveau at {pdc.PIVEAU_HUB_URL}: {e}")
+    if r.status_code == 404:
+        return {"status": "not_found"}
+    if r.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"piveau refused to delete catalogue '{catalogue_id}': {r.status_code} {r.text[:300]}")
+    return {"status": "deleted"}
+
+
 def ensure_catalogue(catalogue_id: str, title: str, description: str, publisher: str) -> str:
     """Create the catalogue if absent. Returns 'created' or 'exists'."""
     pdc._require_piveau_config()
