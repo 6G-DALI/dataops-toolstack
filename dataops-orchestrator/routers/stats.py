@@ -1,7 +1,68 @@
+import asyncio
+import logging
+import os
+import time
+
 from fastapi import APIRouter
+
 import airflow_client as af
+import piveau_client
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/stats", tags=["Stats"])
+
+# The landing page of the portal is public and calls /stats/portal on every visit, so the
+# answer is kept for a short time instead of querying piveau and Airflow each time.
+_PORTAL_STATS_TTL = float(os.getenv("PORTAL_STATS_CACHE_SECONDS", "60"))
+_portal_stats_cache: dict = {"at": None, "value": None}
+_portal_stats_lock = asyncio.Lock()
+
+
+async def _count_pipelines() -> int:
+    data = await af.list_dags(limit=500)
+    dags = data.get("dags", [])
+    return int(data.get("total_entries", len(dags)))
+
+
+@router.get("/portal")
+async def get_portal_stats():
+    """The headline counts for the portal's landing page.
+
+    {"datasets", "catalogues", "pipelines", "models"}. A figure whose source cannot be reached is
+    null rather than 0 or a guess, so the page can leave it out. `models` is always null for now:
+    nothing the orchestrator talks to holds MLOps models.
+
+    Public and read-only (the landing page is shown before sign-in), and cached for
+    PORTAL_STATS_CACHE_SECONDS (default 60).
+    """
+    async with _portal_stats_lock:
+        now = time.monotonic()
+        at = _portal_stats_cache["at"]
+        if at is not None and now - at < _PORTAL_STATS_TTL:
+            return _portal_stats_cache["value"]
+
+        datasets, catalogues, pipelines = await asyncio.gather(
+            piveau_client.count_indexed("dataset"),
+            piveau_client.count_indexed("catalogue"),
+            _count_pipelines(),
+            return_exceptions=True,
+        )
+
+        def figure(name: str, result):
+            if isinstance(result, BaseException):
+                log.warning("portal stats: %s unavailable: %s", name, result)
+                return None
+            return result
+
+        value = {
+            "datasets": figure("datasets", datasets),
+            "catalogues": figure("catalogues", catalogues),
+            "pipelines": figure("pipelines", pipelines),
+            "models": None,
+        }
+        _portal_stats_cache.update(at=now, value=value)
+        return value
 
 
 @router.get("")

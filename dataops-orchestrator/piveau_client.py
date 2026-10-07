@@ -368,6 +368,18 @@ async def fetch_distributions(
         raise _search_unavailable("fetch_distributions", exc) from exc
 
 
+async def count_indexed(index: str) -> int:
+    """How many documents piveau-hub-search holds in `index` ("dataset" or "catalogue").
+
+    One request for a single result: the search response carries the total in `result.count`,
+    so nothing is fetched per dataset. Raises on any failure, for the caller to handle.
+    """
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(f"{PIVEAU_URL}{_SEARCH_PATH}", params={"index": index, "limit": 1})
+        r.raise_for_status()
+        return int(r.json()["result"]["count"])
+
+
 async def fetch_catalogues(limit: int = 100) -> list[dict]:
     """Fetch the list of catalogues known to piveau (id + title)."""
     params = {"index": "catalogue", "limit": limit}
