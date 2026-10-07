@@ -209,7 +209,7 @@ export default function TriggerModal({ dagId, onConfirm, onCancel }: TriggerModa
                   </option>
                   {datasets.map(ds => (
                     <option key={ds.id} value={ds.id}>
-                      {ds.name || ds.id}{ds.distribution_count ? ` (${ds.distribution_count})` : ''}
+                      {ds.name || ds.id}
                     </option>
                   ))}
                 </select>
