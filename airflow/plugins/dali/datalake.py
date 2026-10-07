@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.sdk import get_current_context
 
 from dali.utils import (
+    DATAOPS_BUCKET,
     DATAOPS_S3_CONN_ID,
     DATASPACE_S3_CONN_ID,
     EDC_CONSUMER_URL,
@@ -289,7 +291,7 @@ def download_dataset_edc() -> dict:
     hook = S3Hook(aws_conn_id=DATAOPS_S3_CONN_ID)
     s3_client = hook.get_conn()
 
-    destination_bucket = "6g-dali-dataops"
+    destination_bucket = DATAOPS_BUCKET
     # Staged under the asset's own extension, so nothing downstream has to
     # re-guess the format from a hardcoded suffix.
     ext = os.path.splitext(asset_title)[1] or ".csv"
@@ -349,46 +351,60 @@ def download_dataset_edc() -> dict:
     return {"content": content, "asset_title": asset_title}
 
 
+def run_output_prefix(context: dict) -> str:
+    """Where one run's outputs live in the DataOps bucket:
+
+        runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/
+
+    Everything a run produces goes under its own directory, so a run's files are listed with
+    one prefix, all runs of one distribution with the prefix one level up, and a re-run of the
+    same Airflow run overwrites its own files instead of piling up new ones. Each part is
+    reduced to [A-Za-z0-9._-] (an Airflow run_id holds ':' and '+').
+    """
+    params = context["params"]
+    run_id = context.get("run_id") or context["dag_run"].run_id
+    parts = (params["catalogue_id"], params["dataset_id"], params["asset_id"], run_id)
+
+    def safe(value) -> str:
+        return re.sub(r"[^A-Za-z0-9._-]+", "_", str(value)).strip("_.") or "_"
+
+    return "runs/" + "/".join(safe(p) for p in parts) + "/"
+
+
 @task
 def upload_results(report: dict) -> str:
-    params = get_current_context()["params"]
-    catalogue_id = params["catalogue_id"]
-    input_key    = report["input_key"]
+    prefix     = run_output_prefix(get_current_context())
+    output_key = f"{prefix}quality.gx"
 
-    base = os.path.splitext(input_key)[0]
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output_key = f"{base}_{ts}.gx"
+    print(f"[dali] upload_results bucket={DATAOPS_BUCKET!r} output_key={output_key!r}")
 
-    print(f"[dali] upload_results bucket={catalogue_id!r} output_key={output_key!r}")
-
-    hook = S3Hook(aws_conn_id=DATASPACE_S3_CONN_ID)
+    hook = S3Hook(aws_conn_id=DATAOPS_S3_CONN_ID)
     hook.load_string(
         string_data=json.dumps(report, indent=2),
         key=output_key,
-        bucket_name=catalogue_id,
+        bucket_name=DATAOPS_BUCKET,
         replace=True,
     )
     return output_key
 
 
-# The object-key suffix each of a processing run's artifacts is stored under
-# (see dali.processing.run_dataops_pipeline for what produces them). Derived
-# from the artifact's name rather than from its filename, which starts with the
-# dataset's own stem and may itself contain underscores.
-_ARTIFACT_SUFFIXES = {
-    "input_csv":        "_raw.csv",
-    "output_csv":       "_remediated.csv",
-    "report_json":      "_report.json",
-    "soft_cleaned_csv": "_soft_cleaned.csv",
+# The file name each of a processing run's artifacts is stored under, inside the run's
+# directory (see dali.processing.run_dataops_pipeline for what produces them). Derived from
+# the artifact's name rather than from its local filename, which starts with the dataset's
+# own stem and may itself contain underscores.
+_ARTIFACT_NAMES = {
+    "input_csv":        "raw.csv",
+    "output_csv":       "remediated.csv",
+    "report_json":      "report.json",
+    "soft_cleaned_csv": "soft_cleaned.csv",
 }
 
 # The imputation runs over the handoff's regularized bundle, which is split into
 # train/test — so it produces those two, plus the stitched timeline that puts
 # them back into one series. Their keys are built rather than looked up, because
-# the method that produced them belongs in the name: `_imputed_darts_linear.csv`
-# says which imputer's output this is, where `_imputed.csv` would leave a reader
-# comparing two runs unable to tell them apart, and would have the second run
-# silently overwrite the first's file for the same distribution and timestamp.
+# the method that produced them belongs in the name: `imputed_darts_linear.csv`
+# says which imputer's output this is, where `imputed.csv` would leave a reader
+# comparing two imputations of the same run unable to tell them apart.
 _IMPUTED_ARTIFACTS = {
     "imputed_train_csv": "train",
     "imputed_test_csv":  "test",
@@ -396,33 +412,37 @@ _IMPUTED_ARTIFACTS = {
 }
 
 
-def _artifact_suffix(name: str, path: str, method_slug: str) -> str:
-    """The object key's tail for one artifact, method-stamped where it matters."""
+def _artifact_filename(name: str, path: str, method_slug: str) -> str:
+    """The file name for one artifact inside the run's directory, method-stamped where it
+    matters."""
     if name in _IMPUTED_ARTIFACTS:
-        parts = ["_imputed"]
+        parts = ["imputed"]
         if method_slug:
             parts.append(method_slug)
         kind = _IMPUTED_ARTIFACTS[name]
         if kind:
             parts.append(kind)
         return "_".join(parts) + ".csv"
-    return _ARTIFACT_SUFFIXES.get(name, os.path.splitext(path)[1])
+    return _ARTIFACT_NAMES.get(name, name + os.path.splitext(path)[1])
 
 
 @task
 def upload_artifacts(pipeline: dict, quality: dict | None = None) -> dict:
-    """Upload a processing run's artifacts next to the distribution they came
-    from, and return {name: object key}.
+    """Upload a processing run's artifacts to the DataOps bucket and return
+    {name: object key}.
 
-    Keys follow the same convention as upload_results — the distribution's own
-    prefix plus a run timestamp — so a processing run's outputs sit beside the
-    validation reports for the same distribution and never collide with a
-    concurrent run over a different one:
+    They go under the run's own directory (see run_output_prefix), next to the quality
+    report upload_results writes, so one prefix lists everything a run produced and runs
+    never collide:
 
-        <dataset_id>/<asset_id>_<timestamp>_raw.csv
-        <dataset_id>/<asset_id>_<timestamp>_remediated.csv
-        <dataset_id>/<asset_id>_<timestamp>_report.json
-        <dataset_id>/<asset_id>_<timestamp>_soft_cleaned.csv
+        runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/raw.csv
+        runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/remediated.csv
+        runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/soft_cleaned.csv
+        runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/report.json
+        runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/imputed_<lib>_<method>[_train|_test].csv
+
+    The returned keys are what dataops-orchestrator reads a run's results back with; a key
+    under "runs/" is read from the DataOps bucket.
 
     Files are uploaded from disk (load_file) rather than read into memory: a
     remediated CSV can be far larger than the report, and the whole point of
@@ -437,13 +457,7 @@ def upload_artifacts(pipeline: dict, quality: dict | None = None) -> dict:
     orchestrator change. The standalone .gx object upload_results writes is
     unaffected; this is a second, UI-facing copy.
     """
-    params = get_current_context()["params"]
-    catalogue_id = params["catalogue_id"]
-    dataset_id   = params["dataset_id"]
-    asset_id     = params["asset_id"]
-
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    prefix = f"{dataset_id}/{asset_id}_{ts}"
+    prefix = run_output_prefix(get_current_context())
 
     artifacts   = dict(pipeline.get("artifacts") or {})
     report_path = artifacts.get("report_json")
@@ -465,15 +479,15 @@ def upload_artifacts(pipeline: dict, quality: dict | None = None) -> dict:
             # report went to piveau and to the .gx object regardless.
             print(f"[dali] could not embed the quality report in {report_path}: {exc}")
 
-    hook = S3Hook(aws_conn_id=DATASPACE_S3_CONN_ID)
+    hook = S3Hook(aws_conn_id=DATAOPS_S3_CONN_ID)
     uploaded: dict[str, str] = {}
     for name, path in artifacts.items():
-        key = f"{prefix}{_artifact_suffix(name, path, method_slug)}"
-        print(f"[dali] uploading {name} -> s3://{catalogue_id}/{key}")
+        key = f"{prefix}{_artifact_filename(name, path, method_slug)}"
+        print(f"[dali] uploading {name} -> s3://{DATAOPS_BUCKET}/{key}")
         hook.load_file(
             filename=path,
             key=key,
-            bucket_name=catalogue_id,
+            bucket_name=DATAOPS_BUCKET,
             replace=True,
             gzip=False,
         )
@@ -484,15 +498,15 @@ def upload_artifacts(pipeline: dict, quality: dict | None = None) -> dict:
     # just the quality report, so the run still has something for the UI to
     # render — a format failure is exactly the case a user needs to see.
     if quality and not report_path:
-        key = f"{prefix}{_ARTIFACT_SUFFIXES['report_json']}"
+        key = f"{prefix}{_ARTIFACT_NAMES['report_json']}"
         hook.load_string(
             string_data=json.dumps({"dali_quality": quality}, indent=2, default=str),
             key=key,
-            bucket_name=catalogue_id,
+            bucket_name=DATAOPS_BUCKET,
             replace=True,
         )
         uploaded["report_json"] = key
-        print(f"[dali] uploaded a quality-only report -> s3://{catalogue_id}/{key}")
+        print(f"[dali] uploaded a quality-only report -> s3://{DATAOPS_BUCKET}/{key}")
 
     if not uploaded:
         print("[dali] the pipeline produced no artifacts to upload")

@@ -113,22 +113,22 @@ other methods delegate to SciPy, which the Airflow image does not carry. Pass
 `{"imputation": {"impute": false}}` for the bundle without filling it, or
 `{"imputation": {"method": "cubic"}}` once scipy is installed.
 
-What a run leaves behind, all in the catalogue bucket and all scoped to this one
-distribution, so concurrent runs over different distributions never collide:
+What a run leaves behind, all in the DataOps bucket (DATAOPS_BUCKET, "6g-dali-dataops")
+under the run's own directory, so concurrent runs never collide and one prefix lists a run:
 
-    <dataset_id>/<asset_id>_<timestamp>.gx                  the merged quality report
-    <dataset_id>/<asset_id>_<timestamp>_raw.csv             as transferred over EDC
-    <dataset_id>/<asset_id>_<timestamp>_soft_cleaned.csv    before per-issue remediation
-    <dataset_id>/<asset_id>_<timestamp>_remediated.csv      the pipeline's output
-    <dataset_id>/<asset_id>_<timestamp>_report.json         the pipeline's report, with
-                                                            the merged quality report
-                                                            nested under "dali_quality"
-    <dataset_id>/<asset_id>_<timestamp>_imputed_train.csv
-    <dataset_id>/<asset_id>_<timestamp>_imputed_test.csv
+    runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/quality.gx        the merged quality report
+    runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/raw.csv           as transferred over EDC
+    runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/soft_cleaned.csv  before per-issue remediation
+    runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/remediated.csv    the pipeline's output
+    runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/report.json       the pipeline's report, with
+                                                                           the merged quality report
+                                                                           nested under "dali_quality"
+    runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/imputed_<lib>_<method>[_train|_test].csv
 
-The raw frame goes up with the rest because those bytes arrived over EDC from
-the provider's connector and are not otherwise in this bucket — so the report's
-raw → soft-cleaned → remediated lineage can be read end to end.
+(<run_id> is the Airflow run id with characters other than letters, digits, '.', '_' and '-'
+replaced by '_'.) The catalogue bucket is no longer written to. The raw frame goes up with the
+rest because those bytes arrived over EDC from the provider's connector and are not otherwise
+kept — so the report's raw → soft-cleaned → remediated lineage can be read end to end.
 
 A quality failure — of either regime — does not fail this DAG. run_pipeline
 writes every artifact before re-raising, so the error is captured, the artifacts
