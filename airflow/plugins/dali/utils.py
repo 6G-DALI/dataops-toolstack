@@ -23,14 +23,16 @@ DATAOPS_S3_CONN_ID   = os.getenv("DATAOPS_S3_CONN_ID", "dali-dataops")
 DATAOPS_BUCKET       = os.getenv("DATAOPS_BUCKET", "6g-dali-dataops")
 
 # EDC connector base URLs — fixed per deployment, not DAG params, so a triggering user can't
-# point a run at an arbitrary connector. The defaults are the connector's tailnet address
-# (6gdali-facility-edc): the connector cannot reach its own public name (edc.dataspace.6gdali.eu)
-# from inside the NAT, and the provider is this same connector. Management is on port 20001
-# ({url}/management) and DSP on 20002 ({url}/protocol); the base URLs below carry the port.
+# point a run at an arbitrary connector. The defaults are the connector's public address, which nginx
+# routes by path: /management to the management API (port 20001, needs the X-Api-Key header) and
+# /protocol to DSP (port 20002). The base URLs carry no port and no path; the code adds /management/v3
+# and /protocol. The connector reaches its own public name through an extra_hosts entry that points it
+# at this Docker host (see the provider service in the dataspace compose file); the tailnet address
+# (http://6gdali-facility-edc:20001 / :20002) still works as an override.
 #   EDC_CONSUMER_URL          our consumer connector; Airflow calls {url}/management/v3
 #   EDC_PROVIDER_PROTOCOL_URL the provider connector; sent as counterPartyAddress ({url}/protocol)
-EDC_CONSUMER_URL          = os.getenv("EDC_CONSUMER_URL", "http://6gdali-facility-edc:20001").rstrip("/")
-EDC_PROVIDER_PROTOCOL_URL = os.getenv("EDC_PROVIDER_PROTOCOL_URL", "http://6gdali-facility-edc:20002").rstrip("/")
+EDC_CONSUMER_URL          = os.getenv("EDC_CONSUMER_URL", "https://edc.dataspace.6gdali.eu/").rstrip("/")
+EDC_PROVIDER_PROTOCOL_URL = os.getenv("EDC_PROVIDER_PROTOCOL_URL", "https://edc.dataspace.6gdali.eu/").rstrip("/")
 
 # API key for our consumer's management API, sent as a header on every call to it. Leave
 # EDC_API_KEY unset for a connector that has no key. EDC_API_KEY_HEADER is EDC's default.
