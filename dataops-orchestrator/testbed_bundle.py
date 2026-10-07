@@ -70,9 +70,9 @@ edc.web.rest.cors.methods=GET,POST,PUT,DELETE,OPTIONS
 edc.web.rest.cors.headers=origin,content-type,accept,authorization,x-api-key
 edc.web.rest.cors.credentials=true
 
-# --- Asset registration page ----------------------------------------------------
-# Enables http(s)://<your-connector>/api/catalog/register-asset. The operator enters this
-# key on the page to register the dataset bucket as an asset.
+# --- Testbed asset ----------------------------------------------------------------
+# Shows the "Testbed asset" panel on the catalogue page (http(s)://<your-connector>/api/catalog).
+# The operator enters this key there to register the dataset bucket as the testbed's asset.
 edc.catalog.ui.asset.admin.key={asset_admin_key}
 
 # --- Catalogue API used by the connector's file source -------------------------
@@ -251,8 +251,9 @@ Identity assigned by the registry (do not change):
 
 1. Create the DNS record for `{domain}` and install `nginx/{domain}.conf` with a TLS certificate.
 2. `docker compose up -d`, then check `curl -s http://localhost:18190/api/check/health`.
-3. Open `https://{domain}/api/catalog/register-asset` (or http://localhost:18190/api/catalog/register-asset), enter the
-   admin key (`edc.catalog.ui.asset.admin.key` in the properties file) and register your bucket as an asset.
+3. Open the catalogue page, `https://{domain}/api/catalog` (or http://localhost:18190/api/catalog), click **Testbed asset**,
+   enter the admin key (`edc.catalog.ui.asset.admin.key` in the properties file) and register your bucket as the
+   testbed's asset. If the connector already has an asset of the testbed type, choose it instead.
 4. Tell the platform administrator the connector is up and the asset is registered. Until the asset
    exists your testbed offers nothing to the data space; the administrator checks this with
    "Find asset" in the DataOps UI and then connects it.
