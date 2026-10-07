@@ -9,6 +9,10 @@ from botocore.client import Config
 from fastapi import HTTPException
 
 from config import (
+    DATAOPS_S3_ACCESS_KEY,
+    DATAOPS_S3_ENDPOINT_URL,
+    DATAOPS_S3_REGION,
+    DATAOPS_S3_SECRET_KEY,
     DATASPACE_S3_ACCESS_KEY,
     DATASPACE_S3_ENDPOINT_URL,
     DATASPACE_S3_REGION,
@@ -16,16 +20,25 @@ from config import (
 )
 
 
-def _client():
-    if not DATASPACE_S3_ENDPOINT_URL or not DATASPACE_S3_ACCESS_KEY or not DATASPACE_S3_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Data Lake S3 (DATASPACE_S3_*) not configured")
+def _client(store: str = "dataspace"):
+    """The S3 client for the Data Lake ("dataspace", the default) or the DataOps store ("dataops")."""
+    if store == "dataops":
+        endpoint, access, secret, region = (
+            DATAOPS_S3_ENDPOINT_URL, DATAOPS_S3_ACCESS_KEY, DATAOPS_S3_SECRET_KEY, DATAOPS_S3_REGION)
+        missing = "DataOps S3 (DATAOPS_S3_*, or DATASPACE_S3_*)"
+    else:
+        endpoint, access, secret, region = (
+            DATASPACE_S3_ENDPOINT_URL, DATASPACE_S3_ACCESS_KEY, DATASPACE_S3_SECRET_KEY, DATASPACE_S3_REGION)
+        missing = "Data Lake S3 (DATASPACE_S3_*)"
+    if not endpoint or not access or not secret:
+        raise HTTPException(status_code=503, detail=f"{missing} not configured")
     return boto3.client(
         "s3",
-        endpoint_url=DATASPACE_S3_ENDPOINT_URL,
-        aws_access_key_id=DATASPACE_S3_ACCESS_KEY,
-        aws_secret_access_key=DATASPACE_S3_SECRET_KEY,
+        endpoint_url=endpoint,
+        aws_access_key_id=access,
+        aws_secret_access_key=secret,
         config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
-        region_name=DATASPACE_S3_REGION,
+        region_name=region,
     )
 
 
@@ -72,6 +85,7 @@ def delete_objects_by_prefix(catalogue_id: str, prefix: str) -> list[str]:
 
 def get_object(
     catalogue_id: str, key: str, max_bytes: int | None = None, offset: int = 0,
+    store: str = "dataspace",
 ) -> tuple[bytes, int]:
     """Read one object from the Data Lake, returning (body, total_size).
 
@@ -82,8 +96,10 @@ def get_object(
 
     `offset` moves that window, so a caller can walk a large object in chunks
     instead of choosing once between a truncated prefix and the whole thing.
+
+    `catalogue_id` is the bucket name, whichever store (`store`) it is in.
     """
-    client = _client()
+    client = _client(store)
     try:
         kwargs = {"Bucket": catalogue_id, "Key": key}
         if max_bytes:

@@ -54,6 +54,17 @@ async def get_task_logs(dag_id: str, run_id: str, task_id: str, try_number: int 
 
 _ARTIFACTS_TASK_ID = "upload_artifacts"
 
+# Runs write their outputs to the DataOps bucket under "runs/...". Runs made before that wrote
+# them next to the dataset, in the catalogue's bucket of the Data Lake, so a key tells which.
+_DATAOPS_KEY_PREFIX = "runs/"
+
+
+def _store_for(key: str, catalogue_id: str | None) -> tuple[str | None, str]:
+    """(bucket, store) a run artifact's key is read from."""
+    if key.startswith(_DATAOPS_KEY_PREFIX):
+        return DATAOPS_BUCKET, "dataops"
+    return catalogue_id, "dataspace"
+
 # The report is small and always wanted; the CSVs are not, and a remediated
 # frame can be very large. Only a prefix of a CSV is ever served — enough for
 # the results chart — with the true size reported so the UI can say so.
@@ -88,8 +99,10 @@ async def list_run_artifacts(dag_id: str, run_id: str):
 
     artifacts = await _artifact_map(dag_id, run_id)
     report = None
-    if artifacts.get("report_json") and catalogue_id:
-        body, _ = dlc.get_object(catalogue_id, artifacts["report_json"], max_bytes=_MAX_REPORT_BYTES)
+    report_key = artifacts.get("report_json")
+    bucket, store = _store_for(report_key, catalogue_id) if report_key else (None, "dataspace")
+    if report_key and bucket:
+        body, _ = dlc.get_object(bucket, report_key, max_bytes=_MAX_REPORT_BYTES, store=store)
         try:
             # The pipeline writes report.json with Python's json, which emits NaN/Infinity
             # for missing cells. They are not valid JSON and FastAPI refuses to serialise
@@ -135,13 +148,15 @@ async def get_run_artifact(
     """
     run = await af.get_dag_run(dag_id, run_id)
     catalogue_id = (run.get("conf") or {}).get("catalogue_id")
-    if not catalogue_id:
-        raise HTTPException(status_code=400, detail="Run has no catalogue_id in its conf")
 
     artifacts = await _artifact_map(dag_id, run_id)
     key = artifacts.get(name)
     if not key:
         raise HTTPException(status_code=404, detail=f"Run produced no artifact named '{name}'")
+
+    bucket, store = _store_for(key, catalogue_id)
+    if not bucket:
+        raise HTTPException(status_code=400, detail="Run has no catalogue_id in its conf")
 
     # One byte before the window, when there is one. That single byte is what
     # lets this tell a row boundary from a mid-row offset: without it, trimming
@@ -149,7 +164,7 @@ async def get_run_artifact(
     # boundary this endpoint had just handed them.
     probe = 1 if offset and key.endswith(".csv") else 0
     body, total = dlc.get_object(
-        catalogue_id, key, max_bytes=max_bytes + probe, offset=offset - probe,
+        bucket, key, max_bytes=max_bytes + probe, offset=offset - probe, store=store,
     )
     reached_end = (offset - probe) + len(body) >= total
 

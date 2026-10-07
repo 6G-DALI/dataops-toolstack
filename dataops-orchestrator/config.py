@@ -28,6 +28,16 @@ DATASPACE_S3_ACCESS_KEY   = os.getenv("DATASPACE_S3_ACCESS_KEY", "")
 DATASPACE_S3_SECRET_KEY   = os.getenv("DATASPACE_S3_SECRET_KEY", "")
 DATASPACE_S3_REGION       = os.getenv("DATASPACE_S3_REGION", "us-east-1")
 
+# --- DataOps store: the bucket the validate DAG writes every run's outputs to (reports and
+# CSVs, keys under "runs/"). It is read through the same Airflow connection ("dali-dataops")
+# the DAG writes with. Endpoint and credentials default to the Data Lake's when unset, for a
+# deployment where both buckets live on one S3 server.
+DATAOPS_BUCKET            = os.getenv("DATAOPS_BUCKET", "6g-dali-dataops")
+DATAOPS_S3_ENDPOINT_URL   = os.getenv("DATAOPS_S3_ENDPOINT_URL", "") or DATASPACE_S3_ENDPOINT_URL
+DATAOPS_S3_ACCESS_KEY     = os.getenv("DATAOPS_S3_ACCESS_KEY", "") or DATASPACE_S3_ACCESS_KEY
+DATAOPS_S3_SECRET_KEY     = os.getenv("DATAOPS_S3_SECRET_KEY", "") or DATASPACE_S3_SECRET_KEY
+DATAOPS_S3_REGION         = os.getenv("DATAOPS_S3_REGION", "") or DATASPACE_S3_REGION
+
 # DAG that validates a newly submitted dataset (SHACL-equivalent + Great
 # Expectations checks), triggered automatically after a submission lands
 # in the Staging Catalogue.

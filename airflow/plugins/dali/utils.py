@@ -19,6 +19,8 @@ DEFAULT_CONN_ID     = "dali-dataspace"
 # user cannot point a run at a different Data Space / DataOps bucket.
 DATASPACE_S3_CONN_ID = os.getenv("DATASPACE_S3_CONN_ID", DEFAULT_CONN_ID)
 DATAOPS_S3_CONN_ID   = os.getenv("DATAOPS_S3_CONN_ID", "dali-dataops")
+# Bucket on that DataOps store (DATAOPS_S3_CONN_ID): the EDC-staged input and every run's outputs.
+DATAOPS_BUCKET       = os.getenv("DATAOPS_BUCKET", "6g-dali-dataops")
 
 # EDC connector base URLs — fixed per deployment, not DAG params, so a triggering user can't
 # point a run at an arbitrary connector. The defaults are the connector's tailnet address
