@@ -15,6 +15,8 @@ router = APIRouter(prefix="/stats", tags=["Stats"])
 # The landing page of the portal is public and calls /stats/portal on every visit, so the
 # answer is kept for a short time instead of querying piveau and Airflow each time.
 _PORTAL_STATS_TTL = float(os.getenv("PORTAL_STATS_CACHE_SECONDS", "60"))
+# The piveau catalogue whose datasets are the MLOps models: its size is the "models" figure.
+MODELS_CATALOGUE = os.getenv("MODELS_CATALOGUE", "6g-dali-models")
 _portal_stats_cache: dict = {"at": None, "value": None}
 _portal_stats_lock = asyncio.Lock()
 
@@ -30,8 +32,8 @@ async def get_portal_stats():
     """The headline counts for the portal's landing page.
 
     {"datasets", "catalogues", "pipelines", "models"}. A figure whose source cannot be reached is
-    null rather than 0 or a guess, so the page can leave it out. `models` is always null for now:
-    nothing the orchestrator talks to holds MLOps models.
+    null rather than 0 or a guess, so the page can leave it out. `models` is the number of entries in
+    the MODELS_CATALOGUE piveau catalogue (default "6g-dali-models").
 
     Public and read-only (the landing page is shown before sign-in), and cached for
     PORTAL_STATS_CACHE_SECONDS (default 60).
@@ -42,10 +44,11 @@ async def get_portal_stats():
         if at is not None and now - at < _PORTAL_STATS_TTL:
             return _portal_stats_cache["value"]
 
-        datasets, catalogues, pipelines = await asyncio.gather(
+        datasets, catalogues, pipelines, models = await asyncio.gather(
             piveau_client.count_indexed("dataset"),
             piveau_client.count_indexed("catalogue"),
             _count_pipelines(),
+            piveau_client.count_indexed("dataset", catalogue=MODELS_CATALOGUE),
             return_exceptions=True,
         )
 
@@ -59,7 +62,7 @@ async def get_portal_stats():
             "datasets": figure("datasets", datasets),
             "catalogues": figure("catalogues", catalogues),
             "pipelines": figure("pipelines", pipelines),
-            "models": None,
+            "models": figure("models", models),
         }
         _portal_stats_cache.update(at=now, value=value)
         return value

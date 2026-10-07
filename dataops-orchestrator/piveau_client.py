@@ -9,6 +9,7 @@ used by the DataOps UI's DAG trigger picker).
 """
 
 import asyncio
+import json
 import logging
 import os
 
@@ -368,8 +369,9 @@ async def fetch_distributions(
         raise _search_unavailable("fetch_distributions", exc) from exc
 
 
-async def count_indexed(kind: str) -> int:
-    """How many documents of one kind ("dataset" or "catalogue") piveau-hub-search holds.
+async def count_indexed(kind: str, catalogue: str | None = None) -> int:
+    """How many documents of one kind ("dataset" or "catalogue") piveau-hub-search holds,
+    optionally only the datasets of one catalogue.
 
     One request for a single result: the search response carries the total in `result.count`,
     so nothing is fetched per dataset. Raises on any failure, for the caller to handle.
@@ -377,10 +379,14 @@ async def count_indexed(kind: str) -> int:
     The kind is selected with `filter`. The `index` parameter used elsewhere in this module does
     not narrow the total: `index=dataset` and `index=catalogue` both report the count of
     datasets and catalogues together, which is why the lists here filter on each result's own
-    `index` field.
+    `index` field. Likewise a plain `catalog=` parameter does not narrow the total; a catalogue is
+    selected with the `facets` parameter, a JSON object: {"catalog": ["<id>"]}.
     """
+    params = {"filter": kind, "limit": 1}
+    if catalogue:
+        params["facets"] = json.dumps({"catalog": [catalogue]})
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get(f"{PIVEAU_URL}{_SEARCH_PATH}", params={"filter": kind, "limit": 1})
+        r = await client.get(f"{PIVEAU_URL}{_SEARCH_PATH}", params=params)
         r.raise_for_status()
         result = r.json()["result"]
         if result.get("index") != kind:
