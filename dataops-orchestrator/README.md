@@ -38,15 +38,22 @@ Returns `{"status": "ok"}` when the service is up.
 
 ## Testbed registry (`/testbeds`)
 
-Admin-only endpoints (Keycloak bearer token with the `testbed-admin` realm role) that register a
-testbed, provision its bucket, scoped Data Lake key and piveau catalogue, and generate its connector
-bundle. They answer 503 until the variables below are set.
+Endpoints (Keycloak bearer token) that register a testbed, provision its bucket, scoped Data Lake key
+and piveau catalogue, and generate its connector bundle. They answer 503 until the variables below are set.
+
+Access: members of the `testbed-admin` realm role manage every testbed and the registry (register,
+provision, rotate keys, deregister). Each testbed also has its own Keycloak group, `/testbeds/<slug>`;
+its members see only that testbed (detail, assets, audit, bundle) and can find assets, negotiate and start
+transfers for it, but cannot use the registry-wide actions. The token needs a `groups` claim (a Group
+Membership mapper on the `dataops-ui` client).
 
 | Variable | Default | Description |
 |---|---|---|
 | `TESTBED_SECRET_KEY` | (required) | Master secret: encrypts stored data-lake secrets, derives bundle passwords. Keep it stable. |
 | `KEYCLOAK_ISSUER` | (required) | e.g. `https://auth.dspace.sparkworks.net/auth/realms/dspace` |
-| `TESTBED_ADMIN_ROLE` | `testbed-admin` | Realm role allowed to use the endpoints |
+| `TESTBED_ADMIN_ROLE` | `testbed-admin` | Realm role that manages every testbed and the registry |
+| `KEYCLOAK_ADMIN_CLIENT_ID` / `_SECRET` | (unset) | Service-account client that creates a testbed's group when it is provisioned. Unset: that step is skipped and the group is made by hand |
+| `TESTBED_GROUP_PREFIX` | `testbeds` | A testbed's owners are the members of the Keycloak group `/<prefix>/<slug>` (empty prefix: top-level group named by slug) |
 | `TESTBED_DB_PATH` | `/srv/data/testbeds.db` | SQLite registry; must be on a persistent volume |
 | `DATASPACE_S3_ADMIN_ACCESS_KEY` / `_SECRET_KEY` | `DATASPACE_S3_*` | MinIO admin key (create buckets, users, policies) |
 | `TESTBED_BUCKET_PREFIX` | `6g-dali-` | Default bucket / catalogue / experiment prefix is `<prefix><slug>` |

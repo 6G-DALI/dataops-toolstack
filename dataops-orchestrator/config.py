@@ -92,11 +92,18 @@ CENTRAL_CONNECTOR_URL = os.getenv("CENTRAL_CONNECTOR_URL", "https://edc.dataspac
 DATASPACE_S3_ADMIN_ACCESS_KEY = os.getenv("DATASPACE_S3_ADMIN_ACCESS_KEY", "") or DATASPACE_S3_ACCESS_KEY
 DATASPACE_S3_ADMIN_SECRET_KEY = os.getenv("DATASPACE_S3_ADMIN_SECRET_KEY", "") or DATASPACE_S3_SECRET_KEY
 
-# --- Keycloak token validation for the admin-only endpoints -------------------
+# --- Keycloak token validation for the testbed endpoints -------------------
 # e.g. https://auth.dspace.sparkworks.net/auth/realms/dspace. Unset = the
 # testbed endpoints answer 503 (they hand out credentials, so never open).
 KEYCLOAK_ISSUER = os.getenv("KEYCLOAK_ISSUER", "")
 TESTBED_ADMIN_ROLE = os.getenv("TESTBED_ADMIN_ROLE", "testbed-admin")
+# Owners of a testbed are members of the Keycloak group <prefix>/<slug> (the token needs a "groups" claim:
+# a Group Membership mapper on the dataops-ui client). Empty prefix = top-level groups named by slug.
+TESTBED_GROUP_PREFIX = os.getenv("TESTBED_GROUP_PREFIX", "testbeds")
+# Optional: a confidential client with a service account in the same realm, allowed to manage groups. With it,
+# provisioning a testbed also creates its group; without it that step is skipped.
+KEYCLOAK_ADMIN_CLIENT_ID = os.getenv("KEYCLOAK_ADMIN_CLIENT_ID", "")
+KEYCLOAK_ADMIN_CLIENT_SECRET = os.getenv("KEYCLOAK_ADMIN_CLIENT_SECRET", "")
 
 # --- Starting transfers from the registry (routers/testbeds.py) -----------------
 # Data lake endpoint written into a transfer's destination. It is used by the *testbed connector's*

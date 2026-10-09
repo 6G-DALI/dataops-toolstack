@@ -4,6 +4,7 @@ import {
   deleteTestbed, discoverTestbedAssets, getTestbedDeletionPreview, downloadTestbedBundle, findTestbedTransfer, negotiateTestbedAsset, startTestbedTransfer, getTestbed, getTestbedAssets, getTestbedAudit,
   provisionTestbed, rotateTestbedCredentials,
 } from '../api/airflow'
+import { isTestbedAdmin } from '../auth/testbedAccess'
 import { bucketUrl, catalogueUrl } from '../config'
 import CopyableId from './ui/CopyableId'
 import ErrorMessage from './ErrorMessage'
@@ -126,17 +127,21 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
           })}>
           <FiSearch className="me-1" />Find asset
         </button>
-        <button className="btn btn-sm btn-outline-primary" disabled={busy}
-          onClick={() => act(() => provisionTestbed(slug), 'Provisioning re-run.')}>
-          <FiRefreshCw className="me-1" />Re-run provisioning
-        </button>
-        <button className="btn btn-sm btn-outline-secondary" disabled={busy || !tb.has_credentials}
-          onClick={() => act(async () => { const r = await rotateTestbedCredentials(slug); setNotice(r.note) })}>
-          <FiKey className="me-1" />Rotate Data Lake key
-        </button>
-        <button className="btn btn-sm btn-outline-danger ms-auto" disabled={busy} onClick={() => setConfirmDelete(true)}>
-          <FiTrash2 className="me-1" />Deregister
-        </button>
+        {isTestbedAdmin() && (
+          <>
+            <button className="btn btn-sm btn-outline-primary" disabled={busy}
+              onClick={() => act(() => provisionTestbed(slug), 'Provisioning re-run.')}>
+              <FiRefreshCw className="me-1" />Re-run provisioning
+            </button>
+            <button className="btn btn-sm btn-outline-secondary" disabled={busy || !tb.has_credentials}
+              onClick={() => act(async () => { const r = await rotateTestbedCredentials(slug); setNotice(r.note) })}>
+              <FiKey className="me-1" />Rotate Data Lake key
+            </button>
+            <button className="btn btn-sm btn-outline-danger ms-auto" disabled={busy} onClick={() => setConfirmDelete(true)}>
+              <FiTrash2 className="me-1" />Deregister
+            </button>
+          </>
+        )}
       </div>
 
       <div className="row g-3">
@@ -168,12 +173,13 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
           <div className="card mb-3"><div className="card-body">
             <h6 className="mb-3">Provisioning</h6>
             <ul className="list-unstyled mb-0">
-              {['bucket', 'credentials', 'catalogue'].map(key => {
+              {['bucket', 'credentials', 'catalogue', 'access'].map(key => {
                 const s = tb.steps[key]
                 return (
                   <li key={key} className="mb-1">
                     {!s ? <FiMinusCircle className="text-muted me-2" />
                       : s.status === 'ok' ? <FiCheckCircle className="text-success me-2" />
+                      : s.status === 'skipped' ? <FiMinusCircle className="text-muted me-2" />
                       : <FiXCircle className="text-danger me-2" />}
                     <strong className="text-capitalize">{key}</strong>
                     {links[key] && (

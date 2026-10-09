@@ -1,7 +1,8 @@
 """
 Testbed registry: the list of testbeds in the Data Space and the provisioning
 that onboarding one needs (identity, Data Lake bucket + scoped key, piveau
-catalogue, connector bundle). Admin-only: see auth.require_testbed_admin.
+catalogue, connector bundle). Admins manage every testbed; a testbed's owners (members of its
+Keycloak group) see and work with that testbed only: see auth.py.
 
 Provisioning is a series of idempotent steps, each recorded in `steps`, so a
 failure can be fixed and retried without redoing (or duplicating) the others.
@@ -17,14 +18,15 @@ from pydantic import BaseModel, Field
 
 import datalake_admin
 import edc_consumer_client
+import keycloak_admin
 import piveau_dataset_client as pdc
 import piveau_catalogue_client
 import testbed_store as store
-from auth import require_testbed_admin
+from auth import is_testbed_admin, owned_slugs, require_testbed_access, require_testbed_admin, require_testbed_user
 from config import DATALAKE_PUBLIC_ENDPOINT_URL, TESTBED_BUCKET_PREFIX, TESTBED_DOMAIN_SUFFIX
 from testbed_bundle import build_bundle
 
-router = APIRouter(prefix="/testbeds", tags=["Testbeds"], dependencies=[Depends(require_testbed_admin)])
+router = APIRouter(prefix="/testbeds", tags=["Testbeds"])
 
 _SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}[a-z0-9]$")
 
@@ -59,8 +61,11 @@ def _get(slug: str) -> dict:
 
 
 @router.get("")
-def list_testbeds():
+def list_testbeds(claims: dict = Depends(require_testbed_user)):
     items = store.list_testbeds()
+    if not is_testbed_admin(claims):
+        mine = owned_slugs(claims)
+        items = [t for t in items if t["slug"] in mine]
     return {"testbeds": items, "total": len(items)}
 
 
@@ -86,12 +91,12 @@ def register_testbed(body: TestbedCreate, claims: dict = Depends(require_testbed
     )
 
 
-@router.get("/{slug}")
+@router.get("/{slug}", dependencies=[Depends(require_testbed_access)])
 def get_testbed(slug: str):
     return _get(slug)
 
 
-@router.get("/{slug}/assets")
+@router.get("/{slug}/assets", dependencies=[Depends(require_testbed_access)])
 def list_assets(slug: str):
     _get(slug)
     assets = store.list_assets(slug)
@@ -99,7 +104,7 @@ def list_assets(slug: str):
 
 
 @router.post("/{slug}/assets/discover")
-def discover_assets(slug: str, claims: dict = Depends(require_testbed_admin)):
+def discover_assets(slug: str, claims: dict = Depends(require_testbed_access)):
     """Ask the testbed's connector, through the central connector, what it offers, and store each offered
     asset. These stored assets are what contract negotiation and transfers are started for later.
 
@@ -137,7 +142,7 @@ def _contract_info(asset: dict) -> dict | None:
 
 
 @router.post("/{slug}/assets/{asset_id}/transfers/find")
-def find_transfers(slug: str, asset_id: str, claims: dict = Depends(require_testbed_admin)):
+def find_transfers(slug: str, asset_id: str, claims: dict = Depends(require_testbed_access)):
     """Look on the central connector for this asset's contract and its transfers, and store what is found
     on the asset: the agreement (and the negotiation behind it) and the transfer worth tracking (a running
     one if there is one)."""
@@ -173,7 +178,7 @@ def find_transfers(slug: str, asset_id: str, claims: dict = Depends(require_test
 
 
 @router.post("/{slug}/assets/{asset_id}/negotiate")
-def negotiate_asset(slug: str, asset_id: str, claims: dict = Depends(require_testbed_admin)):
+def negotiate_asset(slug: str, asset_id: str, claims: dict = Depends(require_testbed_access)):
     """Negotiate a contract for the asset's offer through the central connector and store the agreement.
 
     Waits up to ~30 s for the negotiation to finish. If it is still running after that, it stays
@@ -224,7 +229,7 @@ def negotiate_asset(slug: str, asset_id: str, claims: dict = Depends(require_tes
 
 
 @router.post("/{slug}/assets/{asset_id}/transfers/start")
-def start_asset_transfer(slug: str, asset_id: str, claims: dict = Depends(require_testbed_admin)):
+def start_asset_transfer(slug: str, asset_id: str, claims: dict = Depends(require_testbed_access)):
     """Start the PiveauData PUSH transfer for an asset with a finalized contract, using the testbed's own
     scoped Data Lake key. Refuses to start a second transfer while one is running."""
     tb = _get(slug)
@@ -265,7 +270,7 @@ def start_asset_transfer(slug: str, asset_id: str, claims: dict = Depends(requir
             "transfer_id": transfer_id, "state": state}
 
 
-@router.get("/{slug}/audit")
+@router.get("/{slug}/audit", dependencies=[Depends(require_testbed_access)])
 def get_audit(slug: str):
     _get(slug)
     return {"entries": store.audit_log(slug)}
@@ -295,6 +300,12 @@ def provision(slug: str, claims: dict = Depends(require_testbed_admin)):
         f"Datasets contributed by the {tb['name']} testbed to the 6G-DALI Data Space.",
         tb["organisation"] or tb["name"]))
 
+    if keycloak_admin.configured():
+        record("access", lambda: keycloak_admin.ensure_group(slug))
+    else:
+        steps["access"] = {"status": "skipped", "at": _now(),
+                           "detail": "KEYCLOAK_ADMIN_CLIENT_ID/_SECRET not set: create the Keycloak group by hand"}
+
     if steps["bucket"]["status"] != "ok":
         steps["credentials"] = {"status": "skipped", "detail": "bucket not ready", "at": _now()}
     elif store.get_s3_credentials(slug):
@@ -308,7 +319,9 @@ def provision(slug: str, claims: dict = Depends(require_testbed_admin)):
             return "created"
         record("credentials", make_credentials)
 
-    all_ok = all(steps[s]["status"] == "ok" for s in ("bucket", "catalogue", "credentials"))
+    # `access` only counts when it was attempted: without a Keycloak admin client the group is made by hand
+    required = ("bucket", "catalogue", "credentials") + (("access",) if keycloak_admin.configured() else ())
+    all_ok = all(steps[s]["status"] == "ok" for s in required)
     updated = store.update_testbed(slug, steps=steps, status="provisioned" if all_ok else tb["status"])
     store.audit(slug, _actor(claims), "provision", "ok" if all_ok else "partial")
     return {
@@ -337,7 +350,7 @@ def rotate_credentials(slug: str, claims: dict = Depends(require_testbed_admin))
 
 
 @router.get("/{slug}/bundle")
-def download_bundle(slug: str, claims: dict = Depends(require_testbed_admin)):
+def download_bundle(slug: str, claims: dict = Depends(require_testbed_access)):
     tb = _get(slug)
     store.audit(slug, _actor(claims), "download-bundle")
     return Response(

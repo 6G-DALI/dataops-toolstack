@@ -12,6 +12,7 @@ import {
   type NavItem,
 } from '@6g-dali/ui-shell'
 import keycloak, { redirectUri } from '../auth/keycloak'
+import { canSeeTestbeds } from '../auth/testbedAccess'
 import { config } from '../config'
 import type { NavigateFn, NavParams, View } from '../types'
 
@@ -34,9 +35,6 @@ const NAV_ITEMS: NavItem<View>[] = [
   { label: 'Services',    view: 'services',        icon: FiSettings },
   { label: 'Testbeds',    view: 'testbeds',        icon: FiServer },
 ]
-
-/** Realm role that unlocks the testbed registry (see the orchestrator's TESTBED_ADMIN_ROLE). */
-const TESTBED_ADMIN_ROLE = 'testbed-admin'
 
 /** The portal owns the single account page for the whole DALI SSO environment,
  *  so the username links there rather than being inert. An unset portal URL
@@ -138,7 +136,7 @@ export default function Layout({ view, dagId, runId, taskId, onNavigate, childre
     <AppShell<View>
       brand={<>6G-<span className="dali-accent">DALI</span> DataOps</>}
       homeView="home"
-      nav={NAV_ITEMS.filter(i => i.view !== 'testbeds' || keycloak.hasRealmRole(TESTBED_ADMIN_ROLE))}
+      nav={NAV_ITEMS.filter(i => i.view !== 'testbeds' || canSeeTestbeds())}
       activeView={topLevelView(view)}
       onNavigate={next => onNavigate(next, {})}
       tools={daliTools(config)}

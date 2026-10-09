@@ -16,7 +16,7 @@ import config  # noqa: E402
 import datalake_admin  # noqa: E402
 import piveau_catalogue_client  # noqa: E402
 import testbed_store  # noqa: E402
-from auth import require_testbed_admin  # noqa: E402
+from auth import current_claims  # noqa: E402
 from main import app  # noqa: E402
 
 
@@ -27,7 +27,8 @@ def client(tmp_path, monkeypatch):
     if testbed_store._PG:  # run against a real Postgres when DATABASE_URL is set
         with testbed_store._db() as c:
             c.execute("TRUNCATE testbeds, testbed_audit")
-    app.dependency_overrides[require_testbed_admin] = lambda: {"preferred_username": "tester"}
+    claims = {"preferred_username": "tester", "realm_access": {"roles": ["testbed-admin"]}}
+    app.dependency_overrides[current_claims] = lambda: claims  # tests change `client.claims` to act as someone else
     calls = []
     monkeypatch.setattr(datalake_admin, "ensure_bucket", lambda b: calls.append(("bucket", b)) or "created")
     monkeypatch.setattr(datalake_admin, "create_scoped_user",
@@ -37,6 +38,7 @@ def client(tmp_path, monkeypatch):
                         lambda *a: calls.append(("cat", a[0])) or "created")
     c = TestClient(app)
     c.calls = calls
+    c.claims = claims
     yield c
     app.dependency_overrides.clear()
 
@@ -253,3 +255,109 @@ def test_old_asset_table_gets_new_columns(tmp_path, monkeypatch):
     assert testbed_store.list_assets("x") == []  # opening the db runs the migration
     cols = {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(testbed_assets)")}
     assert {"transfer_state", "transfer_checked_at"} <= cols
+
+
+def _act_as_owner(client, *groups):
+    client.claims.clear()
+    client.claims.update({"preferred_username": "owner", "realm_access": {"roles": []}, "groups": list(groups)})
+
+
+def test_owner_sees_and_works_with_only_their_testbed(client):
+    for slug in ("kul", "isi"):
+        client.post("/testbeds", json={"slug": slug, "name": slug.upper()})
+    _act_as_owner(client, "/testbeds/kul")
+
+    assert [t["slug"] for t in client.get("/testbeds").json()["testbeds"]] == ["kul"]
+    assert client.get("/testbeds/kul").status_code == 200
+    assert client.get("/testbeds/kul/assets").status_code == 200
+    assert client.get("/testbeds/kul/audit").status_code == 200
+    assert client.get("/testbeds/kul/bundle").status_code == 200
+
+    for path in ("", "/assets", "/audit", "/bundle"):
+        assert client.get(f"/testbeds/isi{path}").status_code == 403
+    assert client.post("/testbeds/isi/assets/discover").status_code == 403
+    assert client.post("/testbeds/isi/assets/a1/negotiate").status_code == 403
+    assert client.post("/testbeds/isi/assets/a1/transfers/start").status_code == 403
+
+
+def test_owner_cannot_use_registry_wide_actions(client):
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+    _act_as_owner(client, "/testbeds/kul")
+    assert client.post("/testbeds", json={"slug": "new", "name": "New"}).status_code == 403
+    assert client.post("/testbeds/kul/provision").status_code == 403
+    assert client.post("/testbeds/kul/credentials/rotate").status_code == 403
+    assert client.delete("/testbeds/kul").status_code == 403
+    assert client.get("/testbeds/kul").status_code == 200  # still theirs to see
+
+
+def test_user_without_a_testbed_group_sees_nothing(client):
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+    _act_as_owner(client, "/other/kul", "/testbeds/kul/extra", "/testbeds")
+    assert client.get("/testbeds").json() == {"testbeds": [], "total": 0}
+    assert client.get("/testbeds/kul").status_code == 403
+
+
+def test_owner_group_may_be_a_bare_name_and_admin_sees_all(client):
+    for slug in ("kul", "isi"):
+        client.post("/testbeds", json={"slug": slug, "name": slug.upper()})
+    _act_as_owner(client, "kul")  # Keycloak "full group path" off
+    assert [t["slug"] for t in client.get("/testbeds").json()["testbeds"]] == ["kul"]
+    client.claims.update({"realm_access": {"roles": ["testbed-admin"]}})
+    assert client.get("/testbeds").json()["total"] == 2
+
+
+# --- Keycloak group per testbed -------------------------------------------------------------------------
+
+import httpx  # noqa: E402
+import keycloak_admin  # noqa: E402
+
+
+def _keycloak(monkeypatch, existing=(), child_conflict=False):
+    """Stands in for Keycloak: records the calls, `existing` are the top-level groups already there."""
+    seen, groups = [], {n: f"id-{n}" for n in existing}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        seen.append((request.method, path))
+        if path.endswith("/openid-connect/token"):
+            return httpx.Response(200, json={"access_token": "tok"})
+        assert request.headers["authorization"] == "Bearer tok"
+        if request.method == "GET":
+            name = request.url.params["search"]
+            return httpx.Response(200, json=[{"id": groups[name], "name": name, "path": f"/{name}"}] if name in groups else [])
+        if path.endswith("/children"):
+            return httpx.Response(409 if child_conflict else 201)
+        name = request.read().decode().split('"')[3]
+        groups[name] = f"id-{name}"
+        return httpx.Response(201)
+
+    real = httpx.Client
+    monkeypatch.setattr(keycloak_admin.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    for name, value in (("KEYCLOAK_ISSUER", "https://kc.example/auth/realms/dspace"), ("KEYCLOAK_ADMIN_CLIENT_ID", "orch"),
+                        ("KEYCLOAK_ADMIN_CLIENT_SECRET", "s"), ("TESTBED_GROUP_PREFIX", "testbeds")):
+        monkeypatch.setattr(keycloak_admin, name, value)
+    return seen
+
+
+def test_group_created_under_the_prefix_group(monkeypatch):
+    seen = _keycloak(monkeypatch)
+    assert keycloak_admin.ensure_group("kul") == "created"
+    assert ("POST", "/auth/admin/realms/dspace/groups") in seen  # the /testbeds parent was missing
+    assert ("POST", "/auth/admin/realms/dspace/groups/id-testbeds/children") in seen
+
+
+def test_group_that_already_exists_is_not_an_error(monkeypatch):
+    _keycloak(monkeypatch, existing=("testbeds",), child_conflict=True)
+    assert keycloak_admin.ensure_group("kul") == "exists"
+
+
+def test_provision_records_the_access_step(client, monkeypatch):
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+    monkeypatch.setattr(keycloak_admin, "configured", lambda: False)
+    steps = client.post("/testbeds/kul/provision").json()["testbed"]["steps"]
+    assert steps["access"]["status"] == "skipped"
+    assert client.post("/testbeds/kul/provision").json()["testbed"]["status"] == "provisioned"  # skipped does not block
+
+    monkeypatch.setattr(keycloak_admin, "configured", lambda: True)
+    monkeypatch.setattr(keycloak_admin, "ensure_group", lambda slug: "created")
+    assert client.post("/testbeds/kul/provision").json()["testbed"]["steps"]["access"]["status"] == "ok"
