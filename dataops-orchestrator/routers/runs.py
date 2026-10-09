@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 
 import airflow_client as af
 import datalake_client as dlc
+from config import DATAOPS_BUCKET
 
 router = APIRouter(prefix="/dags/{dag_id}/runs", tags=["DAG Runs"])
 
