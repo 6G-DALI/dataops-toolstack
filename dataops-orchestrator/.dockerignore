@@ -1,0 +1,12 @@
+# Keep the build context (and the COPY . . layer) to the app itself
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+docs/
+README.md
+.git
+.idea
