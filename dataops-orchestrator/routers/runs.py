@@ -1,4 +1,5 @@
 import json
+import re
 
 from fastapi import APIRouter, HTTPException, Query, Response
 
@@ -56,15 +57,58 @@ async def get_task_logs(dag_id: str, run_id: str, task_id: str, try_number: int 
 _ARTIFACTS_TASK_ID = "upload_artifacts"
 
 # Runs write their outputs to the DataOps bucket under "runs/...". Runs made before that wrote
-# them next to the dataset, in the catalogue's bucket of the Data Lake, so a key tells which.
+# them next to the dataset, in the catalogue's bucket of the Data Lake:
+#
+#     <dataset>/<asset>_<timestamp>_raw.csv   (also _soft_cleaned.csv, _remediated.csv,
+#                                              _report.json, _imputed_*.csv)
+#
+# Those runs still hold the old keys in their XCom. The files have been copied into the DataOps
+# bucket as runs/<catalogue>/<dataset>/<asset>/legacy-<timestamp>/<name>, so such a key is looked
+# up there first, and in the catalogue bucket if it has not been copied.
 _DATAOPS_KEY_PREFIX = "runs/"
+_LEGACY_KEY = re.compile(
+    r"^(?P<dataset>[^/]+)/(?P<asset>[^/]+?)_(?P<ts>\d{8}T\d{6}Z)"
+    r"(?P<suffix>_raw\.csv|_soft_cleaned\.csv|_remediated\.csv|_report\.json|_imputed(?:_[A-Za-z0-9.-]+?)*\.csv)$"
+)
 
 
-def _store_for(key: str, catalogue_id: str | None) -> tuple[str | None, str]:
-    """(bucket, store) a run artifact's key is read from."""
+def _legacy_dataops_key(key: str, catalogue_id: str | None) -> str | None:
+    """Where a pre-migration key's file lives in the DataOps bucket, or None if it is not one."""
+    m = _LEGACY_KEY.match(key)
+    if not m or not catalogue_id:
+        return None
+    return (f"{_DATAOPS_KEY_PREFIX}{catalogue_id}/{m['dataset']}/{m['asset']}/"
+            f"legacy-{m['ts']}/{m['suffix'].lstrip('_')}")
+
+
+def _locations(key: str, catalogue_id: str | None) -> list[tuple[str, str, str]]:
+    """Every (bucket, key, store) a run artifact may be read from, most likely first."""
     if key.startswith(_DATAOPS_KEY_PREFIX):
-        return DATAOPS_BUCKET, "dataops"
-    return catalogue_id, "dataspace"
+        return [(DATAOPS_BUCKET, key, "dataops")]
+    found = []
+    migrated = _legacy_dataops_key(key, catalogue_id)
+    if migrated:
+        found.append((DATAOPS_BUCKET, migrated, "dataops"))
+    if catalogue_id:
+        found.append((catalogue_id, key, "dataspace"))
+    return found
+
+
+def _read_artifact(catalogue_id: str | None, key: str, **window) -> tuple[bytes, int]:
+    """dlc.get_object over _locations: the first place that has the object. A missing object
+    (404) moves on to the next place; any other failure is raised."""
+    locations = _locations(key, catalogue_id)
+    if not locations:
+        raise HTTPException(status_code=400, detail="Run has no catalogue_id in its conf")
+    last = None
+    for bucket, location_key, store in locations:
+        try:
+            return dlc.get_object(bucket, location_key, store=store, **window)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            last = exc
+    raise last
 
 # The report is small and always wanted; the CSVs are not, and a remediated
 # frame can be very large. Only a prefix of a CSV is ever served — enough for
@@ -101,9 +145,8 @@ async def list_run_artifacts(dag_id: str, run_id: str):
     artifacts = await _artifact_map(dag_id, run_id)
     report = None
     report_key = artifacts.get("report_json")
-    bucket, store = _store_for(report_key, catalogue_id) if report_key else (None, "dataspace")
-    if report_key and bucket:
-        body, _ = dlc.get_object(bucket, report_key, max_bytes=_MAX_REPORT_BYTES, store=store)
+    if report_key and (catalogue_id or report_key.startswith(_DATAOPS_KEY_PREFIX)):
+        body, _ = _read_artifact(catalogue_id, report_key, max_bytes=_MAX_REPORT_BYTES)
         try:
             # The pipeline writes report.json with Python's json, which emits NaN/Infinity
             # for missing cells. They are not valid JSON and FastAPI refuses to serialise
@@ -155,8 +198,7 @@ async def get_run_artifact(
     if not key:
         raise HTTPException(status_code=404, detail=f"Run produced no artifact named '{name}'")
 
-    bucket, store = _store_for(key, catalogue_id)
-    if not bucket:
+    if not _locations(key, catalogue_id):
         raise HTTPException(status_code=400, detail="Run has no catalogue_id in its conf")
 
     # One byte before the window, when there is one. That single byte is what
@@ -164,8 +206,8 @@ async def get_run_artifact(
     # the leading line would eat a good row whenever the caller passed back the
     # boundary this endpoint had just handed them.
     probe = 1 if offset and key.endswith(".csv") else 0
-    body, total = dlc.get_object(
-        bucket, key, max_bytes=max_bytes + probe, offset=offset - probe, store=store,
+    body, total = _read_artifact(
+        catalogue_id, key, max_bytes=max_bytes + probe, offset=offset - probe,
     )
     reached_end = (offset - probe) + len(body) >= total
 
