@@ -361,3 +361,70 @@ def test_provision_records_the_access_step(client, monkeypatch):
     monkeypatch.setattr(keycloak_admin, "configured", lambda: True)
     monkeypatch.setattr(keycloak_admin, "ensure_group", lambda slug: "created")
     assert client.post("/testbeds/kul/provision").json()["testbed"]["steps"]["access"]["status"] == "ok"
+
+
+# --- members of a testbed's group --------------------------------------------------------------------------
+
+def _members_keycloak(monkeypatch, users, members=()):
+    """Stand-in for the Keycloak admin API: `users` exist, `members` are in /testbeds/kul."""
+    seen, current = [], list(members)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path, method = request.url.path, request.method
+        seen.append((method, path))
+        if path.endswith("/openid-connect/token"):
+            return httpx.Response(200, json={"access_token": "tok"})
+        if path.endswith("/group-by-path/testbeds/kul"):
+            return httpx.Response(200, json={"id": "g-kul", "name": "kul", "path": "/testbeds/kul"})
+        if path.endswith("/groups/g-kul/members"):
+            return httpx.Response(200, json=[u for u in users if u["id"] in current])
+        if path.endswith("/users") and method == "GET":
+            wanted = request.url.params["email"]
+            return httpx.Response(200, json=[u for u in users if u["email"] == wanted])
+        if "/users/" in path and path.endswith("/groups/g-kul"):
+            uid = path.split("/users/")[1].split("/")[0]
+            (current.append if method == "PUT" else current.remove)(uid) if (uid not in current) == (method == "PUT") else None
+            return httpx.Response(204)
+        return httpx.Response(404)
+
+    real = httpx.Client
+    monkeypatch.setattr(keycloak_admin.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    for name, value in (("KEYCLOAK_ISSUER", "https://kc.example/auth/realms/dspace"), ("KEYCLOAK_ADMIN_CLIENT_ID", "orch"),
+                        ("KEYCLOAK_ADMIN_CLIENT_SECRET", "s"), ("TESTBED_GROUP_PREFIX", "testbeds")):
+        monkeypatch.setattr(keycloak_admin, name, value)
+    return seen
+
+
+USERS = [{"id": "u1", "username": "ann", "email": "ann@kul.be", "firstName": "Ann", "lastName": "Peeters", "enabled": True},
+         {"id": "u2", "username": "bob", "email": "bob@kul.be", "enabled": True}]
+
+
+def test_admin_lists_adds_and_removes_members(client, monkeypatch):
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+    _members_keycloak(monkeypatch, USERS, members=["u1"])
+    assert [m["email"] for m in client.get("/testbeds/kul/members").json()["members"]] == ["ann@kul.be"]
+    added = client.post("/testbeds/kul/members", json={"email": " bob@kul.be "})
+    assert added.status_code == 201 and added.json()["id"] == "u2"
+    assert [m["email"] for m in client.get("/testbeds/kul/members").json()["members"]] == ["ann@kul.be", "bob@kul.be"]
+    assert client.delete("/testbeds/kul/members/u1").status_code == 200
+    assert [m["email"] for m in client.get("/testbeds/kul/members").json()["members"]] == ["bob@kul.be"]
+    actions = [e["action"] for e in client.get("/testbeds/kul/audit").json()["entries"]]
+    assert "add-member" in actions and "remove-member" in actions
+
+
+def test_adding_an_unknown_or_malformed_email_is_refused(client, monkeypatch):
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+    _members_keycloak(monkeypatch, USERS)
+    r = client.post("/testbeds/kul/members", json={"email": "nobody@kul.be"})
+    assert r.status_code == 404 and "sign in" in r.json()["detail"]
+    assert client.post("/testbeds/kul/members", json={"email": "not-an-email"}).status_code == 422
+
+
+def test_members_are_admin_only_and_need_the_keycloak_client(client, monkeypatch):
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+    monkeypatch.setattr(keycloak_admin, "configured", lambda: False)
+    assert client.get("/testbeds/kul/members").status_code == 424  # main.py reports an upstream 503 as 424
+    _act_as_owner(client, "/testbeds/kul")
+    assert client.get("/testbeds/kul/members").status_code == 403
+    assert client.post("/testbeds/kul/members", json={"email": "ann@kul.be"}).status_code == 403
+    assert client.delete("/testbeds/kul/members/u1").status_code == 403

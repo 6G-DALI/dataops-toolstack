@@ -4,6 +4,9 @@ import StateBadge from './StateBadge'
 import MetricCard from './ui/MetricCard'
 import CopyableId from './ui/CopyableId'
 import { FiAlertTriangle, FiPause, FiRefreshCw } from 'react-icons/fi'
+import { isDataopsOperator } from '../auth/dataopsAccess'
+import { canSeeTestbeds } from '../auth/testbedAccess'
+import HomeTestbeds from './HomeTestbeds'
 import type { NavigateFn, Stats } from '../types'
 
 /** Dashboard summary refresh interval — §19.3 recommends 15–30 s. */
@@ -91,7 +94,30 @@ interface HomePageProps {
   onNavigate: NavigateFn
 }
 
+/**
+ * The home page is for everyone signed in, and each block is shown only to those it is for: the DataOps
+ * dashboard to the operator group, the testbeds block to anyone with access to a testbed. The dashboard is a
+ * separate component so its stats are not even requested (or polled) for people who cannot see it.
+ */
 export default function HomePage({ onNavigate }: HomePageProps) {
+  const operator = isDataopsOperator()
+  const testbeds = canSeeTestbeds()
+
+  return (
+    <div>
+      {testbeds && <HomeTestbeds onNavigate={onNavigate} />}
+      {operator && <OperationsDashboard onNavigate={onNavigate} />}
+      {!operator && !testbeds && (
+        <div className="alert alert-warning">
+          <strong>No access yet.</strong> Your account is not a member of the DataOps operators or of any testbed.
+          Ask a DataOps administrator to add you.
+        </div>
+      )}
+    </div>
+  )
+}
+
+function OperationsDashboard({ onNavigate }: HomePageProps) {
   const { data: stats, error, loading, lastUpdated, refresh, isStale } = useStats()
 
   // Loading: skeletons that approximate the final layout, not a page-wide

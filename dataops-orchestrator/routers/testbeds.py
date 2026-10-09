@@ -29,6 +29,7 @@ from testbed_bundle import build_bundle
 router = APIRouter(prefix="/testbeds", tags=["Testbeds"])
 
 _SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}[a-z0-9]$")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class TestbedCreate(BaseModel):
@@ -274,6 +275,40 @@ def start_asset_transfer(slug: str, asset_id: str, claims: dict = Depends(requir
 def get_audit(slug: str):
     _get(slug)
     return {"entries": store.audit_log(slug)}
+
+
+class MemberAdd(BaseModel):
+    email: str = Field(description="E-mail address of an existing Keycloak user")
+
+
+@router.get("/{slug}/members")
+def list_members(slug: str, claims: dict = Depends(require_testbed_admin)):
+    """The members of the testbed's Keycloak group: the people who can use this testbed in the UI."""
+    _get(slug)
+    keycloak_admin.require_configured()
+    members = keycloak_admin.list_members(slug)
+    return {"members": members, "total": len(members)}
+
+
+@router.post("/{slug}/members", status_code=201)
+def add_member(slug: str, body: MemberAdd, claims: dict = Depends(require_testbed_admin)):
+    _get(slug)
+    keycloak_admin.require_configured()
+    email = body.email.strip()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(status_code=422, detail="Not a valid e-mail address")
+    member = keycloak_admin.add_member(slug, email)
+    store.audit(slug, _actor(claims), "add-member", email)
+    return member
+
+
+@router.delete("/{slug}/members/{user_id}")
+def remove_member(slug: str, user_id: str, claims: dict = Depends(require_testbed_admin)):
+    _get(slug)
+    keycloak_admin.require_configured()
+    keycloak_admin.remove_member(slug, user_id)
+    store.audit(slug, _actor(claims), "remove-member", user_id)
+    return {"removed": user_id}
 
 
 @router.post("/{slug}/provision")

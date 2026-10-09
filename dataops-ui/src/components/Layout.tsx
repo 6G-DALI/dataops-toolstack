@@ -12,6 +12,7 @@ import {
   type NavItem,
 } from '@6g-dali/ui-shell'
 import keycloak, { redirectUri } from '../auth/keycloak'
+import { isDataopsOperator, isOperationsView } from '../auth/dataopsAccess'
 import { canSeeTestbeds } from '../auth/testbedAccess'
 import { config } from '../config'
 import type { NavigateFn, NavParams, View } from '../types'
@@ -136,7 +137,7 @@ export default function Layout({ view, dagId, runId, taskId, onNavigate, childre
     <AppShell<View>
       brand={<>6G-<span className="dali-accent">DALI</span> DataOps</>}
       homeView="home"
-      nav={NAV_ITEMS.filter(i => i.view !== 'testbeds' || canSeeTestbeds())}
+      nav={NAV_ITEMS.filter(i => i.view === 'home' || (isOperationsView(i.view) ? isDataopsOperator() : canSeeTestbeds()))}
       activeView={topLevelView(view)}
       onNavigate={next => onNavigate(next, {})}
       tools={daliTools(config)}

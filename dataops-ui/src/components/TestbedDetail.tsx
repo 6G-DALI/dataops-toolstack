@@ -11,6 +11,7 @@ import ErrorMessage from './ErrorMessage'
 import LoadingSpinner from './LoadingSpinner'
 import Modal from './Modal'
 import { TestbedStatusBadge } from './TestbedList'
+import TestbedMembers from './TestbedMembers'
 import TestbedTimeline from './TestbedTimeline'
 import type { DeletionPreview, DeregisterResponse, NavigateFn, Testbed, TestbedAsset, TestbedAuditEntry } from '../types'
 
@@ -194,6 +195,8 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
               })}
             </ul>
           </div></div>
+
+          {isTestbedAdmin() && <TestbedMembers slug={slug} onChanged={load} />}
 
           <div className="card mb-3"><div className="card-body">
             <h6 className="mb-3">Assets</h6>

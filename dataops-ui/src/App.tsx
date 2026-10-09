@@ -16,6 +16,7 @@ import HomePage from './components/HomePage'
 import TestbedList from './components/TestbedList'
 import TestbedRegister from './components/TestbedRegister'
 import TestbedDetail from './components/TestbedDetail'
+import { isDataopsOperator, isOperationsView } from './auth/dataopsAccess'
 import type { NavParams, View } from './types'
 import './styles/App.css'
 
@@ -30,7 +31,7 @@ interface NavState {
 function parseHash(): NavState {
   const hash = window.location.hash.replace(/^#\/?/, '')
   const parts = hash.split('/')
-  const view = (parts[0] || 'dags') as View
+  const view = (parts[0] || (isDataopsOperator() ? 'dags' : 'home')) as View
   return {
     view,
     dagId: decodeURIComponent(parts[1] || ''),
@@ -63,6 +64,18 @@ export default function App() {
   }
 
   const { view, dagId, runId, taskId, tryNumber } = nav
+
+  // The operations pages are only for members of the DataOps operator group. This hides them in the UI;
+  // it is not an access control on the orchestrator or Airflow behind them.
+  if (isOperationsView(view) && !isDataopsOperator()) {
+    return (
+      <Layout view={view} dagId={null} runId={null} taskId={null} onNavigate={navigate}>
+        <div className="alert alert-warning">
+          <strong>No access.</strong> This page is for the DataOps operators. <a href={buildHash('home')}>Back to the home page</a>.
+        </div>
+      </Layout>
+    )
+  }
 
   return (
     <Layout

@@ -718,6 +718,15 @@ export interface TestbedProvisionResponse {
   followups: string[]
 }
 
+/** A member of a testbed's Keycloak group: someone who can use the testbed in this UI. */
+export interface TestbedMember {
+  id: string
+  username: string | null
+  email: string | null
+  name: string | null
+  enabled: boolean
+}
+
 export interface TestbedAuditEntry {
   ts: string
   actor: string | null

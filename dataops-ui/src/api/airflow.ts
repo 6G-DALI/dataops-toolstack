@@ -35,6 +35,7 @@ import type {
   StartTransferResponse,
   TestbedAsset,
   TestbedAuditEntry,
+  TestbedMember,
   TestbedCreateRequest,
   TestbedProvisionResponse,
 } from '../types'
@@ -426,6 +427,19 @@ export function registerTestbed(body: TestbedCreateRequest): Promise<Testbed> {
 
 export function provisionTestbed(slug: string): Promise<TestbedProvisionResponse> {
   return request(`/testbeds/${encodeURIComponent(slug)}/provision`, { method: 'POST' })
+}
+
+export function getTestbedMembers(slug: string): Promise<{ members: TestbedMember[]; total: number }> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/members`)
+}
+
+/** Adds the existing Keycloak user with this e-mail address to the testbed's group. */
+export function addTestbedMember(slug: string, email: string): Promise<TestbedMember> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/members`, { method: 'POST', body: JSON.stringify({ email }) })
+}
+
+export function removeTestbedMember(slug: string, userId: string): Promise<{ removed: string }> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' })
 }
 
 export function rotateTestbedCredentials(slug: string): Promise<{ note: string }> {
