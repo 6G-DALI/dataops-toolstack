@@ -235,7 +235,7 @@ def _metadata_template(tb: dict) -> str:
     }, indent=2) + "\n"
 
 
-def _readme(tb: dict, domain: str) -> str:
+def _readme(tb: dict, domain: str, catalogue_url: str) -> str:
     slug = tb["slug"]
     return f"""# {tb['name']}: 6G-DALI testbed connector
 
@@ -251,24 +251,43 @@ Identity assigned by the registry (do not change):
 
 1. Create the DNS record for `{domain}` and install `nginx/{domain}.conf` with a TLS certificate.
 2. `docker compose up -d`, then check `curl -s http://localhost:18190/api/check/health`.
-3. Open the catalogue page, `https://{domain}/api/catalog` (or http://localhost:18190/api/catalog), click **Testbed asset**,
+3. Get the bucket name and an access key from RustFS (see "Bucket and keys" below).
+4. Open the catalogue page, `{catalogue_url}` (or http://localhost:18190/api/catalog), click **Testbed asset**,
    enter the admin key (`edc.catalog.ui.asset.admin.key` in the properties file) and register your bucket as the
    testbed's asset. If the connector already has an asset of the testbed type, choose it instead.
-4. Tell the platform administrator the connector is up and the asset is registered. Until the asset
+5. Tell the platform administrator the connector is up and the asset is registered. Until the asset
    exists your testbed offers nothing to the data space; the administrator checks this with
    "Find asset" in the DataOps UI and then connects it.
-5. Upload a dataset to the bucket: `<dataset>/metadata.json` first, then the CSV files.
+6. Upload a dataset to the bucket: `<dataset>/metadata.json` first, then the CSV files.
    Use `template/metadata.json` as a starting point.
 
-The local store (`rustfs`) holds your datasets in the bucket `{slug}-datasets`. Create an access
-key for the connector in its console (http://localhost:9001); the data-lake credentials are
-managed centrally and are not needed here.
+## Bucket and keys
+
+The local store (`rustfs`) holds your datasets. The asset form needs its bucket name and an access
+key, which you get by connecting to RustFS:
+
+1. Open the RustFS console, http://localhost:9001, and log in with the local store admin user
+   `{slug}-admin` and the password in `docker-compose.yaml` (`RUSTFS_ROOT_PASSWORD`).
+2. **Bucket name:** under *Buckets*, use `{slug}-datasets`, created automatically on first start (use *Create Bucket* if it is missing).
+3. **Access key and secret key:** under *Access Keys*, click *Create Access Key*. Copy the access key and
+   the secret key now: the secret is shown only once.
+4. In the **Testbed asset** form enter: S3 endpoint `http://rustfs:9000` (the address of RustFS as seen
+   from the connector's container, not `localhost`), the bucket name, the access key and the secret key.
+   Leave *Prefix* empty to offer the whole bucket.
+
+The data-lake credentials are managed centrally and are not needed here.
 """
 
 
 def build_bundle(tb: dict) -> bytes:
     slug = tb["slug"]
-    domain = tb["dsp_url"].split("://", 1)[-1].split("/", 1)[0]
+    scheme, _, rest = tb["dsp_url"].partition("://")
+    authority = rest.split("/", 1)[0]
+    # Host only: the DSP URL may carry a port (e.g. an IP address with 18192) that is not part of the DNS name.
+    domain = authority.rsplit(":", 1)[0] if ":" in authority and not authority.endswith("]") else authority
+    # Behind nginx the catalogue is served on the public name; with an explicit port there is no nginx, so
+    # reach the connector's own web port.
+    catalogue_url = f"{scheme}://{domain}:18190/api/catalog" if authority != domain else f"{scheme}://{domain}/api/catalog"
     pg = derive_secret(slug, "postgres")
     s3_user, s3_password = f"{slug}-admin", derive_secret(slug, "local-s3")
     files = {
@@ -276,7 +295,7 @@ def build_bundle(tb: dict) -> bytes:
         "docker-compose.yaml": _compose(tb, s3_user, s3_password, pg),
         f"nginx/{domain}.conf": _nginx(tb, domain),
         "template/metadata.json": _metadata_template(tb),
-        "README.md": _readme(tb, domain),
+        "README.md": _readme(tb, domain, catalogue_url),
     }
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:

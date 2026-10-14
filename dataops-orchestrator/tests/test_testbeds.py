@@ -106,6 +106,25 @@ def test_bundle_contents_and_stability(client):
     assert "map $uri $edc_backend" in nginx and "proxy_pass $edc_backend;" in nginx
 
 
+def _readme_of(client, slug="kul"):
+    z = zipfile.ZipFile(io.BytesIO(client.get(f"/testbeds/{slug}/bundle").content))
+    return z.read(f"connector-{slug}/README.md").decode(), z.namelist()
+
+
+def test_readme_catalogue_url_and_rustfs_instructions(client):
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+    readme, _ = _readme_of(client)
+    assert "`https://edc.kul.6gdali.eu/api/catalog`" in readme
+    assert "## Bucket and keys" in readme and "http://localhost:9001" in readme and "kul-datasets" in readme
+
+
+def test_readme_drops_dsp_port_from_host(client):
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven", "dsp_url": "https://83.212.32.166:18192/protocol"})
+    readme, names = _readme_of(client)
+    assert "`https://83.212.32.166:18190/api/catalog`" in readme and "18192/api/catalog" not in readme
+    assert "connector-kul/nginx/83.212.32.166.conf" in names
+
+
 def test_policy_is_scoped_to_bucket():
     doc = datalake_admin.policy_document("6g-dali-kul")
     resources = [r for s in doc["Statement"] for r in s["Resource"]]
