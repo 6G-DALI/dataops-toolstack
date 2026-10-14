@@ -306,6 +306,17 @@ def test_owner_group_may_be_a_bare_name_and_admin_sees_all(client):
     assert client.get("/testbeds").json()["total"] == 2
 
 
+def test_admin_can_update_dsp_url_owner_cannot(client):
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+    r = client.patch("/testbeds/kul", json={"dsp_url": " https://edc.new.example/protocol "})
+    assert r.status_code == 200 and r.json()["dsp_url"] == "https://edc.new.example/protocol"
+    assert client.get("/testbeds/kul").json()["dsp_url"] == "https://edc.new.example/protocol"
+    assert client.patch("/testbeds/kul", json={"dsp_url": "ftp://x"}).status_code == 422
+    assert client.patch("/testbeds/nope", json={"dsp_url": "https://x.io/p"}).status_code == 404
+    _act_as_owner(client, "kul")
+    assert client.patch("/testbeds/kul", json={"dsp_url": "https://evil.io/p"}).status_code == 403
+
+
 # --- Keycloak group per testbed -------------------------------------------------------------------------
 
 import httpx  # noqa: E402

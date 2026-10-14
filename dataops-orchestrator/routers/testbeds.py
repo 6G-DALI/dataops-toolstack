@@ -29,6 +29,7 @@ from testbed_bundle import build_bundle
 router = APIRouter(prefix="/testbeds", tags=["Testbeds"])
 
 _SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}[a-z0-9]$")
+_DSP_URL_RE = re.compile(r"^https?://[^\s/]+(/\S*)?$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -44,6 +45,10 @@ class TestbedCreate(BaseModel):
     bucket: str | None = None
     dsp_url: str | None = None
     produced_by_iri: str | None = None
+
+
+class TestbedUpdate(BaseModel):
+    dsp_url: str = Field(description="The testbed connector's DSP endpoint (edc.dsp.callback.address)")
 
 
 def _now() -> str:
@@ -95,6 +100,22 @@ def register_testbed(body: TestbedCreate, claims: dict = Depends(require_testbed
 @router.get("/{slug}", dependencies=[Depends(require_testbed_access)])
 def get_testbed(slug: str):
     return _get(slug)
+
+
+@router.patch("/{slug}")
+def update_testbed(slug: str, body: TestbedUpdate, claims: dict = Depends(require_testbed_admin)):
+    """Change the testbed's DSP endpoint. The connector is no longer known to be reachable at the new
+    address, so its 'connector' step is cleared until the next asset discovery succeeds."""
+    tb = _get(slug)
+    dsp_url = body.dsp_url.strip()
+    if not _DSP_URL_RE.match(dsp_url):
+        raise HTTPException(status_code=422, detail="dsp_url must be an http(s) URL, e.g. https://edc.kul.6gdali.eu/protocol")
+    if dsp_url == tb["dsp_url"]:
+        return tb
+    steps = {k: v for k, v in tb["steps"].items() if k != "connector"}
+    updated = store.update_testbed(slug, dsp_url=dsp_url, steps=steps)
+    store.audit(slug, _actor(claims), "update-dsp-url", f"{tb['dsp_url']} -> {dsp_url}"[:200])
+    return updated
 
 
 @router.get("/{slug}/assets", dependencies=[Depends(require_testbed_access)])

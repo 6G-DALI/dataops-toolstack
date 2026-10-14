@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch, FiActivity, FiExternalLink, FiFileText, FiPlay } from 'react-icons/fi'
+import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch, FiActivity, FiExternalLink, FiFileText, FiPlay, FiEdit2 } from 'react-icons/fi'
 import {
   deleteTestbed, discoverTestbedAssets, getTestbedDeletionPreview, downloadTestbedBundle, findTestbedTransfer, negotiateTestbedAsset, startTestbedTransfer, getTestbed, getTestbedAssets, getTestbedAudit,
-  provisionTestbed, rotateTestbedCredentials,
+  provisionTestbed, rotateTestbedCredentials, updateTestbedDspUrl,
 } from '../api/airflow'
 import { isTestbedAdmin } from '../auth/testbedAccess'
 import { bucketUrl, catalogueUrl } from '../config'
@@ -43,6 +43,7 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
   const [preview, setPreview] = useState<DeletionPreview | null>(null)
   const [deregistered, setDeregistered] = useState<DeregisterResponse | null>(null)
   const [confirmStart, setConfirmStart] = useState<TestbedAsset | null>(null)
+  const [dspEdit, setDspEdit] = useState<string | null>(null)
 
   const load = useCallback(() => {
     Promise.all([getTestbed(slug), getTestbedAudit(slug), getTestbedAssets(slug)])
@@ -164,7 +165,31 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
                 <span className="text-muted">{tb.status === 'adopted' ? 'none yet (run provisioning)' : '—'}</span>
               )}
             </Field>
-            <Field label="DSP endpoint"><span className="text-break">{tb.dsp_url}</span></Field>
+            <Field label="DSP endpoint">
+              {dspEdit === null ? (
+                <>
+                  <span className="text-break">{tb.dsp_url}</span>
+                  {isTestbedAdmin() && (
+                    <button className="btn btn-sm btn-link py-0 ms-1" disabled={busy} title="Edit the DSP endpoint"
+                      onClick={() => setDspEdit(tb.dsp_url)}>
+                      <FiEdit2 />
+                    </button>
+                  )}
+                </>
+              ) : (
+                <form className="d-flex flex-wrap gap-2" onSubmit={e => {
+                  e.preventDefault()
+                  const value = dspEdit.trim()
+                  setDspEdit(null)
+                  if (value !== tb.dsp_url) act(() => updateTestbedDspUrl(slug, value), 'DSP endpoint updated.')
+                }}>
+                  <input className="form-control form-control-sm flex-grow-1" type="url" required autoFocus
+                    aria-label="DSP endpoint" value={dspEdit} onChange={e => setDspEdit(e.target.value)} />
+                  <button className="btn btn-sm btn-primary" type="submit" disabled={busy || !dspEdit.trim()}>Save</button>
+                  <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => setDspEdit(null)}>Cancel</button>
+                </form>
+              )}
+            </Field>
             <Field label="produced_by">{tb.produced_by_iri ? <span className="text-break">{tb.produced_by_iri}</span> : '—'}</Field>
             <Field label="Registered">{tb.created_at}{tb.created_by ? ` by ${tb.created_by}` : ''}</Field>
           </div></div>

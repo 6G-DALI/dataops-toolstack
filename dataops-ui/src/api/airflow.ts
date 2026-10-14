@@ -425,6 +425,11 @@ export function registerTestbed(body: TestbedCreateRequest): Promise<Testbed> {
   return request('/testbeds', { method: 'POST', body: JSON.stringify(body) })
 }
 
+/** Admin only: changes the DSP endpoint the central connector uses to reach this testbed. */
+export function updateTestbedDspUrl(slug: string, dspUrl: string): Promise<Testbed> {
+  return request(`/testbeds/${encodeURIComponent(slug)}`, { method: 'PATCH', body: JSON.stringify({ dsp_url: dspUrl }) })
+}
+
 export function provisionTestbed(slug: string): Promise<TestbedProvisionResponse> {
   return request(`/testbeds/${encodeURIComponent(slug)}/provision`, { method: 'POST' })
 }
