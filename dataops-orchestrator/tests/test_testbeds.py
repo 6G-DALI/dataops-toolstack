@@ -582,7 +582,7 @@ def test_register_with_logo_and_provision_applies_it(client, monkeypatch):
     tb = client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven", "logo_url": f" {NEW_LOGO} "}).json()
     assert tb["logo_url"] == NEW_LOGO
     step = client.post("/testbeds/kul/provision").json()["testbed"]["steps"]["catalogue"]
-    assert seen["create"][-1] == NEW_LOGO and "set" not in seen and step["detail"] == "created"
+    assert seen["create"][4] == NEW_LOGO and "set" not in seen and step["detail"] == "created"
 
     # an existing catalogue gets the saved logo applied to it
     monkeypatch.setattr(piveau_catalogue_client, "ensure_catalogue", lambda *a: "exists")

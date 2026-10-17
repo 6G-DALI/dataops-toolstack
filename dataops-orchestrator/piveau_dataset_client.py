@@ -33,6 +33,7 @@ import httpx
 from fastapi import HTTPException
 from rdflib import Graph, URIRef
 
+import piveau_access
 from dataset_models import DatasetIdentity, DatasetObject, DistributionMetrics, TestbedContext
 
 log = logging.getLogger(__name__)
@@ -388,9 +389,11 @@ async def _put_dataset_turtle(dataset_id: str, catalogue_id: str, turtle: str) -
 
     url = f"{PIVEAU_HUB_URL}/datasets/{dataset_id}?catalogue={catalogue_id}"
     headers = {"X-API-Key": PIVEAU_API_KEY, "Content-Type": "text/turtle"}
+    # With access control, the dataset's access level (see piveau_access); empty on piveau 3.3.
+    params = await piveau_access.write_params(catalogue_id, turtle)
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.put(url, content=turtle.encode(), headers=headers)
+            r = await client.put(url, content=turtle.encode(), headers=headers, params=params)
         r.raise_for_status()
     except httpx.HTTPStatusError as e:
         raise HTTPException(

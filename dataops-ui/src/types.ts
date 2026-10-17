@@ -694,6 +694,8 @@ export interface Testbed {
   produced_by_iri: string | null
   /** Image URL set as the catalogue's foaf:logo in piveau. */
   logo_url: string | null
+  /** Whether the testbed's catalogue is private (dct:accessRights NON_PUBLIC). Fixed when the catalogue is created. */
+  visibility: 'public' | 'private'
   status: 'draft' | 'provisioned' | string
   steps: Record<string, TestbedStep>
   /** Access key of the testbed's bucket-scoped Data Lake user. Not secret; the secret key is never returned. */
@@ -715,6 +717,8 @@ export interface TestbedCreateRequest {
   bucket?: string
   dsp_url?: string
   logo_url?: string
+  /** Create the catalogue private. Needs piveau access control; refused (422) without it. */
+  private?: boolean
 }
 
 export interface TestbedProvisionResponse {

@@ -110,3 +110,14 @@ KEYCLOAK_ADMIN_CLIENT_SECRET = os.getenv("KEYCLOAK_ADMIN_CLIENT_SECRET", "")
 # data plane, so it must be reachable from the testbeds (public/tailnet address), which can differ
 # from the address the orchestrator itself uses. Defaults to DATASPACE_S3_ENDPOINT_URL.
 DATALAKE_PUBLIC_ENDPOINT_URL = os.getenv("DATALAKE_PUBLIC_ENDPOINT_URL", "") or DATASPACE_S3_ENDPOINT_URL
+
+# --- piveau access control v2 (piveau_access.py) -----------------------------
+# Turn on once piveau-hub-repo 4.x runs with access control v2 (dataops-devops:
+# docker/prd/dataspace/PIVEAU-UPGRADE-PLAN.md). Then new datasets are written with an access level,
+# testbeds can get a private catalogue, and dataset listings are read with the caller's own token, so
+# piveau shows each user what they may see. Off: everything behaves as on piveau 3.3.
+PIVEAU_ACCESS_CONTROL = os.getenv("PIVEAU_ACCESS_CONTROL", "false").lower() == "true"
+# Level of the dcat:DataService records in the services catalogue. They state dct:accessRights RESTRICTED
+# (using a service needs a contract), which maps to piveau's 'restricted' and would hide them from anonymous
+# visitors; 'public' keeps them findable, as today.
+PIVEAU_SERVICES_ACCESS_LEVEL = os.getenv("PIVEAU_SERVICES_ACCESS_LEVEL", "public")
