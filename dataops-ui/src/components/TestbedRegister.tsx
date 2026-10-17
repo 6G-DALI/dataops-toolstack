@@ -20,6 +20,7 @@ interface FormState {
   organisation: string
   contact_email: string
   produced_by_iri: string
+  logo_url: string
   participant_id: string
   bucket: string
   experiment_prefix: string
@@ -27,7 +28,7 @@ interface FormState {
 }
 
 const EMPTY: FormState = {
-  slug: '', name: '', organisation: '', contact_email: '', produced_by_iri: '',
+  slug: '', name: '', organisation: '', contact_email: '', produced_by_iri: '', logo_url: '',
   participant_id: '', bucket: '', experiment_prefix: '', dsp_url: '',
 }
 
@@ -64,7 +65,7 @@ export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
 
   async function handleRegister() {
     const body: TestbedCreateRequest = { slug: form.slug, name: form.name.trim() }
-    for (const k of ['organisation', 'contact_email', 'produced_by_iri', 'participant_id', 'bucket', 'experiment_prefix', 'dsp_url'] as const) {
+    for (const k of ['organisation', 'contact_email', 'produced_by_iri', 'logo_url', 'participant_id', 'bucket', 'experiment_prefix', 'dsp_url'] as const) {
       if (form[k].trim()) body[k] = form[k].trim()
     }
     const created = await run(() => registerTestbed(body))
@@ -123,6 +124,12 @@ export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
           <div className="mb-3">
             <label className="form-label">GAIA-X participant IRI (produced_by)</label>
             <input className="form-control" value={form.produced_by_iri} onChange={set('produced_by_iri')} />
+          </div>
+          <div className="mb-3">
+            <label className="form-label">Logo URL</label>
+            <input className="form-control" type="url" value={form.logo_url} onChange={set('logo_url')}
+              placeholder="https://example.org/logo.png" />
+            <div className="form-text">Optional. A link to the testbed's logo image, shown on its catalogue. Can be added or changed later.</div>
           </div>
           <button className="btn btn-primary" disabled={!detailsOk} onClick={() => setStep(1)}>Next</button>
         </div></div>

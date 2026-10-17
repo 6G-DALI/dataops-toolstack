@@ -16,6 +16,7 @@ import HomePage from './components/HomePage'
 import TestbedList from './components/TestbedList'
 import TestbedRegister from './components/TestbedRegister'
 import TestbedDetail from './components/TestbedDetail'
+import TestbedMetadataBuilder from './components/TestbedMetadataBuilder'
 import { isDataopsOperator, isOperationsView } from './auth/dataopsAccess'
 import type { NavParams, View } from './types'
 import './styles/App.css'
@@ -133,6 +134,9 @@ export default function App() {
       {/* The testbed slug travels in the dagId slot of the hash, like the task id does for task-creator. */}
       {view === 'testbed-detail' && dagId && (
         <TestbedDetail slug={dagId} onNavigate={navigate} />
+      )}
+      {view === 'testbed-metadata' && (
+        <TestbedMetadataBuilder slug={dagId || null} onNavigate={navigate} />
       )}
     </Layout>
   )

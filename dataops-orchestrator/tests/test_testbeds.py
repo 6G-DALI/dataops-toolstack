@@ -458,3 +458,190 @@ def test_members_are_admin_only_and_need_the_keycloak_client(client, monkeypatch
     assert client.get("/testbeds/kul/members").status_code == 403
     assert client.post("/testbeds/kul/members", json={"email": "ann@kul.be"}).status_code == 403
     assert client.delete("/testbeds/kul/members/u1").status_code == 403
+
+
+# --- catalogue logo -------------------------------------------------------------
+
+# The KUL catalogue as piveau returns it (GET /catalogues/<id>, Accept: text/turtle), logo included.
+KUL_CATALOGUE_TTL = """\
+PREFIX dcat: <http://www.w3.org/ns/dcat#>
+PREFIX dct:  <http://purl.org/dc/terms/>
+PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+PREFIX rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+<https://6gdali.eu/organization/6g-dali>
+        rdf:type   foaf:Organization;
+        dct:type   <http://purl.org/adms/publishertype/InternationalOrganisation>;
+        foaf:name  "6G-DALI"@en .
+
+<https://dataspace.6gdali.eu/catalogues/6g-dali-staging-kul>
+        rdf:type            dcat:Catalog;
+        dct:description     "The staging 6G-DALI catalogue for the KUL testbed"@en;
+        dct:language        <http://publications.europa.eu/resource/authority/language/ENG>;
+        dct:publisher       <https://6gdali.eu/organization/6g-dali>;
+        dct:title           "6G-DALI Staging KUL Catalogue"@en;
+        foaf:homepage       <https://6gdali.eu/>;
+        foaf:logo           <https://digi4live.eu/wp-content/uploads/2023/12/KU-Leuven-logo.png> .
+"""
+NEW_LOGO = "https://example.org/kul.svg"
+
+
+def _graph(ttl):
+    from rdflib import Graph
+    return Graph().parse(data=ttl, format="turtle")
+
+
+def test_with_logo_replaces_only_the_logo():
+    from rdflib import URIRef
+    from rdflib.namespace import FOAF
+    before = _graph(KUL_CATALOGUE_TTL)
+    after = _graph(piveau_catalogue_client.with_logo(KUL_CATALOGUE_TTL, NEW_LOGO))
+    assert set(after.objects(None, FOAF.logo)) == {URIRef(NEW_LOGO)}
+
+    def without_logo(g):
+        return {t for t in g if t[1] != FOAF.logo}
+    # every other triple, the publisher organisation included, survives the round trip
+    assert without_logo(after) == without_logo(before)
+    assert not set(_graph(piveau_catalogue_client.with_logo(KUL_CATALOGUE_TTL, None)).objects(None, FOAF.logo))
+
+
+def test_new_catalogue_turtle_carries_the_logo():
+    from rdflib import URIRef
+    from rdflib.namespace import FOAF
+    ttl = piveau_catalogue_client._turtle("6g-dali-kul", "KUL", "desc", "KU Leuven", NEW_LOGO)
+    assert set(_graph(ttl).objects(None, FOAF.logo)) == {URIRef(NEW_LOGO)}
+    plain = piveau_catalogue_client._turtle("6g-dali-kul", "KUL", "desc", "KU Leuven")
+    assert not list(_graph(plain).objects(None, FOAF.logo))
+
+
+@pytest.mark.parametrize("bad", ["ftp://x/logo.png", "javascript:alert(1)", "https://x/a b.png", "https://x/<a>.png",
+                                 'https://x/a".png', "logo.png"])
+def test_logo_url_must_be_a_plain_http_url(bad):
+    with pytest.raises(ValueError):
+        piveau_catalogue_client.clean_logo_url(bad)
+
+
+def test_logo_url_blank_means_none_and_is_trimmed():
+    assert piveau_catalogue_client.clean_logo_url("  ") is None
+    assert piveau_catalogue_client.clean_logo_url(None) is None
+    assert piveau_catalogue_client.clean_logo_url(f" {NEW_LOGO} ") == NEW_LOGO
+
+
+@pytest.fixture
+def piveau(monkeypatch):
+    """A fake piveau-hub-repo holding the KUL catalogue; `seen` lists the requests it got."""
+    import piveau_dataset_client as pdc
+    monkeypatch.setattr(pdc, "PIVEAU_HUB_URL", "https://hub.example/")
+    monkeypatch.setattr(pdc, "PIVEAU_API_KEY", "key")
+    state = {"ttl": KUL_CATALOGUE_TTL, "seen": []}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        state["seen"].append((request.method, request.url.path, request.headers.get("x-api-key")))
+        if not request.url.path.endswith("/6g-dali-staging-kul"):
+            return httpx.Response(404, text="no such catalogue")
+        if request.method == "GET":
+            return httpx.Response(200, text=state["ttl"], headers={"content-type": "text/turtle"})
+        state["ttl"] = request.content.decode()
+        return httpx.Response(200)
+
+    real_client = httpx.Client
+    monkeypatch.setattr(piveau_catalogue_client.httpx, "Client",
+                        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+    return state
+
+
+def test_set_catalogue_logo_updates_an_existing_catalogue(piveau):
+    from rdflib import URIRef
+    from rdflib.namespace import FOAF
+    assert piveau_catalogue_client.set_catalogue_logo("6g-dali-staging-kul", NEW_LOGO) == "set"
+    assert [m for m, _, _ in piveau["seen"]] == ["GET", "PUT"]
+    assert all(key == "key" for _, _, key in piveau["seen"])
+    assert set(_graph(piveau["ttl"]).objects(None, FOAF.logo)) == {URIRef(NEW_LOGO)}
+
+    piveau["seen"].clear()  # the same logo again changes nothing, so nothing is written
+    assert piveau_catalogue_client.set_catalogue_logo("6g-dali-staging-kul", NEW_LOGO) == "unchanged"
+    assert [m for m, _, _ in piveau["seen"]] == ["GET"]
+
+    assert piveau_catalogue_client.set_catalogue_logo("6g-dali-staging-kul", None) == "removed"
+    assert not list(_graph(piveau["ttl"]).objects(None, FOAF.logo))
+
+
+def test_set_catalogue_logo_on_missing_catalogue(piveau):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as e:
+        piveau_catalogue_client.set_catalogue_logo("nope", NEW_LOGO)
+    assert e.value.status_code == 404 and "provisioning" in e.value.detail
+
+
+def test_register_with_logo_and_provision_applies_it(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(piveau_catalogue_client, "ensure_catalogue",
+                        lambda *a: seen.update(create=a) or "created")
+    monkeypatch.setattr(piveau_catalogue_client, "set_catalogue_logo",
+                        lambda cid, logo: seen.update(set=(cid, logo)) or "set")
+    tb = client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven", "logo_url": f" {NEW_LOGO} "}).json()
+    assert tb["logo_url"] == NEW_LOGO
+    step = client.post("/testbeds/kul/provision").json()["testbed"]["steps"]["catalogue"]
+    assert seen["create"][-1] == NEW_LOGO and "set" not in seen and step["detail"] == "created"
+
+    # an existing catalogue gets the saved logo applied to it
+    monkeypatch.setattr(piveau_catalogue_client, "ensure_catalogue", lambda *a: "exists")
+    step = client.post("/testbeds/kul/provision").json()["testbed"]["steps"]["catalogue"]
+    assert seen["set"] == ("6g-dali-kul", NEW_LOGO) and step["detail"] == "exists, logo set"
+
+
+def test_provision_without_a_saved_logo_leaves_an_existing_catalogue_alone(client, monkeypatch):
+    called = []
+    monkeypatch.setattr(piveau_catalogue_client, "ensure_catalogue", lambda *a: "exists")
+    monkeypatch.setattr(piveau_catalogue_client, "set_catalogue_logo", lambda *a: called.append(a))
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+    step = client.post("/testbeds/kul/provision").json()["testbed"]["steps"]["catalogue"]
+    assert called == [] and step["detail"] == "exists"
+
+
+def test_register_rejects_a_bad_logo(client):
+    r = client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven", "logo_url": "ftp://x/y.png"})
+    assert r.status_code == 422 and "logo_url" in r.json()["detail"]
+
+
+def test_patch_logo_saves_and_updates_the_catalogue(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(piveau_catalogue_client, "set_catalogue_logo",
+                        lambda cid, logo: calls.append((cid, logo)) or "set")
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+
+    r = client.patch("/testbeds/kul", json={"logo_url": NEW_LOGO})
+    assert r.status_code == 200 and r.json()["logo_url"] == NEW_LOGO and calls == [("6g-dali-kul", NEW_LOGO)]
+    assert r.json()["dsp_url"] == "https://edc.kul.6gdali.eu/protocol"  # untouched
+
+    # leaving the logo out keeps it and does not touch piveau; the DSP edit still works on its own
+    r = client.patch("/testbeds/kul", json={"dsp_url": "https://edc.kul.example/protocol"})
+    assert r.json()["logo_url"] == NEW_LOGO and r.json()["dsp_url"] == "https://edc.kul.example/protocol"
+    assert len(calls) == 1
+
+    # an empty string removes it
+    r = client.patch("/testbeds/kul", json={"logo_url": ""})
+    assert r.json()["logo_url"] is None and calls[-1] == ("6g-dali-kul", None)
+    assert "update-logo" in [e["action"] for e in testbed_store.audit_log("kul")]
+
+
+def test_patch_logo_validation_and_piveau_failure(client, monkeypatch):
+    from fastapi import HTTPException
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+    assert client.patch("/testbeds/kul", json={"logo_url": "not a url"}).status_code == 422
+    assert client.patch("/testbeds/kul", json={"dsp_url": None}).status_code == 422
+    assert client.get("/testbeds/kul").json()["logo_url"] is None
+
+    def down(cid, logo):
+        raise HTTPException(status_code=502, detail="piveau down")
+    monkeypatch.setattr(piveau_catalogue_client, "set_catalogue_logo", down)
+    r = client.patch("/testbeds/kul", json={"logo_url": NEW_LOGO})
+    assert r.status_code == 424 and r.json()["upstream_status"] == 502  # upstream failures surface as 424
+    assert "saved" in r.json()["detail"] and "piveau down" in r.json()["detail"]
+    assert client.get("/testbeds/kul").json()["logo_url"] == NEW_LOGO  # kept, applied by the next provisioning run
+
+
+def test_patch_logo_needs_testbed_admin(client):
+    client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
+    client.claims["realm_access"] = {"roles": []}
+    assert client.patch("/testbeds/kul", json={"logo_url": NEW_LOGO}).status_code in (401, 403)

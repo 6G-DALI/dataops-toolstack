@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FiPlus, FiExternalLink } from 'react-icons/fi'
+import { FiPlus, FiExternalLink, FiFileText } from 'react-icons/fi'
 import { getTestbeds } from '../api/airflow'
 import { isTestbedAdmin } from '../auth/testbedAccess'
 import ErrorMessage from './ErrorMessage'
@@ -36,12 +36,18 @@ export default function TestbedList({ onNavigate }: TestbedListProps) {
         <span className="text-muted small">
           {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''} registered
         </span>
-        {isTestbedAdmin() && (
-          <button className="btn btn-sm btn-primary" onClick={() => onNavigate('testbed-register')}>
-            <FiPlus className="me-1" />
-            Register testbed
+        <div className="d-flex gap-2">
+          <button className="btn btn-sm btn-outline-primary" onClick={() => onNavigate('testbed-metadata')}>
+            <FiFileText className="me-1" />
+            Metadata builder
           </button>
-        )}
+          {isTestbedAdmin() && (
+            <button className="btn btn-sm btn-primary" onClick={() => onNavigate('testbed-register')}>
+              <FiPlus className="me-1" />
+              Register testbed
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="card">

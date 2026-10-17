@@ -430,6 +430,11 @@ export function updateTestbedDspUrl(slug: string, dspUrl: string): Promise<Testb
   return request(`/testbeds/${encodeURIComponent(slug)}`, { method: 'PATCH', body: JSON.stringify({ dsp_url: dspUrl }) })
 }
 
+/** Admin only: saves the testbed's logo URL and writes it to its catalogue in piveau. An empty string removes the logo. */
+export function updateTestbedLogo(slug: string, logoUrl: string): Promise<Testbed> {
+  return request(`/testbeds/${encodeURIComponent(slug)}`, { method: 'PATCH', body: JSON.stringify({ logo_url: logoUrl }) })
+}
+
 export function provisionTestbed(slug: string): Promise<TestbedProvisionResponse> {
   return request(`/testbeds/${encodeURIComponent(slug)}/provision`, { method: 'POST' })
 }

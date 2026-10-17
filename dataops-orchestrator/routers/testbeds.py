@@ -45,10 +45,14 @@ class TestbedCreate(BaseModel):
     bucket: str | None = None
     dsp_url: str | None = None
     produced_by_iri: str | None = None
+    logo_url: str | None = Field(default=None, description="Image URL shown as the testbed's catalogue logo (foaf:logo)")
 
 
 class TestbedUpdate(BaseModel):
-    dsp_url: str = Field(description="The testbed connector's DSP endpoint (edc.dsp.callback.address)")
+    dsp_url: str | None = Field(default=None, description="The testbed connector's DSP endpoint (edc.dsp.callback.address)")
+    logo_url: str | None = Field(
+        default=None,
+        description="Image URL for the catalogue logo (foaf:logo). Empty removes the logo; leave the field out to keep it.")
 
 
 def _now() -> str:
@@ -57,6 +61,13 @@ def _now() -> str:
 
 def _actor(claims: dict) -> str:
     return claims.get("preferred_username") or claims.get("email") or claims.get("sub", "unknown")
+
+
+def _logo_or_422(value: str | None) -> str | None:
+    try:
+        return piveau_catalogue_client.clean_logo_url(value)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 def _get(slug: str) -> dict:
@@ -84,6 +95,7 @@ def register_testbed(body: TestbedCreate, claims: dict = Depends(require_testbed
     if not datalake_admin.valid_bucket_name(bucket):
         raise HTTPException(status_code=422, detail=f"'{bucket}' is not a valid bucket name (3-63 chars, lowercase, digits, '.', '-')")
     prefix = body.experiment_prefix or bucket
+    logo_url = _logo_or_422(body.logo_url)
     return store.create_testbed(
         {
             "slug": body.slug, "name": body.name, "organisation": body.organisation,
@@ -91,7 +103,7 @@ def register_testbed(body: TestbedCreate, claims: dict = Depends(require_testbed
             "ids_id": f"urn:connector:{participant_id}", "experiment_prefix": prefix,
             "bucket": bucket, "catalogue_id": bucket,
             "dsp_url": body.dsp_url or f"https://edc.{body.slug}.{TESTBED_DOMAIN_SUFFIX}/protocol",
-            "produced_by_iri": body.produced_by_iri,
+            "produced_by_iri": body.produced_by_iri, "logo_url": logo_url,
         },
         _actor(claims),
     )
@@ -104,17 +116,39 @@ def get_testbed(slug: str):
 
 @router.patch("/{slug}")
 def update_testbed(slug: str, body: TestbedUpdate, claims: dict = Depends(require_testbed_admin)):
-    """Change the testbed's DSP endpoint. The connector is no longer known to be reachable at the new
-    address, so its 'connector' step is cleared until the next asset discovery succeeds."""
+    """Change the testbed's DSP endpoint and/or catalogue logo; fields left out are kept.
+
+    A new DSP endpoint means the connector is no longer known to be reachable, so its 'connector' step is
+    cleared until the next asset discovery succeeds. A logo is saved and then written to the testbed's
+    catalogue in piveau (also when it is unchanged, which repairs a catalogue that missed an earlier update);
+    if piveau refuses, the logo stays saved and 'Re-run provisioning' applies it later.
+    """
     tb = _get(slug)
-    dsp_url = body.dsp_url.strip()
-    if not _DSP_URL_RE.match(dsp_url):
-        raise HTTPException(status_code=422, detail="dsp_url must be an http(s) URL, e.g. https://edc.kul.6gdali.eu/protocol")
-    if dsp_url == tb["dsp_url"]:
-        return tb
-    steps = {k: v for k, v in tb["steps"].items() if k != "connector"}
-    updated = store.update_testbed(slug, dsp_url=dsp_url, steps=steps)
-    store.audit(slug, _actor(claims), "update-dsp-url", f"{tb['dsp_url']} -> {dsp_url}"[:200])
+    changes = body.model_fields_set
+    if "dsp_url" in changes and body.dsp_url is None:
+        raise HTTPException(status_code=422, detail="dsp_url cannot be empty")
+    fields: dict = {}
+    if "dsp_url" in changes:
+        dsp_url = body.dsp_url.strip()
+        if not _DSP_URL_RE.match(dsp_url):
+            raise HTTPException(status_code=422, detail="dsp_url must be an http(s) URL, e.g. https://edc.kul.6gdali.eu/protocol")
+        if dsp_url != tb["dsp_url"]:
+            fields["dsp_url"] = dsp_url
+            fields["steps"] = {k: v for k, v in tb["steps"].items() if k != "connector"}
+    logo_url = tb["logo_url"]
+    if "logo_url" in changes:
+        logo_url = _logo_or_422(body.logo_url)
+        fields["logo_url"] = logo_url
+    updated = store.update_testbed(slug, **fields) if fields else tb
+    if "dsp_url" in fields:
+        store.audit(slug, _actor(claims), "update-dsp-url", f"{tb['dsp_url']} -> {fields['dsp_url']}"[:200])
+    if "logo_url" in changes:
+        store.audit(slug, _actor(claims), "update-logo", (logo_url or "removed")[:200])
+        try:
+            piveau_catalogue_client.set_catalogue_logo(tb["catalogue_id"], logo_url)
+        except HTTPException as e:
+            raise HTTPException(status_code=e.status_code,
+                                detail=f"The logo is saved, but the catalogue in piveau was not updated: {e.detail}")
     return updated
 
 
@@ -351,10 +385,19 @@ def provision(slug: str, claims: dict = Depends(require_testbed_admin)):
             steps[name] = {"status": "failed", "detail": e.detail, "at": _now()}
 
     record("bucket", lambda: datalake_admin.ensure_bucket(tb["bucket"]))
-    record("catalogue", lambda: piveau_catalogue_client.ensure_catalogue(
-        tb["catalogue_id"], f"{tb['name']} testbed datasets",
-        f"Datasets contributed by the {tb['name']} testbed to the 6G-DALI Data Space.",
-        tb["organisation"] or tb["name"]))
+    def ensure_catalogue() -> str:
+        result = piveau_catalogue_client.ensure_catalogue(
+            tb["catalogue_id"], f"{tb['name']} testbed datasets",
+            f"Datasets contributed by the {tb['name']} testbed to the 6G-DALI Data Space.",
+            tb["organisation"] or tb["name"], tb["logo_url"])
+        # A catalogue that already existed keeps what it has; a saved logo is applied to it here. Without a
+        # saved logo it is left alone, so a logo set directly in piveau is not wiped by provisioning.
+        if result == "exists" and tb["logo_url"]:
+            logo = piveau_catalogue_client.set_catalogue_logo(tb["catalogue_id"], tb["logo_url"])
+            return "exists, logo " + ("already set" if logo == "unchanged" else "set")
+        return result
+
+    record("catalogue", ensure_catalogue)
 
     if keycloak_admin.configured():
         record("access", lambda: keycloak_admin.ensure_group(slug))

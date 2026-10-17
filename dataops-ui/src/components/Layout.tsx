@@ -86,6 +86,14 @@ function buildCrumbs(
   if (view === 'testbed-detail') {
     return [crumb('Testbeds', 'testbeds'), crumb(dagId ?? '', 'testbed-detail', { dagId: dagId ?? '' })]
   }
+  if (view === 'testbed-metadata') {
+    // The testbed slug is optional here: the builder also opens blank from the testbed list.
+    return [
+      crumb('Testbeds', 'testbeds'),
+      ...(dagId ? [crumb(dagId, 'testbed-detail', { dagId })] : []),
+      crumb('Metadata builder', 'testbed-metadata', { dagId: dagId ?? '' }),
+    ]
+  }
   if (view === 'all-tasks') return [crumb('Tasks', 'all-tasks')]
   if (view === 'dag-builder') {
     return [crumb('Tasks', 'all-tasks'), crumb('Build DAG', 'dag-builder')]

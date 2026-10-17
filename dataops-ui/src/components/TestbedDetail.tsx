@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch, FiActivity, FiExternalLink, FiFileText, FiPlay, FiEdit2 } from 'react-icons/fi'
 import {
   deleteTestbed, discoverTestbedAssets, getTestbedDeletionPreview, downloadTestbedBundle, findTestbedTransfer, negotiateTestbedAsset, startTestbedTransfer, getTestbed, getTestbedAssets, getTestbedAudit,
-  provisionTestbed, rotateTestbedCredentials, updateTestbedDspUrl,
+  provisionTestbed, rotateTestbedCredentials, updateTestbedDspUrl, updateTestbedLogo,
 } from '../api/airflow'
 import { isTestbedAdmin } from '../auth/testbedAccess'
 import { bucketUrl, catalogueUrl } from '../config'
@@ -44,6 +44,7 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
   const [deregistered, setDeregistered] = useState<DeregisterResponse | null>(null)
   const [confirmStart, setConfirmStart] = useState<TestbedAsset | null>(null)
   const [dspEdit, setDspEdit] = useState<string | null>(null)
+  const [logoEdit, setLogoEdit] = useState<string | null>(null)
 
   const load = useCallback(() => {
     Promise.all([getTestbed(slug), getTestbedAudit(slug), getTestbedAssets(slug)])
@@ -97,6 +98,7 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
       load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      load()
     } finally {
       setBusy(false)
     }
@@ -128,6 +130,11 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
             setNotice(r.offered > 0 ? `Found ${r.offered} offered asset${r.offered !== 1 ? 's' : ''}.` : 'Connector reachable, but it offers no assets yet.')
           })}>
           <FiSearch className="me-1" />Find asset
+        </button>
+        <button className="btn btn-sm btn-outline-primary" disabled={busy}
+          title="Build the metadata.json that goes next to a dataset's data files"
+          onClick={() => onNavigate('testbed-metadata', { dagId: slug })}>
+          <FiFileText className="me-1" />Metadata builder
         </button>
         {isTestbedAdmin() && (
           <>
@@ -187,6 +194,42 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
                     aria-label="DSP endpoint" value={dspEdit} onChange={e => setDspEdit(e.target.value)} />
                   <button className="btn btn-sm btn-primary" type="submit" disabled={busy || !dspEdit.trim()}>Save</button>
                   <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => setDspEdit(null)}>Cancel</button>
+                </form>
+              )}
+            </Field>
+            <Field label="Logo">
+              {logoEdit === null ? (
+                <>
+                  {tb.logo_url ? (
+                    <div>
+                      <img key={tb.logo_url} src={tb.logo_url} alt={`${tb.name} logo`} referrerPolicy="no-referrer"
+                        style={{ maxHeight: 48, maxWidth: 200 }} className="d-block mb-1"
+                        onError={e => { e.currentTarget.style.display = 'none' }} />
+                      <span className="text-break small text-muted">{tb.logo_url}</span>
+                    </div>
+                  ) : <span className="text-muted">none</span>}
+                  {isTestbedAdmin() && (
+                    <button className="btn btn-sm btn-link py-0 ms-1" disabled={busy} title="Edit the logo URL"
+                      onClick={() => setLogoEdit(tb.logo_url ?? '')}>
+                      <FiEdit2 />
+                    </button>
+                  )}
+                </>
+              ) : (
+                <form onSubmit={e => {
+                  e.preventDefault()
+                  const value = logoEdit.trim()
+                  setLogoEdit(null)
+                  act(() => updateTestbedLogo(slug, value), value ? 'Logo saved and set on the catalogue.' : 'Logo removed from the catalogue.')
+                }}>
+                  <div className="d-flex flex-wrap gap-2">
+                    <input className="form-control form-control-sm flex-grow-1" type="url" autoFocus
+                      aria-label="Logo URL" placeholder="https://example.org/logo.png" value={logoEdit}
+                      onChange={e => setLogoEdit(e.target.value)} />
+                    <button className="btn btn-sm btn-primary" type="submit" disabled={busy}>Save</button>
+                    <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => setLogoEdit(null)}>Cancel</button>
+                  </div>
+                  <div className="form-text">Updates the testbed's catalogue in piveau. Leave empty to remove the logo.</div>
                 </form>
               )}
             </Field>
