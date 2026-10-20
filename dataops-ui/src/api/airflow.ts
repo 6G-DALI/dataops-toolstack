@@ -36,6 +36,9 @@ import type {
   TestbedAsset,
   TestbedAuditEntry,
   TestbedMember,
+  CatalogueAccessLevel,
+  CatalogueMember,
+  CatalogueMembers,
   TestbedCreateRequest,
   TestbedProvisionResponse,
 } from '../types'
@@ -450,6 +453,28 @@ export function addTestbedMember(slug: string, email: string): Promise<TestbedMe
 
 export function removeTestbedMember(slug: string, userId: string): Promise<{ removed: string }> {
   return request(`/testbeds/${encodeURIComponent(slug)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' })
+}
+
+// Who can see and edit the testbed catalogue's datasets in the Data Space (its piveau role groups).
+
+export function getCatalogueMembers(slug: string): Promise<CatalogueMembers> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/catalogue-members`)
+}
+
+export function addCatalogueMember(slug: string, email: string, level: CatalogueAccessLevel): Promise<CatalogueMember> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/catalogue-members`, {
+    method: 'POST', body: JSON.stringify({ email, level }),
+  })
+}
+
+export function setCatalogueMemberLevel(slug: string, userId: string, level: CatalogueAccessLevel): Promise<CatalogueMember> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/catalogue-members/${encodeURIComponent(userId)}`, {
+    method: 'PUT', body: JSON.stringify({ level }),
+  })
+}
+
+export function removeCatalogueMember(slug: string, userId: string): Promise<{ removed: string }> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/catalogue-members/${encodeURIComponent(userId)}`, { method: 'DELETE' })
 }
 
 export function rotateTestbedCredentials(slug: string): Promise<{ note: string }> {

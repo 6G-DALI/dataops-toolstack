@@ -735,6 +735,21 @@ export interface TestbedMember {
   enabled: boolean
 }
 
+/** Access level on a testbed's catalogue in the Data Space (piveau role groups: Viewer / +Expert / +Publisher). */
+export type CatalogueAccessLevel = 'reader' | 'contributor' | 'publisher'
+
+export interface CatalogueMember extends TestbedMember {
+  level: CatalogueAccessLevel
+}
+
+export interface CatalogueMembers {
+  catalogue_id: string
+  /** False when piveau has no Keycloak group for the catalogue (access control off, or created before it). */
+  available: boolean
+  members: CatalogueMember[]
+  total: number
+}
+
 export interface TestbedAuditEntry {
   ts: string
   actor: string | null

@@ -460,6 +460,88 @@ def test_members_are_admin_only_and_need_the_keycloak_client(client, monkeypatch
     assert client.delete("/testbeds/kul/members/u1").status_code == 403
 
 
+# --- access to a testbed's catalogue (piveau role groups) --------------------------------------------------------
+
+ROLE_IDS = {"role: Data Viewer": "r-view", "role: Data Expert": "r-expert", "role: Data Publisher": "r-pub",
+            "role: Organization Admin": "r-org"}
+
+
+def _catalogue_keycloak(monkeypatch, catalogue_id, users, held=None, group=True):
+    """Stand-in for Keycloak with piveau's group for `catalogue_id` (renamed, found by its id attribute) and its
+    role groups. `held` maps role-group ids to the user ids in them."""
+    held = {k: set(v) for k, v in (held or {}).items()}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path, method = request.url.path, request.method
+        if path.endswith("/openid-connect/token"):
+            return httpx.Response(200, json={"access_token": "tok"})
+        if path.endswith("/groups") and method == "GET":
+            assert request.url.params["q"] == f"id:{catalogue_id}"
+            return httpx.Response(200, json=[{"id": "g-cat", "name": "Renamed Catalogue",
+                                              "attributes": {"id": [catalogue_id]}}] if group else [])
+        if path.endswith("/groups/g-cat/children"):
+            return httpx.Response(200, json=[{"id": i, "name": n} for n, i in ROLE_IDS.items()])
+        if "/groups/r-" in path and path.endswith("/members"):
+            gid = path.split("/groups/")[1].split("/")[0]
+            return httpx.Response(200, json=[u for u in users if u["id"] in held.get(gid, set())])
+        if path.endswith("/users") and method == "GET":
+            return httpx.Response(200, json=[u for u in users if u["email"] == request.url.params["email"]])
+        if "/users/" in path and "/groups/" in path:
+            uid, gid = path.split("/users/")[1].split("/")[0], path.rsplit("/", 1)[1]
+            (held.setdefault(gid, set()).add if method == "PUT" else held.setdefault(gid, set()).discard)(uid)
+            return httpx.Response(204)
+        if "/users/" in path and method == "GET":
+            uid = path.rsplit("/", 1)[1]
+            return next((httpx.Response(200, json=u) for u in users if u["id"] == uid), httpx.Response(404))
+        return httpx.Response(404)
+
+    real = httpx.Client
+    monkeypatch.setattr(keycloak_admin.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    for name, value in (("KEYCLOAK_ISSUER", "https://kc.example/auth/realms/6gdali"), ("KEYCLOAK_ADMIN_CLIENT_ID", "orch"),
+                        ("KEYCLOAK_ADMIN_CLIENT_SECRET", "s"), ("TESTBED_GROUP_PREFIX", "testbeds")):
+        monkeypatch.setattr(keycloak_admin, name, value)
+    return held
+
+
+def test_catalogue_access_levels_map_to_piveau_role_groups(client, monkeypatch):
+    cat = client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"}).json()["catalogue_id"]
+    held = _catalogue_keycloak(monkeypatch, cat, USERS, held={"r-view": {"u1"}, "r-expert": {"u1"}})
+
+    r = client.get("/testbeds/kul/catalogue-members").json()
+    assert r["available"] and r["catalogue_id"] == cat
+    assert [(m["email"], m["level"]) for m in r["members"]] == [("ann@kul.be", "contributor")]
+
+    added = client.post("/testbeds/kul/catalogue-members", json={"email": "bob@kul.be", "level": "publisher"})
+    assert added.status_code == 201 and added.json()["level"] == "publisher"
+    assert {g for g, us in held.items() if "u2" in us} == {"r-view", "r-expert", "r-pub"}
+
+    assert client.put("/testbeds/kul/catalogue-members/u2", json={"level": "reader"}).json()["level"] == "reader"
+    assert {g for g, us in held.items() if "u2" in us} == {"r-view"}  # demoted: left expert and publisher
+
+    assert client.delete("/testbeds/kul/catalogue-members/u1").status_code == 200
+    assert [m["email"] for m in client.get("/testbeds/kul/catalogue-members").json()["members"]] == ["bob@kul.be"]
+    assert "r-org" not in held  # Organization Admin is never touched
+    assert "catalogue-access" in [e["action"] for e in client.get("/testbeds/kul/audit").json()["entries"]]
+
+
+def test_catalogue_access_is_managed_by_the_testbeds_own_administrators(client, monkeypatch):
+    cat = client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"}).json()["catalogue_id"]
+    client.post("/testbeds", json={"slug": "eur", "name": "EURECOM"})
+    _catalogue_keycloak(monkeypatch, cat, USERS)
+    _act_as_owner(client, "/testbeds/kul")
+    assert client.post("/testbeds/kul/catalogue-members", json={"email": "ann@kul.be"}).status_code == 201
+    assert client.get("/testbeds/eur/catalogue-members").status_code == 403
+    assert client.post("/testbeds/kul/catalogue-members", json={"email": "ann@kul.be", "level": "owner"}).status_code == 422
+
+
+def test_catalogue_without_a_piveau_group_reports_unavailable(client, monkeypatch):
+    cat = client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"}).json()["catalogue_id"]
+    _catalogue_keycloak(monkeypatch, cat, USERS, group=False)
+    r = client.get("/testbeds/kul/catalogue-members").json()
+    assert r["available"] is False and r["members"] == []
+    assert client.post("/testbeds/kul/catalogue-members", json={"email": "ann@kul.be"}).status_code == 409
+
+
 # --- catalogue logo -------------------------------------------------------------
 
 # The KUL catalogue as piveau returns it (GET /catalogues/<id>, Accept: text/turtle), logo included.

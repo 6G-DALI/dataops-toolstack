@@ -12,6 +12,7 @@ Connecting the connector and managing its transfers/assets come in a later phase
 import re
 import time
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -383,6 +384,58 @@ def remove_member(slug: str, user_id: str, claims: dict = Depends(require_testbe
     keycloak_admin.require_configured()
     keycloak_admin.remove_member(slug, user_id)
     store.audit(slug, _actor(claims), "remove-member", user_id)
+    return {"removed": user_id}
+
+
+class CatalogueMemberAdd(BaseModel):
+    email: str = Field(description="E-mail address of an existing Keycloak user")
+    level: Literal["reader", "contributor", "publisher"] = "reader"
+
+
+class CatalogueMemberLevel(BaseModel):
+    level: Literal["reader", "contributor", "publisher"]
+
+
+# Who can see and edit the datasets of the testbed's catalogue in the Data Space: the catalogue's piveau role groups
+# in Keycloak. Managed by the testbed's own administrators as well as the testbed admins: it is their data.
+
+@router.get("/{slug}/catalogue-members", dependencies=[Depends(require_testbed_access)])
+def list_catalogue_members(slug: str):
+    tb = _get(slug)
+    keycloak_admin.require_configured()
+    members = keycloak_admin.list_catalogue_members(tb["catalogue_id"])
+    return {"catalogue_id": tb["catalogue_id"], "available": members is not None,
+            "members": members or [], "total": len(members or [])}
+
+
+@router.post("/{slug}/catalogue-members", status_code=201)
+def add_catalogue_member(slug: str, body: CatalogueMemberAdd, claims: dict = Depends(require_testbed_access)):
+    tb = _get(slug)
+    keycloak_admin.require_configured()
+    email = body.email.strip()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(status_code=422, detail="Not a valid e-mail address")
+    member = keycloak_admin.set_catalogue_member(tb["catalogue_id"], body.level, email=email)
+    store.audit(slug, _actor(claims), "catalogue-access", f"{email}: {body.level}")
+    return member
+
+
+@router.put("/{slug}/catalogue-members/{user_id}")
+def set_catalogue_member_level(slug: str, user_id: str, body: CatalogueMemberLevel,
+                               claims: dict = Depends(require_testbed_access)):
+    tb = _get(slug)
+    keycloak_admin.require_configured()
+    member = keycloak_admin.set_catalogue_member(tb["catalogue_id"], body.level, user_id=user_id)
+    store.audit(slug, _actor(claims), "catalogue-access", f"{member.get('email') or user_id}: {body.level}")
+    return member
+
+
+@router.delete("/{slug}/catalogue-members/{user_id}")
+def remove_catalogue_member(slug: str, user_id: str, claims: dict = Depends(require_testbed_access)):
+    tb = _get(slug)
+    keycloak_admin.require_configured()
+    keycloak_admin.remove_catalogue_member(tb["catalogue_id"], user_id)
+    store.audit(slug, _actor(claims), "catalogue-access", f"{user_id}: removed")
     return {"removed": user_id}
 
 

@@ -43,9 +43,10 @@ export default function TestbedMembers({ slug, onChanged }: TestbedMembersProps)
 
   return (
     <div className="card mb-3"><div className="card-body">
-      <h6 className="mb-1">Members</h6>
+      <h6 className="mb-1">Administrators</h6>
       <div className="text-muted small mb-3">
-        Can see and work with this testbed only. They need to have signed in to a DALI application once.
+        Manage this testbed in DataOps: its connector, assets and catalogue access. They need to have signed in to
+        a DALI application once.
       </div>
 
       {error && <div className="alert alert-danger py-2 small">{error}</div>}
