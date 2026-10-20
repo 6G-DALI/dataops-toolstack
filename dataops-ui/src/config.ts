@@ -81,16 +81,17 @@ export const config: DataopsConfig = resolved
 /** Link to a dataset's page on the piveau catalogue front end, or null when
  *  no catalogue base URL is configured (the link is simply omitted then). */
 export function catalogueDatasetUrl(datasetId: string): string | null {
+  // The 6G-DALI catalogue app routes by hash (#/datasets/<id>); the old piveau UI's /datasets/<id> now opens its home.
   return config.catalogueBaseUrl
-    ? `${config.catalogueBaseUrl.replace(/\/$/, '')}/datasets/${encodeURIComponent(datasetId)}`
+    ? `${config.catalogueBaseUrl.replace(/\/$/, '')}/#/datasets/${encodeURIComponent(datasetId)}`
     : null
 }
 
-/** Link to the dataset list of one catalogue on the piveau front end (<base>/datasets?catalog=<id>), or null
- *  when no base URL is configured. */
+/** Link to one catalogue's page on the catalogue front end (<base>/#/catalogues/<id>), or null when no base URL is
+ *  configured. */
 export function catalogueUrl(catalogueId: string): string | null {
   return config.catalogueBaseUrl
-    ? `${config.catalogueBaseUrl.replace(/\/$/, '')}/datasets?catalog=${encodeURIComponent(catalogueId)}`
+    ? `${config.catalogueBaseUrl.replace(/\/$/, '')}/#/catalogues/${encodeURIComponent(catalogueId)}`
     : null
 }
 

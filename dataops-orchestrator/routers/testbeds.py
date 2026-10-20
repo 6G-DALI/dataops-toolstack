@@ -29,6 +29,7 @@ import keycloak_admin
 import piveau_access
 import piveau_dataset_client as pdc
 import piveau_catalogue_client
+import testbed_datasets
 import testbed_store as store
 from auth import is_testbed_admin, owned_slugs, require_testbed_access, require_testbed_admin, require_testbed_user
 from config import (
@@ -432,6 +433,39 @@ def remove_member(slug: str, user_id: str, claims: dict = Depends(require_testbe
     keycloak_admin.remove_member(slug, user_id)
     store.audit(slug, _actor(claims), "remove-member", user_id)
     return {"removed": user_id}
+
+
+class DatasetEdit(BaseModel):
+    """Fields of a dataset to change; the ones left out are kept."""
+    title: str | None = None
+    description: str | None = None
+    keywords: list[str] | None = None
+    license: str | None = Field(default=None, description="Licence URL; empty removes it")
+    access_level: Literal["public", "restricted", "internal"] | None = Field(
+        default=None, description="piveau access level: public, restricted (signed-in users), internal (members only)")
+
+
+@router.get("/{slug}/datasets", dependencies=[Depends(require_testbed_access)])
+def list_testbed_datasets(slug: str):
+    """The datasets of the testbed's catalogue, private ones included (read with the API key), with what the edit
+    form needs and the visibilities each can have."""
+    tb = _get(slug)
+    datasets = testbed_datasets.list_datasets(tb["catalogue_id"])
+    access_control = piveau_access.enabled()
+    return {"catalogue_id": tb["catalogue_id"], "access_control": access_control,
+            "levels": list(testbed_datasets.allowed_levels(tb["catalogue_id"])) if access_control else [],
+            "datasets": datasets, "total": len(datasets)}
+
+
+@router.patch("/{slug}/datasets/{dataset_id}")
+def edit_testbed_dataset(slug: str, dataset_id: str, body: DatasetEdit, claims: dict = Depends(require_testbed_access)):
+    tb = _get(slug)
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(status_code=422, detail="Nothing to change")
+    result = testbed_datasets.update(tb["catalogue_id"], dataset_id, changes)
+    store.audit(slug, _actor(claims), "edit-dataset", f"{dataset_id}: {', '.join(sorted(changes))}"[:200])
+    return result
 
 
 class CatalogueMemberAdd(BaseModel):

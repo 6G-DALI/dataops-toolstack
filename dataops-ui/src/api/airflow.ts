@@ -40,6 +40,9 @@ import type {
   CatalogueMember,
   CatalogueMembers,
   UploadCredentials,
+  TestbedDataset,
+  TestbedDatasets,
+  DatasetEditRequest,
   TestbedCreateRequest,
   TestbedProvisionResponse,
 } from '../types'
@@ -480,6 +483,18 @@ export function removeCatalogueMember(slug: string, userId: string): Promise<{ r
 
 export function rotateTestbedCredentials(slug: string): Promise<{ note: string }> {
   return request(`/testbeds/${encodeURIComponent(slug)}/credentials/rotate`, { method: 'POST' })
+}
+
+/** The datasets of the testbed's catalogue, private ones included, and the visibilities they can have. */
+export function getTestbedDatasets(slug: string): Promise<TestbedDatasets> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/datasets`)
+}
+
+/** Change a dataset's fields and/or visibility in the catalogue; fields left out are kept. */
+export function editTestbedDataset(slug: string, datasetId: string, changes: DatasetEditRequest): Promise<TestbedDataset> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/datasets/${encodeURIComponent(datasetId)}`, {
+    method: 'PATCH', body: JSON.stringify(changes),
+  })
 }
 
 /** A hosted testbed's new upload key; the old one stops working. The secret is in the answer only. */

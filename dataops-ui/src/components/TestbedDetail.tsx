@@ -12,6 +12,7 @@ import LoadingSpinner from './LoadingSpinner'
 import Modal from './Modal'
 import { TestbedStatusBadge } from './TestbedList'
 import CatalogueAccess from './CatalogueAccess'
+import TestbedDatasets from './TestbedDatasets'
 import TestbedMembers from './TestbedMembers'
 import TestbedTimeline from './TestbedTimeline'
 import UploadKit from './UploadKit'
@@ -22,10 +23,11 @@ interface TestbedDetailProps {
   onNavigate: NavigateFn
 }
 
-type Tab = 'overview' | 'assets' | 'access' | 'activity' | 'settings'
+type Tab = 'overview' | 'datasets' | 'assets' | 'access' | 'activity' | 'settings'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
+  { id: 'datasets', label: 'Datasets' },
   { id: 'assets', label: 'Assets' },
   { id: 'access', label: 'Access' },
   { id: 'activity', label: 'Activity' },
@@ -234,6 +236,8 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
           </div>
         </div>
       )}
+
+      {tab === 'datasets' && <TestbedDatasets slug={slug} onChanged={load} />}
 
       {tab === 'assets' && (
         <div className="card"><div className="card-body">

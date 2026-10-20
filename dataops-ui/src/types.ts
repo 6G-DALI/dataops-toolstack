@@ -729,6 +729,43 @@ export interface TestbedCreateRequest {
   hosted?: boolean
 }
 
+/** piveau access level: public, restricted (signed-in users), internal (members of the catalogue only). */
+export type DatasetAccessLevel = 'public' | 'restricted' | 'internal'
+
+/** A dataset of a testbed's catalogue, as the testbed page lists and edits it. */
+export interface TestbedDataset {
+  id: string
+  title: string
+  description?: string
+  keywords?: string[]
+  license?: string
+  /** dct:accessRights code: PUBLIC, RESTRICTED, NON_PUBLIC. */
+  access_rights?: string | null
+  /** null without piveau access control. */
+  access_level?: DatasetAccessLevel | null
+  distributions?: number
+  modified?: string
+  /** Set when the record could not be read. */
+  error?: string
+}
+
+export interface TestbedDatasets {
+  catalogue_id: string
+  access_control: boolean
+  /** The visibilities a dataset of this catalogue can have (only internal in a private catalogue). */
+  levels: DatasetAccessLevel[]
+  datasets: TestbedDataset[]
+  total: number
+}
+
+export interface DatasetEditRequest {
+  title?: string
+  description?: string
+  keywords?: string[]
+  license?: string
+  access_level?: DatasetAccessLevel
+}
+
 /** A hosted testbed's upload key. The secret is returned once (provisioning or rotation) and never stored. */
 export interface UploadCredentials {
   endpoint: string
