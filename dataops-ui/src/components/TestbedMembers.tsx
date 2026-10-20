@@ -56,22 +56,35 @@ export default function TestbedMembers({ slug, onChanged }: TestbedMembersProps)
       ) : members.length === 0 ? (
         <span className="text-muted small">No members yet.</span>
       ) : (
-        <ul className="list-unstyled mb-3">
-          {members.map(m => (
-            <li key={m.id} className="d-flex align-items-center mb-1">
-              <div className="text-break">
-                <span>{m.email ?? m.username}</span>
-                {m.name && <span className="text-muted small ms-2">{m.name}</span>}
-                {!m.enabled && <span className="badge text-bg-secondary ms-2">disabled</span>}
-              </div>
-              <button className="btn btn-sm btn-link text-danger ms-auto py-0" disabled={busy}
-                title={`Remove ${m.email ?? m.username} from this testbed`}
-                onClick={() => change(() => removeTestbedMember(slug, m.id))}>
-                <FiX />
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div className="table-responsive mb-3">
+          <table className="table table-sm table-hover align-middle mb-0">
+            <thead>
+              <tr>
+                <th scope="col">E-mail</th>
+                <th scope="col">Name</th>
+                <th scope="col" className="text-end"><span className="visually-hidden">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {members.map(m => (
+                <tr key={m.id}>
+                  <td className="text-break">{m.email ?? m.username}</td>
+                  <td className="text-muted">
+                    {m.name ?? '—'}
+                    {!m.enabled && <span className="badge text-bg-secondary ms-2">disabled</span>}
+                  </td>
+                  <td className="text-end">
+                    <button className="btn btn-sm btn-link text-danger py-0" disabled={busy}
+                      title={`Remove ${m.email ?? m.username} from this testbed`}
+                      onClick={() => change(() => removeTestbedMember(slug, m.id))}>
+                      <FiX />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <form className="d-flex gap-2" onSubmit={e => {

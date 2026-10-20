@@ -76,27 +76,43 @@ export default function CatalogueAccess({ slug, visibility, onChanged }: Catalog
           {data.members.length === 0 ? (
             <div className="text-muted small mb-3">Nobody has been given access yet.</div>
           ) : (
-            <ul className="list-unstyled mb-3">
-              {data.members.map(m => (
-                <li key={m.id} className="d-flex align-items-center gap-2 mb-1">
-                  <div className="text-break me-auto">
-                    <span>{m.email ?? m.username}</span>
-                    {m.name && <span className="text-muted small ms-2">{m.name}</span>}
-                    {!m.enabled && <span className="badge text-bg-secondary ms-2">disabled</span>}
-                  </div>
-                  <select className="form-select form-select-sm w-auto" value={m.level} disabled={busy}
-                    aria-label={`Access level of ${m.email ?? m.username}`}
-                    onChange={e => change(() => setCatalogueMemberLevel(slug, m.id, e.target.value as CatalogueAccessLevel))}>
-                    {LEVELS.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
-                  </select>
-                  <button className="btn btn-sm btn-link text-danger py-0" disabled={busy}
-                    title={`Remove ${m.email ?? m.username}'s access to the catalogue`}
-                    onClick={() => change(() => removeCatalogueMember(slug, m.id))}>
-                    <FiX />
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <div className="table-responsive mb-3">
+              <table className="table table-sm table-hover align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th scope="col">E-mail</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Access level</th>
+                    <th scope="col" className="text-end"><span className="visually-hidden">Actions</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.members.map(m => (
+                    <tr key={m.id}>
+                      <td className="text-break">{m.email ?? m.username}</td>
+                      <td className="text-muted">
+                        {m.name ?? '—'}
+                        {!m.enabled && <span className="badge text-bg-secondary ms-2">disabled</span>}
+                      </td>
+                      <td>
+                        <select className="form-select form-select-sm w-auto" value={m.level} disabled={busy}
+                          aria-label={`Access level of ${m.email ?? m.username}`}
+                          onChange={e => change(() => setCatalogueMemberLevel(slug, m.id, e.target.value as CatalogueAccessLevel))}>
+                          {LEVELS.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+                        </select>
+                      </td>
+                      <td className="text-end">
+                        <button className="btn btn-sm btn-link text-danger py-0" disabled={busy}
+                          title={`Remove ${m.email ?? m.username}'s access to the catalogue`}
+                          onClick={() => change(() => removeCatalogueMember(slug, m.id))}>
+                          <FiX />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
 
           <form className="d-flex gap-2" onSubmit={e => {

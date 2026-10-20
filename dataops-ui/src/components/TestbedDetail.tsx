@@ -437,7 +437,7 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
 
             {isTestbedAdmin() && (
               <div className="card border-danger"><div className="card-body">
-                <h6 className="mb-1 text-danger">Deregister</h6>
+                <h6 className="mb-1 text-danger">Danger Area</h6>
                 <div className="text-muted small mb-3">
                   Disables the testbed's Data Lake key and removes it from the registry. You choose whether its data is
                   deleted too.
