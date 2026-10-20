@@ -31,6 +31,7 @@ _COLUMNS = (
     "slug", "name", "organisation", "contact_email", "participant_id", "ids_id",
     "experiment_prefix", "bucket", "catalogue_id", "dsp_url", "produced_by_iri",
     "status", "steps", "s3_access_key", "s3_secret_enc", "created_at", "updated_at", "created_by", "logo_url",
+    "visibility",
 )
 
 
@@ -72,7 +73,7 @@ _DDL = (
         bucket TEXT UNIQUE NOT NULL, catalogue_id TEXT UNIQUE NOT NULL, dsp_url TEXT NOT NULL,
         produced_by_iri TEXT, status TEXT NOT NULL, steps TEXT NOT NULL DEFAULT '{}',
         s3_access_key TEXT, s3_secret_enc TEXT, created_at TEXT, updated_at TEXT, created_by TEXT,
-        logo_url TEXT)""",
+        logo_url TEXT, visibility TEXT)""",
     """CREATE TABLE IF NOT EXISTS testbed_assets (
         slug TEXT NOT NULL, asset_id TEXT NOT NULL, title TEXT, offer_id TEXT,
         status TEXT NOT NULL DEFAULT 'discovered', present INTEGER NOT NULL DEFAULT 1,
@@ -103,7 +104,7 @@ class _Conn:
 
 
 _NEW_ASSET_COLUMNS = ("transfer_state", "transfer_checked_at", "negotiation_id", "negotiation_state")
-_NEW_TESTBED_COLUMNS = ("logo_url",)
+_NEW_TESTBED_COLUMNS = ("logo_url", "visibility")
 
 
 def _migrate(conn: "_Conn") -> None:
@@ -155,6 +156,7 @@ def _db():
 def _public(row: sqlite3.Row) -> dict:
     d = {k: row[k] for k in _COLUMNS if k != "s3_secret_enc"}
     d["steps"] = json.loads(d["steps"] or "{}")
+    d["visibility"] = d["visibility"] or "public"  # testbeds registered before catalogues could be private
     d["has_credentials"] = bool(row["s3_secret_enc"])
     return d
 

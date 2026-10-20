@@ -1,5 +1,6 @@
 """Creates a testbed's catalogue in piveau-hub-repo (the catalogue id is the bucket name)."""
 
+import json
 import re
 
 import httpx
@@ -7,6 +8,7 @@ from fastapi import HTTPException
 from rdflib import Graph, URIRef
 from rdflib.namespace import DCAT, FOAF, RDF
 
+import piveau_access
 import piveau_dataset_client as pdc
 
 # A testbed's logo is the catalogue's foaf:logo: a plain image URL, as on the KUL and ISI catalogues.
@@ -24,7 +26,8 @@ def clean_logo_url(value: str | None) -> str | None:
     return url
 
 
-def _turtle(catalogue_id: str, title: str, description: str, publisher: str, logo_url: str | None = None) -> str:
+def _turtle(catalogue_id: str, title: str, description: str, publisher: str, logo_url: str | None = None,
+            private: bool = False) -> str:
     esc = pdc._esc
     logo = f"    foaf:logo <{logo_url}> ;\n" if logo_url else ""
     return (
@@ -35,6 +38,7 @@ def _turtle(catalogue_id: str, title: str, description: str, publisher: str, log
         "    a dcat:Catalog ;\n"
         f'    dct:title "{esc(title)}"@en ;\n'
         f'    dct:description "{esc(description)}"@en ;\n'
+        f"    dct:accessRights <{piveau_access.catalogue_rights(private)}> ;\n"
         f"{logo}"
         f'    dct:publisher [ a foaf:Agent ; foaf:name "{esc(publisher)}" ] .\n'
     )
@@ -95,11 +99,16 @@ def set_catalogue_logo(catalogue_id: str, logo_url: str | None) -> str:
 
 
 def count_datasets(catalogue_id: str) -> int:
-    """How many datasets the search index holds for the catalogue."""
+    """How many datasets the search index holds for the catalogue, as far as the caller may see them (with access
+    control, the datasets of a private catalogue only count for its members and administrators).
+
+    The catalogue is selected with `facets`: a plain `catalog=` parameter does not narrow the total (see
+    piveau_client.count_indexed)."""
     import piveau_client as pc
     try:
-        r = httpx.get(f"{pc.PIVEAU_URL.rstrip('/')}/search",
-                      params={"filter": "dataset", "catalog": catalogue_id, "limit": 1}, timeout=15)
+        r = httpx.get(f"{pc.PIVEAU_URL.rstrip('/')}/search", headers=piveau_access.read_headers(),
+                      params={"filter": "dataset", "facets": json.dumps({"catalog": [catalogue_id]}), "limit": 1},
+                      timeout=15)
         r.raise_for_status()
         return int(r.json().get("result", {}).get("count", 0))
     except (httpx.HTTPError, ValueError) as e:
@@ -122,9 +131,10 @@ def delete_catalogue(catalogue_id: str) -> dict:
 
 
 def ensure_catalogue(catalogue_id: str, title: str, description: str, publisher: str,
-                     logo_url: str | None = None) -> str:
-    """Create the catalogue if absent, with `logo_url` as its logo. Returns 'created' or 'exists'. An existing
-    catalogue is left as it is: use set_catalogue_logo to change its logo."""
+                     logo_url: str | None = None, private: bool = False) -> str:
+    """Create the catalogue if absent, with `logo_url` as its logo and public or private (dct:accessRights PUBLIC or
+    NON_PUBLIC). Returns 'created' or 'exists'. An existing catalogue is left as it is: use set_catalogue_logo to
+    change its logo. Its visibility cannot be changed: it fixes the access level of every dataset written into it."""
     pdc._require_piveau_config()
     base = pdc.PIVEAU_HUB_URL.rstrip("/")
     headers = {"X-API-Key": pdc.PIVEAU_API_KEY}
@@ -134,7 +144,7 @@ def ensure_catalogue(catalogue_id: str, title: str, description: str, publisher:
                 return "exists"
             r = c.put(
                 f"{base}/catalogues/{catalogue_id}",
-                content=_turtle(catalogue_id, title, description, publisher, logo_url).encode(),
+                content=_turtle(catalogue_id, title, description, publisher, logo_url, private).encode(),
                 headers={**headers, "Content-Type": "text/turtle"},
             )
             r.raise_for_status()

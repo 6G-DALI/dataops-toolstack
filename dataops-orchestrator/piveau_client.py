@@ -16,6 +16,8 @@ import os
 import httpx
 from fastapi import HTTPException
 
+import piveau_access
+
 log = logging.getLogger(__name__)
 
 PIVEAU_URL = os.getenv("PIVEAU_URL", "https://search.dspace.sparkworks.net")
@@ -314,7 +316,9 @@ async def _search_datasets(catalogue_id: str | None = None, limit: int = 100) ->
     params = {"index": "dataset", "limit": fetch_limit}
     if catalogue_id:
         params["catalog"] = catalogue_id
-    async with httpx.AsyncClient(timeout=10) as client:
+    # Search and the per-dataset reads go out with the caller's token (access control), so piveau shows the
+    # caller's private datasets and nobody else's. Without one they read as anonymous.
+    async with httpx.AsyncClient(timeout=10, headers=piveau_access.read_headers()) as client:
         r = await client.get(f"{PIVEAU_URL}{_SEARCH_PATH}", params=params)
         r.raise_for_status()
         data = r.json()
@@ -399,7 +403,7 @@ async def fetch_catalogues(limit: int = 100) -> list[dict]:
     """Fetch the list of catalogues known to piveau (id + title)."""
     params = {"index": "catalogue", "limit": limit}
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, headers=piveau_access.read_headers()) as client:
             r = await client.get(f"{PIVEAU_URL}{_SEARCH_PATH}", params=params)
             r.raise_for_status()
             data = r.json()

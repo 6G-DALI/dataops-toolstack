@@ -10,6 +10,9 @@ import os
 import httpx
 from fastapi import HTTPException
 
+import piveau_access
+from config import PIVEAU_SERVICES_ACCESS_LEVEL
+
 log = logging.getLogger(__name__)
 
 PIVEAU_HUB_URL    = os.getenv("PIVEAU_HUB_URL", "")
@@ -94,9 +97,12 @@ async def register_service(service_id: str, meta: dict) -> dict:
         "X-API-Key":    PIVEAU_API_KEY,
         "Content-Type": "text/turtle",
     }
+    # The service states dct:accessRights RESTRICTED, which is about using it, not finding it: its access level is
+    # PIVEAU_SERVICES_ACCESS_LEVEL (public by default), raised only by a private services catalogue.
+    params = await piveau_access.write_params(PIVEAU_CATALOGUE, turtle, floor=PIVEAU_SERVICES_ACCESS_LEVEL)
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.put(url, content=turtle.encode(), headers=headers)
+            r = await client.put(url, content=turtle.encode(), headers=headers, params=params)
         r.raise_for_status()
     except httpx.HTTPStatusError as e:
         print(f"[piveau] {e.response.status_code} body: {e.response.text!r}")

@@ -161,7 +161,15 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
             <Field label="Contact">{tb.contact_email ?? '—'}</Field>
             <Field label="Participant ID"><code>{tb.participant_id}</code></Field>
             <Field label="Experiment prefix"><code>{tb.experiment_prefix}</code></Field>
-            <Field label="Bucket / catalogue"><code>{tb.bucket}</code></Field>
+            <Field label="Bucket / catalogue">
+              <code>{tb.bucket}</code>
+              <span className={`badge ms-2 ${tb.visibility === 'private' ? 'text-bg-warning' : 'text-bg-light border'}`}
+                title={tb.visibility === 'private'
+                  ? 'Datasets visible only to the testbed’s members and administrators. Fixed when the catalogue was created.'
+                  : 'Datasets visible to everyone. Fixed when the catalogue was created.'}>
+                {tb.visibility === 'private' ? 'private' : 'public'}
+              </span>
+            </Field>
             <Field label="Data Lake access key">
               {tb.s3_access_key ? (
                 <>

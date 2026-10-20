@@ -32,6 +32,12 @@ const EMPTY: FormState = {
   participant_id: '', bucket: '', experiment_prefix: '', dsp_url: '',
 }
 
+/** What each catalogue visibility means, shown under the choice. */
+const VISIBILITY_HINT = {
+  public: 'Its datasets are visible to everyone (dct:accessRights PUBLIC).',
+  private: 'Its datasets are visible only to the testbed’s members and administrators (dct:accessRights NON_PUBLIC).',
+}
+
 interface TestbedRegisterProps {
   onNavigate: NavigateFn
 }
@@ -39,6 +45,7 @@ interface TestbedRegisterProps {
 export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
   const [step, setStep] = useState(0)
   const [form, setForm] = useState<FormState>(EMPTY)
+  const [isPrivate, setIsPrivate] = useState(false)
   const [testbed, setTestbed] = useState<Testbed | null>(null)
   const [followups, setFollowups] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
@@ -68,6 +75,7 @@ export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
     for (const k of ['organisation', 'contact_email', 'produced_by_iri', 'logo_url', 'participant_id', 'bucket', 'experiment_prefix', 'dsp_url'] as const) {
       if (form[k].trim()) body[k] = form[k].trim()
     }
+    if (isPrivate) body.private = true
     const created = await run(() => registerTestbed(body))
     if (created) {
       setTestbed(created)
@@ -130,6 +138,20 @@ export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
             <input className="form-control" type="url" value={form.logo_url} onChange={set('logo_url')}
               placeholder="https://example.org/logo.png" />
             <div className="form-text">Optional. A link to the testbed's logo image, shown on its catalogue. Can be added or changed later.</div>
+          </div>
+          <div className="mb-3">
+            <label className="form-label d-block">Catalogue</label>
+            {(['public', 'private'] as const).map(v => (
+              <div key={v} className="form-check form-check-inline">
+                <input className="form-check-input" type="radio" id={`visibility-${v}`} name="visibility"
+                  checked={isPrivate === (v === 'private')} onChange={() => setIsPrivate(v === 'private')} />
+                <label className="form-check-label text-capitalize" htmlFor={`visibility-${v}`}>{v}</label>
+              </div>
+            ))}
+            <div className="form-text">
+              {VISIBILITY_HINT[isPrivate ? 'private' : 'public']} This cannot be changed once the catalogue exists.
+              Private catalogues need piveau access control on this deployment.
+            </div>
           </div>
           <button className="btn btn-primary" disabled={!detailsOk} onClick={() => setStep(1)}>Next</button>
         </div></div>

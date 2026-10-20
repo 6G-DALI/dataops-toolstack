@@ -1,16 +1,18 @@
 import json
 import uuid
 
-from fastapi import APIRouter, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, UploadFile
 import airflow_client as af
 
 import datalake_client as dlc
 import edc_client as edc
+import piveau_access
 import piveau_dataset_client as pdc
 from config import CONTRIBUTED_DATASETS_CATALOGUE, DATASPACE_S3_ENDPOINT_URL, VALIDATION_DAG_ID
 from dataset_models import DatasetCreateRequest, DistributionMetrics
 
-router = APIRouter(prefix="/datasets", tags=["Datasets"])
+# The listings read piveau with the caller's own token (piveau access control), never with more rights.
+router = APIRouter(prefix="/datasets", tags=["Datasets"], dependencies=[Depends(piveau_access.forward_caller_token)])
 
 
 @router.get("")

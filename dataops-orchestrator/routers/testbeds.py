@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 import datalake_admin
 import edc_consumer_client
 import keycloak_admin
+import piveau_access
 import piveau_dataset_client as pdc
 import piveau_catalogue_client
 import testbed_store as store
@@ -26,7 +27,8 @@ from auth import is_testbed_admin, owned_slugs, require_testbed_access, require_
 from config import DATALAKE_PUBLIC_ENDPOINT_URL, TESTBED_BUCKET_PREFIX, TESTBED_DOMAIN_SUFFIX
 from testbed_bundle import build_bundle
 
-router = APIRouter(prefix="/testbeds", tags=["Testbeds"])
+# piveau reads made here (the dataset count before a deregistration) go out with the caller's token.
+router = APIRouter(prefix="/testbeds", tags=["Testbeds"], dependencies=[Depends(piveau_access.forward_caller_token)])
 
 _SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}[a-z0-9]$")
 _DSP_URL_RE = re.compile(r"^https?://[^\s/]+(/\S*)?$")
@@ -46,6 +48,10 @@ class TestbedCreate(BaseModel):
     dsp_url: str | None = None
     produced_by_iri: str | None = None
     logo_url: str | None = Field(default=None, description="Image URL shown as the testbed's catalogue logo (foaf:logo)")
+    private: bool = Field(
+        default=False,
+        description="Create the testbed's catalogue private (dct:accessRights NON_PUBLIC): its datasets are visible to "
+                    "its members only. Needs piveau access control; cannot be changed after the catalogue exists.")
 
 
 class TestbedUpdate(BaseModel):
@@ -96,6 +102,10 @@ def register_testbed(body: TestbedCreate, claims: dict = Depends(require_testbed
         raise HTTPException(status_code=422, detail=f"'{bucket}' is not a valid bucket name (3-63 chars, lowercase, digits, '.', '-')")
     prefix = body.experiment_prefix or bucket
     logo_url = _logo_or_422(body.logo_url)
+    if body.private and not piveau_access.enabled():
+        # On piveau without access control a NON_PUBLIC catalogue is only a label: its datasets stay public.
+        raise HTTPException(status_code=422, detail="A private catalogue needs piveau access control "
+                                                    "(PIVEAU_ACCESS_CONTROL), which is not enabled on this deployment")
     return store.create_testbed(
         {
             "slug": body.slug, "name": body.name, "organisation": body.organisation,
@@ -104,6 +114,7 @@ def register_testbed(body: TestbedCreate, claims: dict = Depends(require_testbed
             "bucket": bucket, "catalogue_id": bucket,
             "dsp_url": body.dsp_url or f"https://edc.{body.slug}.{TESTBED_DOMAIN_SUFFIX}/protocol",
             "produced_by_iri": body.produced_by_iri, "logo_url": logo_url,
+            "visibility": "private" if body.private else "public",
         },
         _actor(claims),
     )
@@ -386,10 +397,16 @@ def provision(slug: str, claims: dict = Depends(require_testbed_admin)):
 
     record("bucket", lambda: datalake_admin.ensure_bucket(tb["bucket"]))
     def ensure_catalogue() -> str:
+        private = tb["visibility"] == "private"
         result = piveau_catalogue_client.ensure_catalogue(
             tb["catalogue_id"], f"{tb['name']} testbed datasets",
             f"Datasets contributed by the {tb['name']} testbed to the 6G-DALI Data Space.",
-            tb["organisation"] or tb["name"], tb["logo_url"])
+            tb["organisation"] or tb["name"], tb["logo_url"], private)
+        # A catalogue's visibility is fixed when it is created: a testbed registered as private whose catalogue
+        # already exists as public would publish everything it uploads, so that is a failed step, not 'exists'.
+        if result == "exists" and private and piveau_access.catalogue_level(tb["catalogue_id"]) != "internal":
+            raise HTTPException(status_code=409, detail=f"Catalogue '{tb['catalogue_id']}' already exists and is "
+                                                        "public; a catalogue's visibility cannot be changed")
         # A catalogue that already existed keeps what it has; a saved logo is applied to it here. Without a
         # saved logo it is left alone, so a logo set directly in piveau is not wiped by provisioning.
         if result == "exists" and tb["logo_url"]:
