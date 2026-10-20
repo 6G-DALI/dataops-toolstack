@@ -52,5 +52,8 @@ jobs:
           # Without a cache every CI build recreates the dependency layer from scratch, which gives it a new
           # digest even though requirements.txt did not change, so every deploy pulls those ~40 MB again.
           # With it the layer is reused and a deploy only pulls the small app layer on top.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Its own scope: without one, every workflow of this repo shares the default "buildkit" cache and the
+          # last build to finish (often dataops-ui, built from the same push) overwrites it, so the next build here
+          # finds none of its layers and rebuilds the dependency layer anyway.
+          cache-from: type=gha,scope=dataops-orchestrator
+          cache-to: type=gha,mode=max,scope=dataops-orchestrator

@@ -59,5 +59,6 @@ jobs:
             GIT_SHA=${{ github.sha }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Its own scope, so it does not overwrite dataops-orchestrator's cache (same repo, often the same push).
+          cache-from: type=gha,scope=dataops-ui
+          cache-to: type=gha,mode=max,scope=dataops-ui
