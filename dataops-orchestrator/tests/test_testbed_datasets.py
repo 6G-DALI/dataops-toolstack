@@ -108,6 +108,9 @@ def test_testbed_endpoints(client, hub):  # noqa: F811
     client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
     r = client.get("/testbeds/pamak/datasets").json()
     assert r["catalogue_id"] == cat and r["levels"] == ["public", "restricted", "internal"] and r["total"] == 1
+    one = client.get(f"/testbeds/pamak/datasets/{DS}").json()
+    assert one["dataset"]["title"] == "Edge AI inference" and one["levels"] == r["levels"]
+    assert client.get("/testbeds/pamak/datasets/nope").status_code == 404
 
     _act_as_owner(client, "/testbeds/pamak")  # the testbed's own administrators may edit
     edited = client.patch(f"/testbeds/pamak/datasets/{DS}", json={"title": "Owner edit", "access_level": "restricted"})

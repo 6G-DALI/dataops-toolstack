@@ -42,6 +42,7 @@ import type {
   UploadCredentials,
   TestbedDataset,
   TestbedDatasets,
+  TestbedDatasetDetail,
   DatasetEditRequest,
   TestbedCreateRequest,
   TestbedProvisionResponse,
@@ -488,6 +489,11 @@ export function rotateTestbedCredentials(slug: string): Promise<{ note: string }
 /** The datasets of the testbed's catalogue, private ones included, and the visibilities they can have. */
 export function getTestbedDatasets(slug: string): Promise<TestbedDatasets> {
   return request(`/testbeds/${encodeURIComponent(slug)}/datasets`)
+}
+
+/** One dataset of the testbed's catalogue, with the visibilities it can have. */
+export function getTestbedDataset(slug: string, datasetId: string): Promise<TestbedDatasetDetail> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/datasets/${encodeURIComponent(datasetId)}`)
 }
 
 /** Change a dataset's fields and/or visibility in the catalogue; fields left out are kept. */

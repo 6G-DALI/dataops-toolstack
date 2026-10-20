@@ -457,6 +457,16 @@ def list_testbed_datasets(slug: str):
             "datasets": datasets, "total": len(datasets)}
 
 
+@router.get("/{slug}/datasets/{dataset_id}", dependencies=[Depends(require_testbed_access)])
+def get_testbed_dataset(slug: str, dataset_id: str):
+    """One dataset of the testbed's catalogue, for the edit page, with the visibilities it can have."""
+    tb = _get(slug)
+    access_control = piveau_access.enabled()
+    return {"catalogue_id": tb["catalogue_id"], "access_control": access_control,
+            "levels": list(testbed_datasets.allowed_levels(tb["catalogue_id"])) if access_control else [],
+            "dataset": testbed_datasets.summary(tb["catalogue_id"], dataset_id)}
+
+
 @router.patch("/{slug}/datasets/{dataset_id}")
 def edit_testbed_dataset(slug: str, dataset_id: str, body: DatasetEdit, claims: dict = Depends(require_testbed_access)):
     tb = _get(slug)

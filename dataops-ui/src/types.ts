@@ -19,6 +19,7 @@ export type View =
   | 'testbed-register'
   | 'testbed-detail'
   | 'testbed-metadata'
+  | 'testbed-dataset'
 
 export interface NavParams {
   dagId?: string
@@ -756,6 +757,14 @@ export interface TestbedDatasets {
   levels: DatasetAccessLevel[]
   datasets: TestbedDataset[]
   total: number
+}
+
+/** One dataset of a testbed's catalogue, for its edit page. */
+export interface TestbedDatasetDetail {
+  catalogue_id: string
+  access_control: boolean
+  levels: DatasetAccessLevel[]
+  dataset: TestbedDataset
 }
 
 export interface DatasetEditRequest {

@@ -21,6 +21,8 @@ import type { DeletionPreview, DeregisterResponse, NavigateFn, Testbed, TestbedA
 interface TestbedDetailProps {
   slug: string
   onNavigate: NavigateFn
+  /** The tab to open on, from the address (#/testbed-detail/<slug>/<tab>), e.g. coming back from a dataset's page. */
+  initialTab?: string
 }
 
 type Tab = 'overview' | 'datasets' | 'assets' | 'access' | 'activity' | 'settings'
@@ -43,7 +45,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) {
+export default function TestbedDetail({ slug, onNavigate, initialTab }: TestbedDetailProps) {
   const [tb, setTb] = useState<Testbed | null>(null)
   const [audit, setAudit] = useState<TestbedAuditEntry[]>([])
   const [assets, setAssets] = useState<TestbedAsset[]>([])
@@ -59,7 +61,7 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
   const [confirmStart, setConfirmStart] = useState<TestbedAsset | null>(null)
   const [dspEdit, setDspEdit] = useState<string | null>(null)
   const [logoEdit, setLogoEdit] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>('overview')
+  const [tab, setTab] = useState<Tab>(TABS.find(t => t.id === initialTab)?.id ?? 'overview')
   // A hosted testbed's upload secret, when re-running provisioning just created the key: shown once.
   const [issuedUpload, setIssuedUpload] = useState<UploadCredentials | null>(null)
 
@@ -237,7 +239,7 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
         </div>
       )}
 
-      {tab === 'datasets' && <TestbedDatasets slug={slug} onChanged={load} />}
+      {tab === 'datasets' && <TestbedDatasets slug={slug} onNavigate={onNavigate} />}
 
       {tab === 'assets' && (
         <div className="card"><div className="card-body">

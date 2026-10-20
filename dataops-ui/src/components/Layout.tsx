@@ -86,6 +86,14 @@ function buildCrumbs(
   if (view === 'testbed-detail') {
     return [crumb('Testbeds', 'testbeds'), crumb(dagId ?? '', 'testbed-detail', { dagId: dagId ?? '' })]
   }
+  if (view === 'testbed-dataset') {
+    // The dataset id travels in the runId slot; back to the testbed opens its Datasets tab.
+    return [
+      crumb('Testbeds', 'testbeds'),
+      crumb(dagId ?? '', 'testbed-detail', { dagId: dagId ?? '', runId: 'datasets' }),
+      crumb('Edit dataset', 'testbed-dataset', { dagId: dagId ?? '', runId: runId ?? '' }),
+    ]
+  }
   if (view === 'testbed-metadata') {
     // The testbed slug is optional here: the builder also opens blank from the testbed list.
     return [
