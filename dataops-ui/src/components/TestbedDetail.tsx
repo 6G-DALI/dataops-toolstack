@@ -21,6 +21,16 @@ interface TestbedDetailProps {
   onNavigate: NavigateFn
 }
 
+type Tab = 'overview' | 'assets' | 'access' | 'activity' | 'settings'
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'assets', label: 'Assets' },
+  { id: 'access', label: 'Access' },
+  { id: 'activity', label: 'Activity' },
+  { id: 'settings', label: 'Settings' },
+]
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="row mb-2">
@@ -46,6 +56,7 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
   const [confirmStart, setConfirmStart] = useState<TestbedAsset | null>(null)
   const [dspEdit, setDspEdit] = useState<string | null>(null)
   const [logoEdit, setLogoEdit] = useState<string | null>(null)
+  const [tab, setTab] = useState<Tab>('overview')
 
   const load = useCallback(() => {
     Promise.all([getTestbed(slug), getTestbedAudit(slug), getTestbedAssets(slug)])
@@ -120,262 +131,325 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
 
       <TestbedTimeline testbed={tb} assets={assets} />
 
-      <div className="d-flex flex-wrap gap-2 mb-3">
-        <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => act(() => downloadTestbedBundle(slug))}>
-          <FiDownload className="me-1" />Connector bundle
-        </button>
-        <button className="btn btn-sm btn-primary" disabled={busy}
-          title="Ask the testbed's connector, through the central connector, which assets it offers"
-          onClick={() => act(async () => {
-            const r = await discoverTestbedAssets(slug)
-            setNotice(r.offered > 0 ? `Found ${r.offered} offered asset${r.offered !== 1 ? 's' : ''}.` : 'Connector reachable, but it offers no assets yet.')
-          })}>
-          <FiSearch className="me-1" />Find asset
-        </button>
-        <button className="btn btn-sm btn-outline-primary" disabled={busy}
-          title="Build the metadata.json that goes next to a dataset's data files"
-          onClick={() => onNavigate('testbed-metadata', { dagId: slug })}>
-          <FiFileText className="me-1" />Metadata builder
-        </button>
-        {isTestbedAdmin() && (
-          <>
-            <button className="btn btn-sm btn-outline-primary" disabled={busy}
-              onClick={() => act(() => provisionTestbed(slug), 'Provisioning re-run.')}>
-              <FiRefreshCw className="me-1" />Re-run provisioning
-            </button>
-            <button className="btn btn-sm btn-outline-secondary" disabled={busy || !tb.has_credentials}
-              onClick={() => act(async () => { const r = await rotateTestbedCredentials(slug); setNotice(r.note) })}>
-              <FiKey className="me-1" />Rotate Data Lake key
-            </button>
-            <button className="btn btn-sm btn-outline-danger ms-auto" disabled={busy} onClick={() => setConfirmDelete(true)}>
-              <FiTrash2 className="me-1" />Deregister
-            </button>
-          </>
-        )}
-      </div>
+      <h5 className="mb-3">{tb.name} <TestbedStatusBadge status={tb.status} /></h5>
 
-      <div className="row g-3">
-        <div className="col-lg-7">
-          <div className="card"><div className="card-body">
-            <h6 className="mb-3">{tb.name} <TestbedStatusBadge status={tb.status} /></h6>
-            <Field label="Organisation">{tb.organisation ?? '—'}</Field>
-            <Field label="Contact">{tb.contact_email ?? '—'}</Field>
-            <Field label="Participant ID"><code>{tb.participant_id}</code></Field>
-            <Field label="Experiment prefix"><code>{tb.experiment_prefix}</code></Field>
-            <Field label="Bucket / catalogue">
-              <code>{tb.bucket}</code>
-              <span className={`badge ms-2 ${tb.visibility === 'private' ? 'text-bg-warning' : 'text-bg-light border'}`}
-                title={tb.visibility === 'private'
-                  ? 'Datasets visible only to the testbed’s members and administrators. Fixed when the catalogue was created.'
-                  : 'Datasets visible to everyone. Fixed when the catalogue was created.'}>
-                {tb.visibility === 'private' ? 'private' : 'public'}
-              </span>
-            </Field>
-            <Field label="Data Lake access key">
-              {tb.s3_access_key ? (
-                <>
-                  <CopyableId value={tb.s3_access_key} />
-                  <div className="text-muted small">Scoped to this bucket. The secret key is kept encrypted and not shown.</div>
-                </>
-              ) : (
-                <span className="text-muted">{tb.status === 'adopted' ? 'none yet (run provisioning)' : '—'}</span>
-              )}
-            </Field>
-            <Field label="DSP endpoint">
-              {dspEdit === null ? (
-                <>
-                  <span className="text-break">{tb.dsp_url}</span>
-                  {isTestbedAdmin() && (
-                    <button className="btn btn-sm btn-link py-0 ms-1" disabled={busy} title="Edit the DSP endpoint"
-                      onClick={() => setDspEdit(tb.dsp_url)}>
-                      <FiEdit2 />
-                    </button>
-                  )}
-                </>
-              ) : (
-                <form className="d-flex flex-wrap gap-2" onSubmit={e => {
-                  e.preventDefault()
-                  const value = dspEdit.trim()
-                  setDspEdit(null)
-                  if (value !== tb.dsp_url) act(() => updateTestbedDspUrl(slug, value), 'DSP endpoint updated.')
-                }}>
-                  <input className="form-control form-control-sm flex-grow-1" type="url" required autoFocus
-                    aria-label="DSP endpoint" value={dspEdit} onChange={e => setDspEdit(e.target.value)} />
-                  <button className="btn btn-sm btn-primary" type="submit" disabled={busy || !dspEdit.trim()}>Save</button>
-                  <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => setDspEdit(null)}>Cancel</button>
-                </form>
-              )}
-            </Field>
-            <Field label="Logo">
-              {logoEdit === null ? (
-                <>
-                  {tb.logo_url ? (
-                    <div>
+      <ul className="nav nav-tabs mb-3" role="tablist">
+        {TABS.map(t => (
+          <li className="nav-item" key={t.id} role="presentation">
+            <button type="button" role="tab" aria-selected={tab === t.id}
+              className={`nav-link${tab === t.id ? ' active' : ''}`} onClick={() => setTab(t.id)}>
+              {t.label}
+              {t.id === 'assets' && assets.length > 0 && <span className="badge text-bg-secondary ms-2">{assets.length}</span>}
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      {tab === 'overview' && (
+        <div className="row g-3">
+          <div className="col-lg-7">
+            <div className="card"><div className="card-body">
+              <Field label="Organisation">{tb.organisation ?? '—'}</Field>
+              <Field label="Contact">{tb.contact_email ?? '—'}</Field>
+              <Field label="Catalogue">
+                <code>{tb.catalogue_id}</code>
+                {links.catalogue && (
+                  <a href={links.catalogue} target="_blank" rel="noreferrer" className="ms-1 small" title="Open the catalogue">
+                    <FiExternalLink />
+                  </a>
+                )}
+                <span className={`badge ms-2 ${tb.visibility === 'private' ? 'text-bg-warning' : 'text-bg-light border'}`}
+                  title={tb.visibility === 'private'
+                    ? 'Datasets visible only to the people given access (Access tab). Fixed when the catalogue was created.'
+                    : 'Datasets visible to everyone. Fixed when the catalogue was created.'}>
+                  {tb.visibility === 'private' ? 'private' : 'public'}
+                </span>
+              </Field>
+              <Field label="Logo">
+                {logoEdit === null ? (
+                  <>
+                    {tb.logo_url ? (
                       <img key={tb.logo_url} src={tb.logo_url} alt={`${tb.name} logo`} referrerPolicy="no-referrer"
-                        style={{ maxHeight: 48, maxWidth: 200 }} className="d-block mb-1"
+                        style={{ maxHeight: 48, maxWidth: 200 }} className="d-inline-block"
                         onError={e => { e.currentTarget.style.display = 'none' }} />
-                      <span className="text-break small text-muted">{tb.logo_url}</span>
-                    </div>
-                  ) : <span className="text-muted">none</span>}
-                  {isTestbedAdmin() && (
-                    <button className="btn btn-sm btn-link py-0 ms-1" disabled={busy} title="Edit the logo URL"
-                      onClick={() => setLogoEdit(tb.logo_url ?? '')}>
-                      <FiEdit2 />
-                    </button>
-                  )}
-                </>
-              ) : (
-                <form onSubmit={e => {
-                  e.preventDefault()
-                  const value = logoEdit.trim()
-                  setLogoEdit(null)
-                  act(() => updateTestbedLogo(slug, value), value ? 'Logo saved and set on the catalogue.' : 'Logo removed from the catalogue.')
-                }}>
-                  <div className="d-flex flex-wrap gap-2">
-                    <input className="form-control form-control-sm flex-grow-1" type="url" autoFocus
-                      aria-label="Logo URL" placeholder="https://example.org/logo.png" value={logoEdit}
-                      onChange={e => setLogoEdit(e.target.value)} />
-                    <button className="btn btn-sm btn-primary" type="submit" disabled={busy}>Save</button>
-                    <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => setLogoEdit(null)}>Cancel</button>
-                  </div>
-                  <div className="form-text">Updates the testbed's catalogue in piveau. Leave empty to remove the logo.</div>
-                </form>
-              )}
-            </Field>
-            <Field label="produced_by">{tb.produced_by_iri ? <span className="text-break">{tb.produced_by_iri}</span> : '—'}</Field>
-            <Field label="Registered">{tb.created_at}{tb.created_by ? ` by ${tb.created_by}` : ''}</Field>
-          </div></div>
-        </div>
-
-        <div className="col-lg-5">
-          <div className="card mb-3"><div className="card-body">
-            <h6 className="mb-3">Provisioning</h6>
-            <ul className="list-unstyled mb-0">
-              {['bucket', 'credentials', 'catalogue', 'access'].map(key => {
-                const s = tb.steps[key]
-                return (
-                  <li key={key} className="mb-1">
-                    {!s ? <FiMinusCircle className="text-muted me-2" />
-                      : s.status === 'ok' ? <FiCheckCircle className="text-success me-2" />
-                      : s.status === 'skipped' ? <FiMinusCircle className="text-muted me-2" />
-                      : <FiXCircle className="text-danger me-2" />}
-                    <strong className="text-capitalize">{key}</strong>
-                    {links[key] && (
-                      <a href={links[key]!} target="_blank" rel="noreferrer" className="ms-1 small"
-                        title={`Open ${tb.bucket} (${key})`}>
-                        <FiExternalLink />
-                      </a>
+                    ) : <span className="text-muted">none</span>}
+                    {isTestbedAdmin() && (
+                      <button className="btn btn-sm btn-link py-0 ms-1" disabled={busy} title="Edit the logo URL"
+                        onClick={() => setLogoEdit(tb.logo_url ?? '')}>
+                        <FiEdit2 />
+                      </button>
                     )}
-                    <span className="text-muted small ms-2">{s ? s.detail : 'not run'}</span>
-                  </li>
-                )
-              })}
-            </ul>
-          </div></div>
+                  </>
+                ) : (
+                  <form onSubmit={e => {
+                    e.preventDefault()
+                    const value = logoEdit.trim()
+                    setLogoEdit(null)
+                    act(() => updateTestbedLogo(slug, value), value ? 'Logo saved and set on the catalogue.' : 'Logo removed from the catalogue.')
+                  }}>
+                    <div className="d-flex flex-wrap gap-2">
+                      <input className="form-control form-control-sm flex-grow-1" type="url" autoFocus
+                        aria-label="Logo URL" placeholder="https://example.org/logo.png" value={logoEdit}
+                        onChange={e => setLogoEdit(e.target.value)} />
+                      <button className="btn btn-sm btn-primary" type="submit" disabled={busy}>Save</button>
+                      <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => setLogoEdit(null)}>Cancel</button>
+                    </div>
+                    <div className="form-text">Updates the testbed's catalogue in piveau. Leave empty to remove the logo.</div>
+                  </form>
+                )}
+              </Field>
+              <Field label="Registered">{tb.created_at}{tb.created_by ? ` by ${tb.created_by}` : ''}</Field>
+            </div></div>
+          </div>
 
-          {isTestbedAdmin() && <TestbedMembers slug={slug} onChanged={load} />}
-
-          <CatalogueAccess slug={slug} visibility={tb.visibility} onChanged={load} />
-
-          <div className="card mb-3"><div className="card-body">
-            <h6 className="mb-3">Assets</h6>
-            {assets.length === 0 ? (
-              <span className="text-muted small">None yet. Register the asset on the testbed's connector, then click “Find asset”.</span>
-            ) : (
-              <ul className="list-unstyled small mb-0">
-                {assets.map(a => (
-                  <li key={a.asset_id} className="mb-2">
-                    <code>{a.asset_id}</code>{' '}
-                    <span className={`badge ${a.present ? 'text-bg-info' : 'text-bg-warning'}`}>
-                      {a.present ? a.status : 'no longer offered'}
-                    </span>
-                    {a.title && <div className="text-muted">{a.title}</div>}
-                    {(() => {
-                      const agreed = !!a.contract_agreement_id && a.negotiation_state === 'FINALIZED'
-                      const running = a.transfer_state === 'STARTED'
-                      return (
-                        <>
-                          <div className="d-flex flex-wrap align-items-center gap-2 mt-1">
-                            <button className="btn btn-sm btn-outline-primary py-0" disabled={busy || !a.present || agreed}
-                              title={agreed ? 'A contract is already agreed' : 'Negotiate a contract for this asset through the central connector'}
-                              onClick={() => act(async () => {
-                                const r = await negotiateTestbedAsset(slug, a.asset_id)
-                                setNotice(r.result === 'agreed' ? `Contract agreed for ${a.asset_id}.`
-                                  : r.result === 'already_agreed' ? `${a.asset_id} already has an agreed contract.`
-                                  : r.result === 'in_progress'
-                                    ? `Negotiation for ${a.asset_id} is still running (${r.asset.negotiation_state}). Use Find transfer to refresh.`
-                                    : r.message ?? `The negotiation for ${a.asset_id} failed. Check the offer and try again.`)
-                              })}>
-                              <FiFileText className="me-1" />Negotiate contract
-                            </button>
-                            <button className="btn btn-sm btn-outline-success py-0"
-                              disabled={busy || !agreed || running || !tb.has_credentials}
-                              title={running ? 'A transfer is already running'
-                                : !tb.has_credentials ? 'Run provisioning first: this testbed has no Data Lake key'
-                                : !agreed ? 'Negotiate a contract first'
-                                : 'Start the transfer from the testbed to the central data lake'}
-                              onClick={() => setConfirmStart(a)}>
-                              <FiPlay className="me-1" />Start transfer
-                            </button>
-                            <button className="btn btn-sm btn-outline-secondary py-0" disabled={busy}
-                              title="Look up this asset's contract and transfer on the central connector"
-                              onClick={() => act(async () => {
-                                const r = await findTestbedTransfer(slug, a.asset_id)
-                                const contract = r.agreement?.agreement_id
-                                  ? `Contract ${r.agreement.negotiation_state ?? 'found'}`
-                                  : 'No contract found'
-                                const transfer = r.active ? 'transfer running'
-                                  : r.transfers.length ? `no running transfer (latest: ${r.transfers[0].state})`
-                                  : 'no transfer found'
-                                setNotice(`${a.asset_id}: ${contract}, ${transfer}.`)
-                              })}>
-                              <FiActivity className="me-1" />Find transfer
-                            </button>
-                          </div>
-                          <div className="d-flex flex-wrap align-items-center gap-2 mt-1">
-                            {a.contract_agreement_id ? (
-                              <>
-                                <span className={`badge ${a.negotiation_state === 'FINALIZED' ? 'text-bg-success' : 'text-bg-secondary'}`}
-                                  title={a.negotiation_id ? `negotiation ${a.negotiation_id}` : undefined}>
-                                  contract {(a.negotiation_state ?? 'agreed').toLowerCase()}
-                                </span>
-                                <CopyableId value={a.contract_agreement_id} maxWidth={170} />
-                              </>
-                            ) : a.negotiation_state ? (
-                              <span className="badge text-bg-secondary" title={a.negotiation_id ?? undefined}>
-                                negotiation {a.negotiation_state.toLowerCase()}
-                              </span>
-                            ) : null}
-                            {a.transfer_state ? (
-                              <span className={`badge ${running ? 'text-bg-success' : 'text-bg-secondary'}`} title={a.transfer_id ?? undefined}>
-                                {running ? 'transfer active' : `transfer ${a.transfer_state.toLowerCase()}`}
-                              </span>
-                            ) : a.transfer_checked_at ? <span className="text-muted">no transfer found</span> : null}
-                          </div>
-                        </>
-                      )
-                    })()}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div></div>
-
-          <div className="card"><div className="card-body">
-            <h6 className="mb-3">Activity</h6>
-            {audit.length === 0 ? <span className="text-muted small">No activity yet</span> : (
-              <ul className="list-unstyled small mb-0">
-                {audit.slice(0, 10).map((a, i) => (
-                  <li key={i} className="mb-1">
-                    <span className="text-muted">{a.ts.replace('T', ' ').replace('+00:00', '')}</span>{' '}
-                    <strong>{a.action}</strong>{a.actor ? ` · ${a.actor}` : ''}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div></div>
+          <div className="col-lg-5">
+            <div className="card"><div className="card-body">
+              <h6 className="mb-3">Get started</h6>
+              <div className="d-grid gap-2">
+                <button className="btn btn-primary text-start" disabled={busy} onClick={() => act(() => downloadTestbedBundle(slug))}>
+                  <FiDownload className="me-2" />Download the connector bundle
+                  <div className="small opacity-75">Everything the testbed needs to run its connector.</div>
+                </button>
+                <button className="btn btn-outline-primary text-start" disabled={busy}
+                  onClick={() => onNavigate('testbed-metadata', { dagId: slug })}>
+                  <FiFileText className="me-2" />Build a dataset's metadata.json
+                  <div className="small opacity-75">The description that goes next to a dataset's data files.</div>
+                </button>
+              </div>
+            </div></div>
+          </div>
         </div>
-      </div>
+      )}
+
+      {tab === 'assets' && (
+        <div className="card"><div className="card-body">
+          <div className="d-flex align-items-center mb-3">
+            <div className="text-muted small me-3">
+              The datasets the testbed's connector offers. Negotiate a contract, then start the transfer into the
+              central Data Lake.
+            </div>
+            <button className="btn btn-sm btn-primary ms-auto text-nowrap" disabled={busy}
+              title="Ask the testbed's connector, through the central connector, which assets it offers"
+              onClick={() => act(async () => {
+                const r = await discoverTestbedAssets(slug)
+                setNotice(r.offered > 0 ? `Found ${r.offered} offered asset${r.offered !== 1 ? 's' : ''}.` : 'Connector reachable, but it offers no assets yet.')
+              })}>
+              <FiSearch className="me-1" />Find asset
+            </button>
+          </div>
+          {assets.length === 0 ? (
+            <span className="text-muted small">None yet. Register the asset on the testbed's connector, then click “Find asset”.</span>
+          ) : (
+            <ul className="list-unstyled small mb-0">
+              {assets.map(a => (
+                <li key={a.asset_id} className="mb-2">
+                  <code>{a.asset_id}</code>{' '}
+                  <span className={`badge ${a.present ? 'text-bg-info' : 'text-bg-warning'}`}>
+                    {a.present ? a.status : 'no longer offered'}
+                  </span>
+                  {a.title && <div className="text-muted">{a.title}</div>}
+                  {(() => {
+                    const agreed = !!a.contract_agreement_id && a.negotiation_state === 'FINALIZED'
+                    const running = a.transfer_state === 'STARTED'
+                    return (
+                      <>
+                        <div className="d-flex flex-wrap align-items-center gap-2 mt-1">
+                          <button className="btn btn-sm btn-outline-primary py-0" disabled={busy || !a.present || agreed}
+                            title={agreed ? 'A contract is already agreed' : 'Negotiate a contract for this asset through the central connector'}
+                            onClick={() => act(async () => {
+                              const r = await negotiateTestbedAsset(slug, a.asset_id)
+                              setNotice(r.result === 'agreed' ? `Contract agreed for ${a.asset_id}.`
+                                : r.result === 'already_agreed' ? `${a.asset_id} already has an agreed contract.`
+                                : r.result === 'in_progress'
+                                  ? `Negotiation for ${a.asset_id} is still running (${r.asset.negotiation_state}). Use Find transfer to refresh.`
+                                  : r.message ?? `The negotiation for ${a.asset_id} failed. Check the offer and try again.`)
+                            })}>
+                            <FiFileText className="me-1" />Negotiate contract
+                          </button>
+                          <button className="btn btn-sm btn-outline-success py-0"
+                            disabled={busy || !agreed || running || !tb.has_credentials}
+                            title={running ? 'A transfer is already running'
+                              : !tb.has_credentials ? 'Run provisioning first: this testbed has no Data Lake key'
+                              : !agreed ? 'Negotiate a contract first'
+                              : 'Start the transfer from the testbed to the central data lake'}
+                            onClick={() => setConfirmStart(a)}>
+                            <FiPlay className="me-1" />Start transfer
+                          </button>
+                          <button className="btn btn-sm btn-outline-secondary py-0" disabled={busy}
+                            title="Look up this asset's contract and transfer on the central connector"
+                            onClick={() => act(async () => {
+                              const r = await findTestbedTransfer(slug, a.asset_id)
+                              const contract = r.agreement?.agreement_id
+                                ? `Contract ${r.agreement.negotiation_state ?? 'found'}`
+                                : 'No contract found'
+                              const transfer = r.active ? 'transfer running'
+                                : r.transfers.length ? `no running transfer (latest: ${r.transfers[0].state})`
+                                : 'no transfer found'
+                              setNotice(`${a.asset_id}: ${contract}, ${transfer}.`)
+                            })}>
+                            <FiActivity className="me-1" />Find transfer
+                          </button>
+                        </div>
+                        <div className="d-flex flex-wrap align-items-center gap-2 mt-1">
+                          {a.contract_agreement_id ? (
+                            <>
+                              <span className={`badge ${a.negotiation_state === 'FINALIZED' ? 'text-bg-success' : 'text-bg-secondary'}`}
+                                title={a.negotiation_id ? `negotiation ${a.negotiation_id}` : undefined}>
+                                contract {(a.negotiation_state ?? 'agreed').toLowerCase()}
+                              </span>
+                              <CopyableId value={a.contract_agreement_id} maxWidth={170} />
+                            </>
+                          ) : a.negotiation_state ? (
+                            <span className="badge text-bg-secondary" title={a.negotiation_id ?? undefined}>
+                              negotiation {a.negotiation_state.toLowerCase()}
+                            </span>
+                          ) : null}
+                          {a.transfer_state ? (
+                            <span className={`badge ${running ? 'text-bg-success' : 'text-bg-secondary'}`} title={a.transfer_id ?? undefined}>
+                              {running ? 'transfer active' : `transfer ${a.transfer_state.toLowerCase()}`}
+                            </span>
+                          ) : a.transfer_checked_at ? <span className="text-muted">no transfer found</span> : null}
+                        </div>
+                      </>
+                    )
+                  })()}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div></div>
+      )}
+
+      {tab === 'access' && (
+        <div className="row g-3">
+          <div className="col-lg-7">
+            <CatalogueAccess slug={slug} visibility={tb.visibility} onChanged={load} />
+          </div>
+          {isTestbedAdmin() && (
+            <div className="col-lg-5">
+              <TestbedMembers slug={slug} onChanged={load} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === 'activity' && (
+        <div className="card"><div className="card-body">
+          {audit.length === 0 ? <span className="text-muted small">No activity yet</span> : (
+            <ul className="list-unstyled small mb-0">
+              {audit.slice(0, 50).map((a, i) => (
+                <li key={i} className="mb-1">
+                  <span className="text-muted">{a.ts.replace('T', ' ').replace('+00:00', '')}</span>{' '}
+                  <strong>{a.action}</strong>{a.actor ? ` · ${a.actor}` : ''}
+                  {a.detail && <span className="text-muted"> · {a.detail}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div></div>
+      )}
+
+      {tab === 'settings' && (
+        <div className="row g-3">
+          <div className="col-lg-7">
+            <div className="card"><div className="card-body">
+              <h6 className="mb-3">Technical details</h6>
+              <Field label="Participant ID"><code>{tb.participant_id}</code></Field>
+              <Field label="Experiment prefix"><code>{tb.experiment_prefix}</code></Field>
+              <Field label="Bucket">
+                <code>{tb.bucket}</code>
+                {links.bucket && (
+                  <a href={links.bucket} target="_blank" rel="noreferrer" className="ms-1 small" title="Open the bucket">
+                    <FiExternalLink />
+                  </a>
+                )}
+              </Field>
+              <Field label="Data Lake access key">
+                {tb.s3_access_key ? (
+                  <>
+                    <CopyableId value={tb.s3_access_key} />
+                    <div className="text-muted small">Scoped to this bucket. The secret key is kept encrypted and not shown.</div>
+                  </>
+                ) : (
+                  <span className="text-muted">{tb.status === 'adopted' ? 'none yet (run provisioning)' : '—'}</span>
+                )}
+              </Field>
+              <Field label="DSP endpoint">
+                {dspEdit === null ? (
+                  <>
+                    <span className="text-break">{tb.dsp_url}</span>
+                    {isTestbedAdmin() && (
+                      <button className="btn btn-sm btn-link py-0 ms-1" disabled={busy} title="Edit the DSP endpoint"
+                        onClick={() => setDspEdit(tb.dsp_url)}>
+                        <FiEdit2 />
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <form className="d-flex flex-wrap gap-2" onSubmit={e => {
+                    e.preventDefault()
+                    const value = dspEdit.trim()
+                    setDspEdit(null)
+                    if (value !== tb.dsp_url) act(() => updateTestbedDspUrl(slug, value), 'DSP endpoint updated.')
+                  }}>
+                    <input className="form-control form-control-sm flex-grow-1" type="url" required autoFocus
+                      aria-label="DSP endpoint" value={dspEdit} onChange={e => setDspEdit(e.target.value)} />
+                    <button className="btn btn-sm btn-primary" type="submit" disabled={busy || !dspEdit.trim()}>Save</button>
+                    <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => setDspEdit(null)}>Cancel</button>
+                  </form>
+                )}
+              </Field>
+              <Field label="produced_by">{tb.produced_by_iri ? <span className="text-break">{tb.produced_by_iri}</span> : '—'}</Field>
+            </div></div>
+          </div>
+
+          <div className="col-lg-5">
+            <div className="card mb-3"><div className="card-body">
+              <h6 className="mb-3">Provisioning</h6>
+              <ul className="list-unstyled mb-0">
+                {['bucket', 'credentials', 'catalogue', 'access'].map(key => {
+                  const s = tb.steps[key]
+                  return (
+                    <li key={key} className="mb-1">
+                      {!s ? <FiMinusCircle className="text-muted me-2" />
+                        : s.status === 'ok' ? <FiCheckCircle className="text-success me-2" />
+                        : s.status === 'skipped' ? <FiMinusCircle className="text-muted me-2" />
+                        : <FiXCircle className="text-danger me-2" />}
+                      <strong className="text-capitalize">{key}</strong>
+                      <span className="text-muted small ms-2">{s ? s.detail : 'not run'}</span>
+                    </li>
+                  )
+                })}
+              </ul>
+              {isTestbedAdmin() && (
+                <div className="d-flex flex-wrap gap-2 mt-3">
+                  <button className="btn btn-sm btn-outline-primary" disabled={busy}
+                    onClick={() => act(() => provisionTestbed(slug), 'Provisioning re-run.')}>
+                    <FiRefreshCw className="me-1" />Re-run provisioning
+                  </button>
+                  <button className="btn btn-sm btn-outline-secondary" disabled={busy || !tb.has_credentials}
+                    onClick={() => act(async () => { const r = await rotateTestbedCredentials(slug); setNotice(r.note) })}>
+                    <FiKey className="me-1" />Rotate Data Lake key
+                  </button>
+                </div>
+              )}
+            </div></div>
+
+            {isTestbedAdmin() && (
+              <div className="card border-danger"><div className="card-body">
+                <h6 className="mb-1 text-danger">Deregister</h6>
+                <div className="text-muted small mb-3">
+                  Disables the testbed's Data Lake key and removes it from the registry. You choose whether its data is
+                  deleted too.
+                </div>
+                <button className="btn btn-sm btn-outline-danger" disabled={busy} onClick={() => setConfirmDelete(true)}>
+                  <FiTrash2 className="me-1" />Deregister testbed
+                </button>
+              </div></div>
+            )}
+          </div>
+        </div>
+      )}
 
       {confirmStart && (
         <Modal
