@@ -89,10 +89,13 @@ def test_edits_that_are_refused(hub, monkeypatch):
         td.update("6g-dali-pamak", DS, {"license": "CC-BY-4.0"})
     assert e.value.status_code == 422
     monkeypatch.setattr(piveau_access, "catalogue_level", lambda c: "internal")
-    assert td.allowed_levels("6g-dali-pamak") == ("internal",)
+    assert td.allowed_levels("6g-dali-pamak") == ("public", "restricted", "internal")
+    # An administrator may publish a dataset of a private catalogue.
+    assert td.update("6g-dali-pamak", DS, {"access_level": "public"})["access_level"] == "public"
     with pytest.raises(Exception) as e:
-        td.update("6g-dali-pamak", DS, {"access_level": "public"})
-    assert e.value.status_code == 422  # a private catalogue's datasets are members only
+        td.update("6g-dali-pamak", DS, {"access_level": "secret"})
+    assert e.value.status_code == 422
+    hub["puts"].clear()
     monkeypatch.setattr(piveau_access, "enabled", lambda: False)
     with pytest.raises(Exception) as e:
         td.update("6g-dali-pamak", DS, {"access_level": "internal"})
@@ -108,6 +111,7 @@ def test_testbed_endpoints(client, hub):  # noqa: F811
     client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
     r = client.get("/testbeds/pamak/datasets").json()
     assert r["catalogue_id"] == cat and r["levels"] == ["public", "restricted", "internal"] and r["total"] == 1
+    assert r["default_level"] == "internal"
     one = client.get(f"/testbeds/pamak/datasets/{DS}").json()
     assert one["dataset"]["title"] == "Edge AI inference" and one["levels"] == r["levels"]
     assert client.get("/testbeds/pamak/datasets/nope").status_code == 404

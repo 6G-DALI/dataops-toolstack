@@ -66,24 +66,42 @@ def test_rights_are_read_from_a_dataset_or_catalogue_record():
 
 # --- writes --------------------------------------------------------------------------------------------------------
 
-def test_no_access_level_is_sent_while_access_control_is_off(monkeypatch):
+def test_nothing_changes_while_access_control_is_off(monkeypatch):
     monkeypatch.setattr(config, "PIVEAU_ACCESS_CONTROL", False)
-    assert asyncio.run(piveau_access.write_params("priv", dataset_turtle("NON_PUBLIC"))) == {}
+    turtle = dataset_turtle("PUBLIC")
+    assert asyncio.run(piveau_access.prepare_write("priv", "x", turtle)) == (turtle, {})
 
 
-@pytest.mark.parametrize("catalogue,right,level", [
-    ("pub", None, "public"), ("pub", "PUBLIC", "public"), ("pub", "RESTRICTED", "restricted"),
-    ("pub", "NON_PUBLIC", "internal"), ("priv", "PUBLIC", "internal"), ("priv", None, "internal"),
-])
-def test_a_dataset_gets_the_stricter_of_its_catalogue_and_its_own_rights(ac, catalogue, right, level):
-    params = asyncio.run(piveau_access.write_params(catalogue, dataset_turtle(right)))
-    assert params == {"accessLevel": level, "publicationStatus": "published"}
+@pytest.mark.parametrize("catalogue", ["pub", "priv"])
+@pytest.mark.parametrize("right", [None, "PUBLIC", "RESTRICTED", "NON_PUBLIC"])
+def test_a_new_dataset_is_internal_whatever_it_states(ac, monkeypatch, catalogue, right):
+    monkeypatch.setattr(piveau_access, "current_level", lambda c, d: None)  # not in piveau yet
+    turtle, params = asyncio.run(piveau_access.prepare_write(catalogue, "x", dataset_turtle(right)))
+    assert params == {"accessLevel": "internal", "publicationStatus": "published"}
+    assert piveau_access.rights_in(turtle) == AR + "NON_PUBLIC"  # the record says what piveau enforces
 
 
-def test_a_floor_replaces_the_records_own_rights(ac):
-    # Services state RESTRICTED but are written public, unless their catalogue is private.
-    assert asyncio.run(piveau_access.write_params("pub", dataset_turtle("RESTRICTED"), floor="public"))["accessLevel"] == "public"
-    assert asyncio.run(piveau_access.write_params("priv", dataset_turtle("RESTRICTED"), floor="public"))["accessLevel"] == "internal"
+@pytest.mark.parametrize("level,right", [("public", "PUBLIC"), ("restricted", "RESTRICTED"), ("internal", "NON_PUBLIC")])
+def test_an_existing_dataset_keeps_its_level(ac, monkeypatch, level, right):
+    # e.g. published by an administrator, then re-registered from its metadata.json saying something else
+    monkeypatch.setattr(piveau_access, "current_level", lambda c, d: level)
+    turtle, params = asyncio.run(piveau_access.prepare_write("priv", "x", dataset_turtle("NON_PUBLIC" if level == "public" else "PUBLIC")))
+    assert params == {}  # piveau keeps the level of a re-PUT without accessLevel
+    assert piveau_access.rights_in(turtle) == AR + right
+
+
+def test_current_level_reads_the_catalogue_record(monkeypatch):
+    import httpx
+    monkeypatch.setattr(pdc, "PIVEAU_HUB_URL", "http://hub")
+    monkeypatch.setattr(pdc, "PIVEAU_API_KEY", "k")
+    answers = {"a": (200, "<r> piveau:accessLevel piveau:public ."), "b": (404, ""), "c": (200, "no level here")}
+    monkeypatch.setattr(piveau_access.httpx, "get", lambda url, **kw: httpx.Response(
+        answers[url.split("/datasets/")[1].split("/")[0]][0], text=answers[url.split("/datasets/")[1].split("/")[0]][1],
+        request=httpx.Request("GET", url)))
+    assert piveau_access.current_level("cat", "a") == "public"
+    assert piveau_access.current_level("cat", "b") is None  # not there yet: a new dataset
+    with pytest.raises(HTTPException):  # cannot tell: never guess, an existing level must not be overwritten
+        piveau_access.current_level("cat", "c")
 
 
 class _Recorder:
@@ -124,9 +142,10 @@ def test_creating_a_dataset_sends_its_access_level(ac, monkeypatch):
     monkeypatch.setattr(pdc, "PIVEAU_HUB_URL", "http://hub")
     monkeypatch.setattr(pdc, "PIVEAU_API_KEY", "k")
     monkeypatch.setattr(pdc.httpx, "AsyncClient", _Recorder)
+    monkeypatch.setattr(piveau_access, "current_level", lambda c, d: None)
     _Recorder.calls = []
-    asyncio.run(pdc._put_dataset_turtle("x", "priv", dataset_turtle("PUBLIC")))
-    assert _Recorder.calls == [("PUT", "http://hub/datasets/x?catalogue=priv",
+    asyncio.run(pdc._put_dataset_turtle("x", "pub", dataset_turtle("PUBLIC")))  # a public catalogue, a PUBLIC record
+    assert _Recorder.calls == [("PUT", "http://hub/datasets/x?catalogue=pub",
                                 {"accessLevel": "internal", "publicationStatus": "published"})]
 
 

@@ -21,8 +21,8 @@ from rdflib.namespace import DCAT, DCTERMS, RDF
 import piveau_access
 import piveau_dataset_client as pdc
 
-LEVELS = ("public", "restricted", "internal")
-_RIGHT_OF_LEVEL = {"public": "PUBLIC", "restricted": "RESTRICTED", "internal": "NON_PUBLIC"}
+LEVELS = piveau_access.LEVELS
+_RIGHT_OF_LEVEL = piveau_access.RIGHT_OF_LEVEL
 # The record's piveau:accessLevel, prefixed or as a full IRI (piveau does not promise which it serializes).
 _LEVEL_RE = re.compile(r"(?:piveau:|ns/voc#)accessLevel>?\s+(?:piveau:|<https://piveau\.eu/ns/voc#)(\w+)")
 _URL_RE = re.compile(r"^https?://\S+$")
@@ -102,8 +102,9 @@ def list_datasets(catalogue_id: str) -> list[dict]:
 
 
 def allowed_levels(catalogue_id: str) -> tuple[str, ...]:
-    """A dataset can be stricter than its catalogue, never more open: a private catalogue's datasets are internal."""
-    return ("internal",) if piveau_access.catalogue_level(catalogue_id) == "internal" else LEVELS
+    """Every level, in any catalogue: new datasets are internal (piveau_access.default_level), and publishing one,
+    to signed-in users or to everyone, is an administrator's decision made here."""
+    return LEVELS
 
 
 def update(catalogue_id: str, dataset_id: str, changes: dict) -> dict:
@@ -114,7 +115,7 @@ def update(catalogue_id: str, dataset_id: str, changes: dict) -> dict:
         if not piveau_access.enabled():
             raise HTTPException(status_code=409, detail="Visibility needs piveau access control (PIVEAU_ACCESS_CONTROL)")
         if level not in allowed_levels(catalogue_id):
-            raise HTTPException(status_code=422, detail=f"A dataset of a private catalogue can only be internal (members only)")
+            raise HTTPException(status_code=422, detail=f"Unknown visibility '{level}'")
     if "title" in changes and not (changes["title"] or "").strip():
         raise HTTPException(status_code=422, detail="The title cannot be empty")
     if changes.get("license") and not _URL_RE.match(changes["license"].strip()):

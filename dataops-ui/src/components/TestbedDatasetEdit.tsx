@@ -134,14 +134,14 @@ export default function TestbedDatasetEdit({ slug, datasetId, onNavigate }: Prop
             <div className="form-text">Visibility needs piveau access control, which is off on this deployment.</div>
           ) : (
             <>
-              <select id="ds-level" className="form-select" value={draft.level} onChange={set('level')}
-                disabled={levels.length < 2}>
+              <select id="ds-level" className="form-select" value={draft.level} onChange={set('level')}>
                 {!draft.level && <option value="">unknown</option>}
                 {levels.map(l => <option key={l} value={l}>{LEVEL_LABEL[l]}</option>)}
               </select>
               <div className="form-text">
                 {draft.level ? LEVEL_HELP[draft.level] : ''}
-                {levels.length < 2 && ' The catalogue is private, so its datasets are members only.'}
+                {' '}New datasets start as {LEVEL_LABEL[data.default_level ?? 'internal']}; choosing Signed-in users or
+                Public here publishes this one.
               </div>
             </>
           )}

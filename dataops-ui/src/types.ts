@@ -753,8 +753,10 @@ export interface TestbedDataset {
 export interface TestbedDatasets {
   catalogue_id: string
   access_control: boolean
-  /** The visibilities a dataset of this catalogue can have (only internal in a private catalogue). */
+  /** The visibilities a dataset can be given (all three). */
   levels: DatasetAccessLevel[]
+  /** The level every new dataset gets (internal) until an administrator publishes it. */
+  default_level: DatasetAccessLevel | null
   datasets: TestbedDataset[]
   total: number
 }
@@ -764,6 +766,8 @@ export interface TestbedDatasetDetail {
   catalogue_id: string
   access_control: boolean
   levels: DatasetAccessLevel[]
+  /** The level every new dataset gets (internal) until an administrator publishes it. */
+  default_level: DatasetAccessLevel | null
   dataset: TestbedDataset
 }
 

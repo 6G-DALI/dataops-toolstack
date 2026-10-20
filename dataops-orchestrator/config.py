@@ -124,7 +124,3 @@ FACILITY_PARTICIPANT_ID = os.getenv("FACILITY_PARTICIPANT_ID", "provider-facilit
 # testbeds can get a private catalogue, and dataset listings are read with the caller's own token, so
 # piveau shows each user what they may see. Off: everything behaves as on piveau 3.3.
 PIVEAU_ACCESS_CONTROL = os.getenv("PIVEAU_ACCESS_CONTROL", "false").lower() == "true"
-# Level of the dcat:DataService records in the services catalogue. They state dct:accessRights RESTRICTED
-# (using a service needs a contract), which maps to piveau's 'restricted' and would hide them from anonymous
-# visitors; 'public' keeps them findable, as today.
-PIVEAU_SERVICES_ACCESS_LEVEL = os.getenv("PIVEAU_SERVICES_ACCESS_LEVEL", "public")

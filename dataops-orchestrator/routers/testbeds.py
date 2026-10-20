@@ -454,6 +454,7 @@ def list_testbed_datasets(slug: str):
     access_control = piveau_access.enabled()
     return {"catalogue_id": tb["catalogue_id"], "access_control": access_control,
             "levels": list(testbed_datasets.allowed_levels(tb["catalogue_id"])) if access_control else [],
+            "default_level": piveau_access.default_level(tb["catalogue_id"]) if access_control else None,
             "datasets": datasets, "total": len(datasets)}
 
 
@@ -464,6 +465,7 @@ def get_testbed_dataset(slug: str, dataset_id: str):
     access_control = piveau_access.enabled()
     return {"catalogue_id": tb["catalogue_id"], "access_control": access_control,
             "levels": list(testbed_datasets.allowed_levels(tb["catalogue_id"])) if access_control else [],
+            "default_level": piveau_access.default_level(tb["catalogue_id"]) if access_control else None,
             "dataset": testbed_datasets.summary(tb["catalogue_id"], dataset_id)}
 
 

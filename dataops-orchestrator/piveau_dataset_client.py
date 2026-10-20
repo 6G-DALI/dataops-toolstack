@@ -385,12 +385,13 @@ async def _put_dataset_turtle(dataset_id: str, catalogue_id: str, turtle: str) -
     RDF one (create_dataset_from_turtle, which receives it already built)."""
     _require_piveau_config()
 
+    # With access control, a new dataset is internal until an administrator publishes it, and dct:accessRights is
+    # made to match; an existing one keeps its level (see piveau_access). Unchanged on piveau 3.3.
+    turtle, params = await piveau_access.prepare_write(catalogue_id, dataset_id, turtle)
     log.info("[piveau] dataset Turtle for %s:\n%s", dataset_id, turtle)
 
     url = f"{PIVEAU_HUB_URL}/datasets/{dataset_id}?catalogue={catalogue_id}"
     headers = {"X-API-Key": PIVEAU_API_KEY, "Content-Type": "text/turtle"}
-    # With access control, the dataset's access level (see piveau_access); empty on piveau 3.3.
-    params = await piveau_access.write_params(catalogue_id, turtle)
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.put(url, content=turtle.encode(), headers=headers, params=params)

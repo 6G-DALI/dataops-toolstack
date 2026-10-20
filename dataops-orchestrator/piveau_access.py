@@ -1,12 +1,12 @@
 """
 piveau access control v2: the access level a dataset is written with, and the caller's token for reads.
 
-A catalogue is public or private (dct:accessRights PUBLIC or NON_PUBLIC, fixed when it is created). A dataset is
-written with the stricter of its catalogue's level and its own dct:accessRights. piveau does not apply the
-catalogue's level by itself: a new dataset PUT without accessLevel is public even in a private catalogue. A re-PUT
-without accessLevel keeps the level the dataset has, so only the writes that create datasets need it. The mapping
-is the OOP Data Lab's: PUBLIC -> public, RESTRICTED -> restricted (hidden from anonymous visitors), NON_PUBLIC ->
-internal (members of the catalogue only).
+A catalogue is public or private (dct:accessRights PUBLIC or NON_PUBLIC, fixed when it is created). Every new dataset,
+in any catalogue, is internal (NON_PUBLIC: members of its catalogue only) until an administrator publishes it from the
+DataOps edit page (testbed_datasets). What the record itself states (dct:accessRights, from the testbed's
+metadata.json or the submission form) is not used, and is rewritten to match the level. A dataset that already
+exists keeps its level (it may have been published on purpose): it is re-PUT without accessLevel, which piveau leaves
+alone. piveau does not apply the catalogue's level by itself: a new dataset PUT without accessLevel would be public.
 
 Everything here is inert while PIVEAU_ACCESS_CONTROL is off (piveau 3.3 has no access levels).
 """
@@ -16,7 +16,9 @@ import contextvars
 
 import httpx
 from fastapi import HTTPException, Request
-from rdflib import Graph
+import re
+
+from rdflib import Graph, URIRef
 from rdflib.namespace import DCAT, DCTERMS, RDF
 
 import config
@@ -85,13 +87,66 @@ def catalogue_level(catalogue_id: str) -> str:
     return level
 
 
-async def write_params(catalogue_id: str, turtle: str, floor: str | None = None) -> dict:
-    """Query parameters for a PUT that creates a dataset: its access level, the stricter of its catalogue's, its own
-    dct:accessRights and `floor`. Empty while access control is off."""
+LEVELS = ("public", "restricted", "internal")
+RIGHT_OF_LEVEL = {"public": "PUBLIC", "restricted": "RESTRICTED", "internal": "NON_PUBLIC"}
+
+
+DEFAULT_LEVEL = "internal"
+
+
+def default_level(catalogue_id: str) -> str:
+    """The level a new dataset gets: internal, in any catalogue, until an administrator publishes it."""
+    return DEFAULT_LEVEL
+
+
+def current_level(catalogue_id: str, dataset_id: str) -> str | None:
+    """A dataset's piveau access level, from its catalogue record; None when the dataset does not exist yet. Raises 502
+    when piveau cannot tell, so an existing dataset is never re-leveled by mistake."""
+    import piveau_dataset_client as pdc
+    pdc._require_piveau_config()
+    try:
+        r = httpx.get(f"{pdc.PIVEAU_HUB_URL.rstrip('/')}/datasets/{dataset_id}/record", params={"catalogue": catalogue_id},
+                      headers={"X-API-Key": pdc.PIVEAU_API_KEY, "Accept": "text/turtle"}, timeout=15)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Could not read the record of '{dataset_id}' from piveau: {e}")
+    if r.status_code == 404:
+        return None
+    m = _LEVEL_RE.search(r.text) if r.status_code == 200 else None
+    if not m:
+        raise HTTPException(status_code=502, detail=f"piveau did not say the access level of '{dataset_id}' ({r.status_code})")
+    return m.group(1)
+
+
+# The record's piveau:accessLevel, prefixed or as a full IRI (piveau does not promise which it serializes).
+_LEVEL_RE = re.compile(r"(?:piveau:|ns/voc#)accessLevel>?\s+(?:piveau:|<https://piveau\.eu/ns/voc#)(\w+)")
+
+
+def with_rights(turtle: str, level: str) -> str:
+    """The record with its dct:accessRights set to match `level`, so readers (and the catalogue UI's badges) see the
+    level piveau enforces. Unchanged when it does not parse (piveau then rejects it anyway)."""
+    g = Graph()
+    try:
+        g.parse(data=turtle, format="turtle")
+    except Exception:
+        return turtle
+    subjects = [s for kind in (DCAT.Dataset, DCAT.DataService) for s in g.subjects(RDF.type, kind)]
+    if not subjects:
+        return turtle
+    for s in subjects:
+        g.set((s, DCTERMS.accessRights, URIRef(ACCESS_RIGHT + RIGHT_OF_LEVEL[level])))
+    return g.serialize(format="turtle")
+
+
+async def prepare_write(catalogue_id: str, dataset_id: str, turtle: str) -> tuple[str, dict]:
+    """The Turtle to PUT and its query parameters. A new dataset gets its catalogue's default level; an existing one
+    keeps its level (no accessLevel sent). Either way dct:accessRights is made to match. Unchanged and no parameters
+    while access control is off."""
     if not enabled():
-        return {}
-    levels = [await asyncio.to_thread(catalogue_level, catalogue_id), floor or level_of(rights_in(turtle))]
-    return {"accessLevel": stricter(*levels), "publicationStatus": "published"}
+        return turtle, {}
+    current = await asyncio.to_thread(current_level, catalogue_id, dataset_id)
+    level = current or await asyncio.to_thread(default_level, catalogue_id)
+    params = {} if current else {"accessLevel": level, "publicationStatus": "published"}
+    return with_rights(turtle, level), params
 
 
 # --- reads with the caller's token --------------------------------------------------------------------------------
