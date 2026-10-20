@@ -39,6 +39,7 @@ import type {
   CatalogueAccessLevel,
   CatalogueMember,
   CatalogueMembers,
+  UploadCredentials,
   TestbedCreateRequest,
   TestbedProvisionResponse,
 } from '../types'
@@ -479,6 +480,11 @@ export function removeCatalogueMember(slug: string, userId: string): Promise<{ r
 
 export function rotateTestbedCredentials(slug: string): Promise<{ note: string }> {
   return request(`/testbeds/${encodeURIComponent(slug)}/credentials/rotate`, { method: 'POST' })
+}
+
+/** A hosted testbed's new upload key; the old one stops working. The secret is in the answer only. */
+export function rotateUploadCredentials(slug: string): Promise<UploadCredentials> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/upload-credentials/rotate`, { method: 'POST' })
 }
 
 /** What deregistering could also delete: datasets in its catalogue, objects in its bucket, running transfers. */

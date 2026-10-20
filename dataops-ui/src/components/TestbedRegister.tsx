@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { FiCheckCircle, FiXCircle, FiDownload, FiAlertTriangle } from 'react-icons/fi'
 import { downloadTestbedBundle, provisionTestbed, registerTestbed } from '../api/airflow'
 import ErrorMessage from './ErrorMessage'
-import type { NavigateFn, Testbed, TestbedCreateRequest } from '../types'
+import UploadKit from './UploadKit'
+import type { NavigateFn, Testbed, TestbedCreateRequest, UploadCredentials } from '../types'
 
 const SLUG_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/
 
@@ -12,7 +13,20 @@ const STEP_LABELS: Record<string, string> = {
   catalogue: 'Catalogue',
 }
 
-const WIZARD_STEPS = ['Details', 'Identity', 'Provision', 'Connector bundle']
+/** The extra steps of a testbed hosted by the facility connector. */
+const HOSTED_STEP_LABELS: Record<string, string> = {
+  upload_bucket: 'Upload bucket',
+  upload_key: 'Upload key',
+  asset: 'Asset on the facility connector',
+  transfer: 'Transfer into the Data Lake',
+}
+
+/** What each connector choice means, shown under the choice. */
+const HOSTING_HINT = {
+  own: 'The testbed runs its own connector (a bundle is generated for it) and offers its data from there.',
+  facility: 'The testbed has no connector. It gets an upload bucket and key in the Data Lake, and the facility ' +
+    'connector moves each uploaded file into the Data Space.',
+}
 
 interface FormState {
   slug: string
@@ -46,6 +60,8 @@ export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
   const [step, setStep] = useState(0)
   const [form, setForm] = useState<FormState>(EMPTY)
   const [isPrivate, setIsPrivate] = useState(false)
+  const [hosted, setHosted] = useState(false)
+  const [uploadKey, setUploadKey] = useState<UploadCredentials | null>(null)
   const [testbed, setTestbed] = useState<Testbed | null>(null)
   const [followups, setFollowups] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
@@ -72,10 +88,13 @@ export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
 
   async function handleRegister() {
     const body: TestbedCreateRequest = { slug: form.slug, name: form.name.trim() }
-    for (const k of ['organisation', 'contact_email', 'produced_by_iri', 'logo_url', 'participant_id', 'bucket', 'experiment_prefix', 'dsp_url'] as const) {
+    const fields = ['organisation', 'contact_email', 'produced_by_iri', 'logo_url', 'bucket', 'experiment_prefix',
+      ...(hosted ? [] : ['participant_id', 'dsp_url'] as const)] as const
+    for (const k of fields) {
       if (form[k].trim()) body[k] = form[k].trim()
     }
     if (isPrivate) body.private = true
+    if (hosted) body.hosted = true
     const created = await run(() => registerTestbed(body))
     if (created) {
       setTestbed(created)
@@ -89,15 +108,19 @@ export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
     if (result) {
       setTestbed(result.testbed)
       setFollowups(result.followups)
+      if (result.issued_upload_credentials) setUploadKey(result.issued_upload_credentials)  // shown once
     }
   }
 
   const provisioned = testbed?.status === 'provisioned'
+  const isHosted = testbed ? testbed.hosting === 'facility' : hosted
+  const wizardSteps = ['Details', 'Identity', 'Provision', isHosted ? 'Upload kit' : 'Connector bundle']
+  const stepLabels = isHosted ? { ...STEP_LABELS, ...HOSTED_STEP_LABELS } : STEP_LABELS
 
   return (
     <div style={{ maxWidth: 760 }}>
       <ol className="list-inline mb-4">
-        {WIZARD_STEPS.map((label, i) => (
+        {wizardSteps.map((label, i) => (
           <li key={label} className="list-inline-item me-3">
             <span className={`badge rounded-pill me-1 ${i === step ? 'text-bg-primary' : i < step ? 'text-bg-success' : 'text-bg-light border'}`}>{i + 1}</span>
             <span className={i === step ? 'fw-semibold' : 'text-muted'}>{label}</span>
@@ -153,6 +176,17 @@ export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
               Private catalogues need piveau access control on this deployment.
             </div>
           </div>
+          <div className="mb-3">
+            <label className="form-label d-block">Connector</label>
+            {([['own', 'Its own connector'], ['facility', 'Hosted by the facility connector']] as const).map(([v, label]) => (
+              <div key={v} className="form-check form-check-inline">
+                <input className="form-check-input" type="radio" id={`hosting-${v}`} name="hosting"
+                  checked={hosted === (v === 'facility')} onChange={() => setHosted(v === 'facility')} />
+                <label className="form-check-label" htmlFor={`hosting-${v}`}>{label}</label>
+              </div>
+            ))}
+            <div className="form-text">{HOSTING_HINT[hosted ? 'facility' : 'own']} This cannot be changed later.</div>
+          </div>
           <button className="btn btn-primary" disabled={!detailsOk} onClick={() => setStep(1)}>Next</button>
         </div></div>
       )}
@@ -163,10 +197,12 @@ export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
             These are generated from the slug. Leave them empty to accept the defaults, or fill them to adopt a
             testbed that is already running with an existing identity or bucket.
           </p>
-          <div className="mb-3">
-            <label className="form-label">Participant ID (edc.participant.id)</label>
-            <input className="form-control" value={form.participant_id} onChange={set('participant_id')} placeholder={`provider-${form.slug}`} />
-          </div>
+          {!hosted && (
+            <div className="mb-3">
+              <label className="form-label">Participant ID (edc.participant.id)</label>
+              <input className="form-control" value={form.participant_id} onChange={set('participant_id')} placeholder={`provider-${form.slug}`} />
+            </div>
+          )}
           <div className="row">
             <div className="col-md-6 mb-3">
               <label className="form-label">Data Lake bucket / catalogue id</label>
@@ -177,10 +213,16 @@ export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
               <input className="form-control" value={form.experiment_prefix} onChange={set('experiment_prefix')} placeholder="same as the bucket" />
             </div>
           </div>
-          <div className="mb-3">
-            <label className="form-label">DSP URL (edc.dsp.callback.address)</label>
-            <input className="form-control" value={form.dsp_url} onChange={set('dsp_url')} placeholder={`https://edc.${form.slug}.6gdali.eu/protocol`} />
-          </div>
+          {hosted ? (
+            <div className="form-text mb-3">
+              Hosted by the facility connector: the testbed uploads to <code>{(form.bucket.trim() || `6g-dali-${form.slug}`)}-upload</code>.
+            </div>
+          ) : (
+            <div className="mb-3">
+              <label className="form-label">DSP URL (edc.dsp.callback.address)</label>
+              <input className="form-control" value={form.dsp_url} onChange={set('dsp_url')} placeholder={`https://edc.${form.slug}.6gdali.eu/protocol`} />
+            </div>
+          )}
           <div className="d-flex gap-2">
             <button className="btn btn-outline-secondary" disabled={busy} onClick={() => setStep(0)}>Back</button>
             <button className="btn btn-primary" disabled={busy} onClick={handleRegister}>
@@ -195,14 +237,14 @@ export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
         <div className="card"><div className="card-body">
           <h6 className="mb-3">{testbed.name} <code className="small text-muted">{testbed.participant_id}</code></h6>
           <ul className="list-unstyled">
-            {Object.keys(STEP_LABELS).map(key => {
+            {Object.keys(stepLabels).map(key => {
               const s = testbed.steps[key]
               return (
                 <li key={key} className="mb-2">
                   {!s ? <span className="spinner-border spinner-border-sm me-2" />
                     : s.status === 'ok' ? <FiCheckCircle className="text-success me-2" />
                     : <FiXCircle className="text-danger me-2" />}
-                  <strong>{STEP_LABELS[key]}</strong>
+                  <strong>{stepLabels[key]}</strong>
                   {s && <span className="text-muted small ms-2">{s.status === 'ok' ? s.detail : `${s.status}: ${s.detail}`}</span>}
                 </li>
               )
@@ -225,7 +267,18 @@ export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
         </div></div>
       )}
 
-      {step === 3 && testbed && (
+      {step === 3 && testbed && isHosted && (
+        <>
+          <UploadKit testbed={testbed} issued={uploadKey} />
+          <div className="mt-3">
+            <button className="btn btn-outline-secondary" onClick={() => onNavigate('testbed-detail', { dagId: testbed.slug })}>
+              Open testbed
+            </button>
+          </div>
+        </>
+      )}
+
+      {step === 3 && testbed && !isHosted && (
         <div className="card"><div className="card-body">
           <p>
             Give the operator this bundle: connector properties with the assigned identity, a docker-compose

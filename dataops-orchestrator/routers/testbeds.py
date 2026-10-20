@@ -6,9 +6,14 @@ Keycloak group) see and work with that testbed only: see auth.py.
 
 Provisioning is a series of idempotent steps, each recorded in `steps`, so a
 failure can be fixed and retried without redoing (or duplicating) the others.
-Connecting the connector and managing its transfers/assets come in a later phase.
+
+A testbed either runs its own connector (hosting 'own'), or is hosted by the facility connector (hosting
+'facility'): it gets an upload bucket in the Data Lake and a key for it, and the facility connector offers that
+bucket as an asset and transfers it, to itself, into the testbed's Data Lake bucket. Everything after the asset
+(contract, transfer, the asset monitor registering the files) is the same for both.
 """
 
+import asyncio
 import re
 import time
 from datetime import datetime, timezone
@@ -18,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
 import datalake_admin
+import edc_client
 import edc_consumer_client
 import keycloak_admin
 import piveau_access
@@ -25,7 +31,13 @@ import piveau_dataset_client as pdc
 import piveau_catalogue_client
 import testbed_store as store
 from auth import is_testbed_admin, owned_slugs, require_testbed_access, require_testbed_admin, require_testbed_user
-from config import DATALAKE_PUBLIC_ENDPOINT_URL, TESTBED_BUCKET_PREFIX, TESTBED_DOMAIN_SUFFIX
+from config import (
+    DATALAKE_PUBLIC_ENDPOINT_URL,
+    FACILITY_DSP_URL,
+    FACILITY_PARTICIPANT_ID,
+    TESTBED_BUCKET_PREFIX,
+    TESTBED_DOMAIN_SUFFIX,
+)
 from testbed_bundle import build_bundle
 
 # piveau reads made here (the dataset count before a deregistration) go out with the caller's token.
@@ -53,6 +65,11 @@ class TestbedCreate(BaseModel):
         default=False,
         description="Create the testbed's catalogue private (dct:accessRights NON_PUBLIC): its datasets are visible to "
                     "its members only. Needs piveau access control; cannot be changed after the catalogue exists.")
+    hosted: bool = Field(
+        default=False,
+        description="The testbed has no connector of its own: it uploads to a bucket in the Data Lake and the facility "
+                    "connector transfers that into its Data Lake bucket. participant_id and dsp_url do not apply. "
+                    "Fixed at registration.")
 
 
 class TestbedUpdate(BaseModel):
@@ -93,6 +110,20 @@ def _get(slug: str) -> dict:
     return tb
 
 
+def _hosted(tb: dict) -> bool:
+    return tb["hosting"] == "facility"
+
+
+def _provider(tb: dict) -> str:
+    """The participant id of the connector that offers the testbed's asset: its own, or the facility's."""
+    return FACILITY_PARTICIPANT_ID if _hosted(tb) else tb["participant_id"]
+
+
+def upload_asset_id(tb: dict) -> str:
+    """A hosted testbed's single asset on the facility connector: named after its upload bucket."""
+    return tb["upload_bucket"]
+
+
 @router.get("")
 def list_testbeds(claims: dict = Depends(require_testbed_user)):
     items = store.list_testbeds()
@@ -106,10 +137,20 @@ def list_testbeds(claims: dict = Depends(require_testbed_user)):
 def register_testbed(body: TestbedCreate, claims: dict = Depends(require_testbed_admin)):
     if not _SLUG_RE.match(body.slug):
         raise HTTPException(status_code=422, detail="slug must be 3-32 chars: lowercase letters, digits, '-', starting with a letter")
-    participant_id = body.participant_id or f"provider-{body.slug}"
     bucket = body.bucket or f"{TESTBED_BUCKET_PREFIX}{body.slug}"
     if not datalake_admin.valid_bucket_name(bucket):
         raise HTTPException(status_code=422, detail=f"'{bucket}' is not a valid bucket name (3-63 chars, lowercase, digits, '.', '-')")
+    upload_bucket = None
+    if body.hosted:
+        if body.participant_id or body.dsp_url:
+            raise HTTPException(status_code=422, detail="A hosted testbed has no connector of its own: leave "
+                                                        "participant_id and dsp_url out")
+        upload_bucket = f"{bucket}-upload"
+        if not datalake_admin.valid_bucket_name(upload_bucket):
+            raise HTTPException(status_code=422, detail=f"The upload bucket '{upload_bucket}' would be too long: "
+                                                        "use a shorter bucket name")
+    # A hosted testbed's participant id only has to be unique here: the facility connector is the provider.
+    participant_id = body.participant_id or (f"hosted-{body.slug}" if body.hosted else f"provider-{body.slug}")
     prefix = body.experiment_prefix or bucket
     logo_url = _logo_or_422(body.logo_url)
     if body.private and not piveau_access.enabled():
@@ -122,9 +163,11 @@ def register_testbed(body: TestbedCreate, claims: dict = Depends(require_testbed
             "contact_email": body.contact_email, "participant_id": participant_id,
             "ids_id": f"urn:connector:{participant_id}", "experiment_prefix": prefix,
             "bucket": bucket, "catalogue_id": bucket,
-            "dsp_url": body.dsp_url or f"https://edc.{body.slug}.{TESTBED_DOMAIN_SUFFIX}/protocol",
+            "dsp_url": FACILITY_DSP_URL if body.hosted
+            else body.dsp_url or f"https://edc.{body.slug}.{TESTBED_DOMAIN_SUFFIX}/protocol",
             "produced_by_iri": body.produced_by_iri, "logo_url": logo_url,
             "visibility": "private" if body.private else "public",
+            "hosting": "facility" if body.hosted else "own", "upload_bucket": upload_bucket,
         },
         _actor(claims),
     )
@@ -148,6 +191,8 @@ def update_testbed(slug: str, body: TestbedUpdate, claims: dict = Depends(requir
     changes = body.model_fields_set
     if "dsp_url" in changes and body.dsp_url is None:
         raise HTTPException(status_code=422, detail="dsp_url cannot be empty")
+    if "dsp_url" in changes and _hosted(tb):
+        raise HTTPException(status_code=422, detail="A hosted testbed uses the facility connector: it has no DSP endpoint of its own")
     fields: dict = {}
     if "dsp_url" in changes:
         dsp_url = body.dsp_url.strip()
@@ -191,7 +236,9 @@ def discover_assets(slug: str, claims: dict = Depends(require_testbed_access)):
     tb = _get(slug)
     steps = dict(tb["steps"])
     try:
-        offered = edc_consumer_client.fetch_catalog(tb["dsp_url"], tb["participant_id"])
+        offered = edc_consumer_client.fetch_catalog(tb["dsp_url"], _provider(tb))
+        if _hosted(tb):  # the facility connector offers every testbed's and every distribution's asset
+            offered = [a for a in offered if a["asset_id"] == upload_asset_id(tb)]
     except HTTPException as e:
         steps["connector"] = {"status": "failed", "detail": e.detail, "at": _now()}
         store.update_testbed(slug, steps=steps)
@@ -228,7 +275,7 @@ def find_transfers(slug: str, asset_id: str, claims: dict = Depends(require_test
 
     agreement = negotiation = None
     try:
-        agreements = edc_consumer_client.find_agreements(asset_id, tb["participant_id"])
+        agreements = edc_consumer_client.find_agreements(asset_id, _provider(tb))
         agreement = agreements[0] if agreements else None
         if agreement:
             negotiation = edc_consumer_client.get_agreement_negotiation(agreement["agreement_id"])
@@ -282,7 +329,7 @@ def negotiate_asset(slug: str, asset_id: str, claims: dict = Depends(require_tes
             negotiation_id = None  # ended without an agreement: negotiate again
     if not negotiation_id:
         negotiation_id = edc_consumer_client.start_negotiation(
-            tb["dsp_url"], tb["participant_id"], asset_id, asset["offer_id"])
+            tb["dsp_url"], _provider(tb), asset_id, asset["offer_id"])
         store.record_contract(slug, asset_id, negotiation_id, "REQUESTING", None)
 
     outcome = edc_consumer_client.wait_negotiation(negotiation_id)
@@ -327,7 +374,7 @@ def start_asset_transfer(slug: str, asset_id: str, claims: dict = Depends(requir
         return {"result": "already_running", "asset": asset, "transfer_id": running["transfer_id"], "state": running["state"]}
 
     transfer_id = edc_consumer_client.start_transfer(
-        dsp_url=tb["dsp_url"], provider_id=tb["participant_id"], asset_id=asset_id,
+        dsp_url=tb["dsp_url"], provider_id=_provider(tb), asset_id=asset_id,
         agreement_id=asset["contract_agreement_id"], endpoint=DATALAKE_PUBLIC_ENDPOINT_URL, bucket=tb["bucket"],
         access_key=creds[0], secret_key=creds[1],
         piveau_url=f"{pdc.PIVEAU_HUB_URL.rstrip('/')}/datasets", piveau_api_key=pdc.PIVEAU_API_KEY)
@@ -439,6 +486,66 @@ def remove_catalogue_member(slug: str, user_id: str, claims: dict = Depends(requ
     return {"removed": user_id}
 
 
+HOSTED_STEPS = ("upload_bucket", "upload_key", "asset", "transfer")
+
+
+def _upload_credentials(tb: dict, access_key: str, secret: str) -> dict:
+    return {"endpoint": DATALAKE_PUBLIC_ENDPOINT_URL, "bucket": tb["upload_bucket"],
+            "access_key": access_key, "secret_key": secret}
+
+
+def _provision_hosted(slug: str, tb: dict, steps: dict, record, claims: dict) -> dict | None:
+    """The steps of a testbed hosted by the facility connector, after the common ones. Returns the upload key when
+    this run created it (its secret is shown once and not stored).
+
+    The transfer is started here, not left for later: the connector's bucket source ignores files that are already
+    in the bucket when the transfer starts, so it must be running before the testbed's first upload.
+    """
+    issued: dict | None = None
+    record("upload_bucket", lambda: datalake_admin.ensure_bucket(tb["upload_bucket"]))
+
+    if steps["upload_bucket"]["status"] != "ok":
+        steps["upload_key"] = {"status": "skipped", "detail": "upload bucket not ready", "at": _now()}
+    elif tb["upload_access_key"]:
+        steps["upload_key"] = {"status": "ok", "detail": "exists", "at": _now()}
+    else:
+        def make_upload_key():
+            nonlocal issued
+            access_key, secret = datalake_admin.create_scoped_user(slug, tb["upload_bucket"], purpose="upload")
+            store.set_upload_key(slug, access_key)
+            issued = _upload_credentials(tb, access_key, secret)
+            return "created"
+        record("upload_key", make_upload_key)
+
+    if steps["upload_bucket"]["status"] == "ok":
+        record("asset", lambda: edc_client.register_upload_asset(
+            upload_asset_id(tb), tb["upload_bucket"], f"{tb['name']} uploads"))
+    else:
+        steps["asset"] = {"status": "skipped", "detail": "upload bucket not ready", "at": _now()}
+
+    if steps["asset"]["status"] != "ok" or steps["credentials"]["status"] != "ok":
+        steps["transfer"] = {"status": "skipped", "detail": "needs the asset and the Data Lake key", "at": _now()}
+    else:
+        def start_transfer() -> str:
+            # The facility connector negotiates with, and then transfers to, itself: the same calls as for a
+            # testbed connector, through this router's own endpoints so the asset's record stays in step.
+            store.update_testbed(slug, steps=steps)
+            discover_assets(slug, claims)
+            aid = upload_asset_id(tb)
+            if not any(a["asset_id"] == aid and a["present"] for a in store.list_assets(slug)):
+                raise HTTPException(status_code=502, detail=f"The facility connector does not offer '{aid}'")
+            deal = negotiate_asset(slug, aid, claims)
+            if deal["result"] not in ("agreed", "already_agreed"):
+                raise HTTPException(status_code=502, detail=deal.get("message") or
+                                    f"Contract negotiation is {deal['asset']['negotiation_state']}; re-run provisioning")
+            started = start_asset_transfer(slug, aid, claims)
+            return {"started": "started", "already_running": "running"}.get(started["result"],
+                                                                         f"requested ({started['state']})")
+        record("transfer", start_transfer)
+        steps.update({k: v for k, v in store.get_testbed(slug)["steps"].items() if k == "connector"})
+    return issued
+
+
 @router.post("/{slug}/provision")
 def provision(slug: str, claims: dict = Depends(require_testbed_admin)):
     """Run (or re-run) the central provisioning steps. Safe to repeat.
@@ -496,14 +603,21 @@ def provision(slug: str, claims: dict = Depends(require_testbed_admin)):
             return "created"
         record("credentials", make_credentials)
 
+    issued_upload: dict | None = None
+    if _hosted(tb):
+        issued_upload = _provision_hosted(slug, tb, steps, record, claims)
+
     # `access` only counts when it was attempted: without a Keycloak admin client the group is made by hand
-    required = ("bucket", "catalogue", "credentials") + (("access",) if keycloak_admin.configured() else ())
+    required = ("bucket", "catalogue", "credentials") + (("access",) if keycloak_admin.configured() else ()) \
+        + (HOSTED_STEPS if _hosted(tb) else ())
     all_ok = all(steps[s]["status"] == "ok" for s in required)
     updated = store.update_testbed(slug, steps=steps, status="provisioned" if all_ok else tb["status"])
     store.audit(slug, _actor(claims), "provision", "ok" if all_ok else "partial")
     return {
         "testbed": updated,
         "issued_credentials": issued,
+        # A hosted testbed's upload key, returned only when this call created it: hand it to the testbed now.
+        "issued_upload_credentials": issued_upload,
         # Not automated yet: the asset monitor takes its bucket list from its own env.
         "followups": [
             f"Add '{tb['bucket']}' to MONITOR_BUCKETS of the s3-asset-monitor service and restart it "
@@ -526,9 +640,31 @@ def rotate_credentials(slug: str, claims: dict = Depends(require_testbed_admin))
             "note": "A running transfer keeps using the old key until it is restarted."}
 
 
+@router.post("/{slug}/upload-credentials/rotate")
+def rotate_upload_credentials(slug: str, claims: dict = Depends(require_testbed_access)):
+    """A hosted testbed's new upload key, replacing the old one (which stops working). The secret is returned
+    once and not stored: when it is lost, rotate again. The running transfer is unaffected (the facility connector
+    reads the upload bucket with its own key). Open to the testbed's administrators: they are the ones uploading."""
+    tb = _get(slug)
+    if not _hosted(tb):
+        raise HTTPException(status_code=409, detail="Only a testbed hosted by the facility connector has an upload key")
+    if tb["steps"].get("upload_bucket", {}).get("status") != "ok":
+        raise HTTPException(status_code=409, detail="The upload bucket is not ready. Run provisioning first.")
+    old = tb["upload_access_key"]
+    access_key, secret = datalake_admin.create_scoped_user(slug, tb["upload_bucket"], purpose="upload")
+    store.set_upload_key(slug, access_key)
+    if old:
+        datalake_admin.remove_user(old)
+    store.audit(slug, _actor(claims), "rotate-upload-key", access_key)
+    return _upload_credentials(tb, access_key, secret)
+
+
 @router.get("/{slug}/bundle")
 def download_bundle(slug: str, claims: dict = Depends(require_testbed_access)):
     tb = _get(slug)
+    if _hosted(tb):
+        raise HTTPException(status_code=409, detail="This testbed is hosted by the facility connector: it has no "
+                                                    "connector to deploy. It uploads with its upload key instead.")
     store.audit(slug, _actor(claims), "download-bundle")
     return Response(
         content=build_bundle(tb), media_type="application/zip",
@@ -555,6 +691,13 @@ def deletion_preview(slug: str):
         preview["objects"], preview["objects_truncated"] = objects, truncated
     except HTTPException as e:
         preview["objects"], preview["objects_error"] = None, e.detail
+    if _hosted(tb):
+        preview["upload_bucket"] = tb["upload_bucket"]
+        try:
+            objects, truncated = datalake_admin.count_objects(tb["upload_bucket"])
+            preview["upload_objects"], preview["upload_objects_truncated"] = objects, truncated
+        except HTTPException as e:
+            preview["upload_objects"], preview["upload_objects_error"] = None, e.detail
     return preview
 
 
@@ -591,9 +734,30 @@ def deregister(slug: str, delete_bucket: bool = False, delete_catalogue: bool = 
     if not failures:
         datalake_admin.remove_policy(slug)
 
+    if _hosted(tb):
+        if tb["upload_access_key"]:
+            try:
+                datalake_admin.remove_user(tb["upload_access_key"])
+                store.set_upload_key(slug, None)
+                results["upload_key"] = {"status": "removed"}
+                datalake_admin.remove_policy(slug, purpose="upload")
+            except HTTPException as e:
+                results["upload_key"] = {"status": "failed", "detail": e.detail}
+                failures.append(f"Upload key: {e.detail}")
+        # The facility connector would otherwise keep polling the upload bucket. Both are best effort: the
+        # registry entry does not depend on the connector being reachable.
+        aid = upload_asset_id(tb)
+        running = [a["transfer_id"] for a in store.list_assets(slug)
+                   if a["asset_id"] == aid and a["transfer_id"] and a["transfer_state"] == "STARTED"]
+        ended = all(edc_consumer_client.terminate_transfer(t, f"testbed {slug} deregistered") for t in running)
+        removed = asyncio.run(edc_client.delete_asset(aid))
+        results["asset"] = {"status": removed["status"] if ended else "transfer still running",
+                            **({"detail": removed["error"]} if "error" in removed else {})}
+
     for requested, name, step in (
         (delete_catalogue, "catalogue", lambda: piveau_catalogue_client.delete_catalogue(tb["catalogue_id"])),
         (delete_bucket, "bucket", lambda: datalake_admin.delete_bucket(tb["bucket"])),
+        (delete_bucket and _hosted(tb), "upload_bucket", lambda: datalake_admin.delete_bucket(tb["upload_bucket"])),
     ):
         if not requested:
             continue
@@ -615,4 +779,7 @@ def deregister(slug: str, delete_bucket: bool = False, delete_catalogue: bool = 
         followups.append(f"Remove '{tb['bucket']}' from MONITOR_BUCKETS of the s3-asset-monitor service and restart it.")
     if delete_bucket or delete_catalogue:
         followups.append("EDC assets that were registered on the central connector for the deleted files are not removed.")
+    if _hosted(tb) and results.get("asset", {}).get("status") not in ("deleted", "not_found"):
+        followups.append(f"The upload asset '{upload_asset_id(tb)}' on the facility connector could not be removed "
+                         f"({results['asset']['status']}): end its transfer and delete the asset on the connector.")
     return {"slug": slug, "status": "deregistered", "results": results, "followups": followups}

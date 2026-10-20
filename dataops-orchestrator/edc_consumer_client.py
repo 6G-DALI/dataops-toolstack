@@ -309,6 +309,18 @@ def start_transfer(*, dsp_url: str, provider_id: str, asset_id: str, agreement_i
     return result.get("@id") or _scalar(result.get("id"))
 
 
+def terminate_transfer(transfer_id: str, reason: str) -> bool:
+    """Ask the central connector to end a transfer. Best effort: False when it could not (already ended, unknown,
+    or unreachable); the caller reports that rather than failing."""
+    try:
+        r = httpx.post(_mgmt(f"/v3/transferprocesses/{transfer_id}/terminate"), headers=_headers(), timeout=30,
+                       json={"@context": _CONTEXT, "@type": "TerminateTransfer", "reason": reason})
+    except (httpx.HTTPError, HTTPException) as e:
+        log.warning("[edc] terminating transfer %s failed: %s", transfer_id, e)
+        return False
+    return r.status_code in (200, 204)
+
+
 def get_transfer_state(transfer_id: str) -> str:
     t = _call("GET", f"/v3/transferprocesses/{transfer_id}", what="Transfer lookup")
     return _scalar(t.get("state") or t.get("edc:state"))

@@ -53,6 +53,8 @@ Membership mapper on the `dataops-ui` client).
 | `KEYCLOAK_ISSUER` | (required) | e.g. `https://auth.dspace.sparkworks.net/auth/realms/dspace` |
 | `TESTBED_ADMIN_ROLE` | `testbed-admin` | Realm role that manages every testbed and the registry |
 | `KEYCLOAK_ADMIN_CLIENT_ID` / `_SECRET` | (unset) | Service-account client that creates a testbed's group when it is provisioned. Unset: that step is skipped and the group is made by hand |
+| `FACILITY_DSP_URL` | `$CENTRAL_CONNECTOR_URL/protocol` | The facility connector's DSP address: the provider for testbeds hosted by it (registered with `hosted: true`: an upload bucket `<bucket>-upload` and key instead of their own connector) |
+| `FACILITY_PARTICIPANT_ID` | `provider-facility` | The facility connector's `edc.participant.id` |
 | `TESTBED_GROUP_PREFIX` | `testbeds` | A testbed's owners are the members of the Keycloak group `/<prefix>/<slug>` (empty prefix: top-level group named by slug) |
 | `TESTBED_DB_PATH` | `/srv/data/testbeds.db` | SQLite registry; must be on a persistent volume |
 | `DATASPACE_S3_ADMIN_ACCESS_KEY` / `_SECRET_KEY` | `DATASPACE_S3_*` | MinIO admin key (create buckets, users, policies) |

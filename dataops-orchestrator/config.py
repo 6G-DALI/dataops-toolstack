@@ -111,6 +111,13 @@ KEYCLOAK_ADMIN_CLIENT_SECRET = os.getenv("KEYCLOAK_ADMIN_CLIENT_SECRET", "")
 # from the address the orchestrator itself uses. Defaults to DATASPACE_S3_ENDPOINT_URL.
 DATALAKE_PUBLIC_ENDPOINT_URL = os.getenv("DATALAKE_PUBLIC_ENDPOINT_URL", "") or DATASPACE_S3_ENDPOINT_URL
 
+# --- Testbeds hosted by the facility connector -----------------------------------
+# A testbed without its own connector uploads to an upload bucket in the Data Lake; the facility (central)
+# connector offers that bucket as an asset and transfers it, to itself, into the testbed's Data Lake bucket.
+# These identify the facility connector as the provider: its DSP address and edc.participant.id.
+FACILITY_DSP_URL = os.getenv("FACILITY_DSP_URL", "") or f"{CENTRAL_CONNECTOR_URL.rstrip('/')}/protocol"
+FACILITY_PARTICIPANT_ID = os.getenv("FACILITY_PARTICIPANT_ID", "provider-facility")
+
 # --- piveau access control v2 (piveau_access.py) -----------------------------
 # Turn on once piveau-hub-repo 4.x runs with access control v2 (dataops-devops:
 # docker/prd/dataspace/PIVEAU-UPGRADE-PLAN.md). Then new datasets are written with an access level,

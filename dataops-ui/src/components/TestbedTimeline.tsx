@@ -30,6 +30,7 @@ function buildStages(tb: Testbed, assets: TestbedAsset[]): Stage[] {
     ['bucket', 'Data Lake bucket'],
     ['credentials', 'Data Lake key'],
     ['catalogue', 'Catalogue'],
+    ...(tb.hosting === 'facility' ? [['upload_bucket', 'Upload bucket'], ['upload_key', 'Upload key']] : []),
   ].map(([key, label]) => {
     const step = tb.steps[key]
     if (step?.status === 'ok') return { key, label, state: 'done' as StageState, meta: shortTime(step.at) }
@@ -67,14 +68,16 @@ function buildStages(tb: Testbed, assets: TestbedAsset[]): Stage[] {
   return stages
 }
 
-/** Set by "Find asset": a catalogue request reaching the testbed's connector proves it is up. */
+/** Set by "Find asset": a catalogue request reaching the testbed's connector proves it is up. A hosted testbed's
+ *  connector is the facility's; provisioning makes that request. */
 function connectorStage(tb: Testbed): Stage {
+  const label = tb.hosting === 'facility' ? 'Facility connector' : 'Connector connected'
   const step = tb.steps.connector
-  if (step?.status === 'ok') return { key: 'connected', label: 'Connector connected', state: 'done', meta: shortTime(step.at) }
+  if (step?.status === 'ok') return { key: 'connected', label, state: 'done', meta: shortTime(step.at) }
   if (step?.status === 'failed') {
-    return { key: 'connected', label: 'Connector connected', state: 'failed', meta: String(step.detail).slice(0, 80) }
+    return { key: 'connected', label, state: 'failed', meta: String(step.detail).slice(0, 80) }
   }
-  return { key: 'connected', label: 'Connector connected', state: 'upcoming', meta: 'use Find asset' }
+  return { key: 'connected', label, state: 'upcoming', meta: 'use Find asset' }
 }
 
 function assetStage(assets: TestbedAsset[]): Stage {

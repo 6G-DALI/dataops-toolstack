@@ -701,6 +701,12 @@ export interface Testbed {
   /** Access key of the testbed's bucket-scoped Data Lake user. Not secret; the secret key is never returned. */
   s3_access_key: string | null
   has_credentials: boolean
+  /** 'own': the testbed runs its own connector. 'facility': hosted by the facility connector; it uploads instead. */
+  hosting: 'own' | 'facility'
+  /** Hosted testbeds: the bucket they upload to, its key (the secret is shown once) and the endpoint to use. */
+  upload_bucket: string | null
+  upload_access_key: string | null
+  upload_endpoint: string | null
   created_at: string
   updated_at: string
   created_by: string | null
@@ -719,11 +725,23 @@ export interface TestbedCreateRequest {
   logo_url?: string
   /** Create the catalogue private. Needs piveau access control; refused (422) without it. */
   private?: boolean
+  /** No connector of its own: hosted by the facility connector, uploading to an upload bucket. */
+  hosted?: boolean
+}
+
+/** A hosted testbed's upload key. The secret is returned once (provisioning or rotation) and never stored. */
+export interface UploadCredentials {
+  endpoint: string
+  bucket: string
+  access_key: string
+  secret_key: string
 }
 
 export interface TestbedProvisionResponse {
   testbed: Testbed
   followups: string[]
+  /** Set only when this run created the upload key. */
+  issued_upload_credentials?: UploadCredentials | null
 }
 
 /** A member of a testbed's Keycloak group: someone who can use the testbed in this UI. */
@@ -823,6 +841,11 @@ export interface DeletionPreview {
   objects: number | null
   objects_truncated?: boolean
   objects_error?: string
+  /** Hosted testbeds: the upload bucket, deleted together with the Data Lake bucket. */
+  upload_bucket?: string
+  upload_objects?: number | null
+  upload_objects_truncated?: boolean
+  upload_objects_error?: string
 }
 
 export interface DeregisterOptions {

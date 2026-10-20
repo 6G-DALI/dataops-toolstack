@@ -64,11 +64,19 @@ def _admin() -> MinioAdmin:
                       region=DATASPACE_S3_REGION)
 
 
-def create_scoped_user(slug: str, bucket: str) -> tuple[str, str]:
-    """Create a MinIO user restricted to `bucket`. Returns (access_key, secret_key)."""
-    access_key = f"tb-{slug}-{secrets.token_hex(4)}"[:40]
+def _policy_name(slug: str, purpose: str = "") -> str:
+    return f"dali-testbed-{slug}" + (f"-{purpose}" if purpose else "")
+
+
+def create_scoped_user(slug: str, bucket: str, purpose: str = "") -> tuple[str, str]:
+    """Create a MinIO user restricted to `bucket`. Returns (access_key, secret_key).
+
+    `purpose` keeps a testbed's second key apart from its Data Lake key: e.g. "upload" for a hosted testbed's
+    upload bucket gets its own policy, dali-testbed-<slug>-upload, and keys named tb-<slug>-upload-...
+    """
+    access_key = f"tb-{slug}-{purpose + '-' if purpose else ''}{secrets.token_hex(4)}"[:40]
     secret_key = secrets.token_urlsafe(30)
-    policy = f"dali-testbed-{slug}"
+    policy = _policy_name(slug, purpose)
     admin = _admin()
     try:
         admin.add_canned_policy(policy, policy_document(bucket))
@@ -86,10 +94,10 @@ def remove_user(access_key: str) -> None:
         raise HTTPException(status_code=502, detail=f"MinIO admin call failed: {e}")
 
 
-def remove_policy(slug: str) -> None:
+def remove_policy(slug: str, purpose: str = "") -> None:
     """Drop the testbed's bucket-scoped policy. Best effort: a policy that is already gone is not an error."""
     try:
-        _admin().remove_canned_policy(f"dali-testbed-{slug}")
+        _admin().remove_canned_policy(_policy_name(slug, purpose))
     except (MinioAdminError, HTTPException):
         pass
 

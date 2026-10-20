@@ -129,6 +129,60 @@ async def register_asset(
         return {"status": "failed", "asset_id": asset_id, "error": f"Could not reach EDC provider connector: {e}"}
 
 
+def register_upload_asset(asset_id: str, bucket: str, title: str) -> str:
+    """Offer a hosted testbed's upload bucket as an asset of this (the facility) connector. Returns 'created' or
+    'exists'; raises HTTPException(502) when the connector refuses, since provisioning records that as a failed step.
+
+    The data address is the connector's MinIO files source ('6GDaliTestbedExperiments', as on the testbed
+    connectors): a PiveauData transfer of it keeps polling the bucket and pushes every new file. It reads the bucket
+    with the orchestrator's own Data Lake key, like the distribution assets above, so rotating the testbed's upload
+    key never breaks a running transfer.
+    """
+    from fastapi import HTTPException
+
+    if not _configured():
+        raise HTTPException(status_code=503, detail="EDC_PROVIDER_MANAGEMENT_URL not configured")
+    if not (DATASPACE_S3_ENDPOINT_URL and DATASPACE_S3_ACCESS_KEY and DATASPACE_S3_SECRET_KEY):
+        raise HTTPException(status_code=503, detail="Data Lake S3 (DATASPACE_S3_*) not configured")
+    headers = {"X-Api-Key": EDC_API_KEY} if EDC_API_KEY else {}
+    base = EDC_PROVIDER_MANAGEMENT_URL.rstrip("/")
+    asset = {
+        "@context": _EDC_CONTEXT,
+        "@id": asset_id,
+        "properties": {"https://w3id.org/edc/v0.0.1/ns/name": title},
+        "dataAddress": {
+            "type":       "6GDaliTestbedExperiments",
+            "endpoint":   DATASPACE_S3_ENDPOINT_URL,
+            "bucketName": bucket,
+            "accessKey":  DATASPACE_S3_ACCESS_KEY,
+            "secretKey":  DATASPACE_S3_SECRET_KEY,
+            "prefix":     "",
+        },
+    }
+    try:
+        with httpx.Client(timeout=15, headers=headers) as client:
+            for path, body in (
+                ("/v3/policydefinitions", {"@context": _EDC_CONTEXT, "@id": _POLICY_ID,
+                                           "policy": {"@context": "http://www.w3.org/ns/odrl.jsonld", "@type": "Set"}}),
+                ("/v3/contractdefinitions", {"@context": _EDC_CONTEXT, "@id": _CONTRACT_DEFINITION_ID,
+                                             "accessPolicyId": _POLICY_ID, "contractPolicyId": _POLICY_ID,
+                                             "assetsSelector": []}),
+            ):
+                r = client.post(f"{base}{path}", json=body)
+                if r.status_code not in (200, 201, 409):
+                    r.raise_for_status()
+            r = client.post(f"{base}/v3/assets", json=asset)
+            if r.status_code == 409:
+                return "exists"
+            r.raise_for_status()
+            return "created"
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"The facility connector refused asset '{asset_id}': "
+                                                    f"{e.response.status_code} {e.response.text[:300]}")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach the facility connector at {base}: {e}")
+
+
 async def delete_asset(asset_id: str) -> dict:
     """Delete one EDC asset by id (see register_asset — asset_id is the
     distribution's dali:assetId). Best-effort like register_asset: never
@@ -140,7 +194,8 @@ async def delete_asset(asset_id: str) -> dict:
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.delete(f"{EDC_PROVIDER_MANAGEMENT_URL.rstrip('/')}/v3/assets/{asset_id}")
+            r = await client.delete(f"{EDC_PROVIDER_MANAGEMENT_URL.rstrip('/')}/v3/assets/{asset_id}",
+                                    headers={"X-Api-Key": EDC_API_KEY} if EDC_API_KEY else {})
             if r.status_code == 404:
                 return {"status": "not_found", "asset_id": asset_id}
             r.raise_for_status()

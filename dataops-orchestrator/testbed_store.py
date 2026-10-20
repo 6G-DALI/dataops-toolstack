@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 
-from config import DATABASE_URL, TESTBED_DB_PATH, TESTBED_SECRET_KEY
+from config import DATABASE_URL, DATALAKE_PUBLIC_ENDPOINT_URL, TESTBED_DB_PATH, TESTBED_SECRET_KEY
 
 _lock = threading.Lock()
 
@@ -31,7 +31,7 @@ _COLUMNS = (
     "slug", "name", "organisation", "contact_email", "participant_id", "ids_id",
     "experiment_prefix", "bucket", "catalogue_id", "dsp_url", "produced_by_iri",
     "status", "steps", "s3_access_key", "s3_secret_enc", "created_at", "updated_at", "created_by", "logo_url",
-    "visibility",
+    "visibility", "hosting", "upload_bucket", "upload_access_key",
 )
 
 
@@ -73,7 +73,7 @@ _DDL = (
         bucket TEXT UNIQUE NOT NULL, catalogue_id TEXT UNIQUE NOT NULL, dsp_url TEXT NOT NULL,
         produced_by_iri TEXT, status TEXT NOT NULL, steps TEXT NOT NULL DEFAULT '{}',
         s3_access_key TEXT, s3_secret_enc TEXT, created_at TEXT, updated_at TEXT, created_by TEXT,
-        logo_url TEXT, visibility TEXT)""",
+        logo_url TEXT, visibility TEXT, hosting TEXT, upload_bucket TEXT, upload_access_key TEXT)""",
     """CREATE TABLE IF NOT EXISTS testbed_assets (
         slug TEXT NOT NULL, asset_id TEXT NOT NULL, title TEXT, offer_id TEXT,
         status TEXT NOT NULL DEFAULT 'discovered', present INTEGER NOT NULL DEFAULT 1,
@@ -104,7 +104,7 @@ class _Conn:
 
 
 _NEW_ASSET_COLUMNS = ("transfer_state", "transfer_checked_at", "negotiation_id", "negotiation_state")
-_NEW_TESTBED_COLUMNS = ("logo_url", "visibility")
+_NEW_TESTBED_COLUMNS = ("logo_url", "visibility", "hosting", "upload_bucket", "upload_access_key")
 
 
 def _migrate(conn: "_Conn") -> None:
@@ -157,7 +157,10 @@ def _public(row: sqlite3.Row) -> dict:
     d = {k: row[k] for k in _COLUMNS if k != "s3_secret_enc"}
     d["steps"] = json.loads(d["steps"] or "{}")
     d["visibility"] = d["visibility"] or "public"  # testbeds registered before catalogues could be private
+    d["hosting"] = d["hosting"] or "own"  # testbeds registered before they could be hosted run their own connector
     d["has_credentials"] = bool(row["s3_secret_enc"])
+    # Where a hosted testbed uploads: the Data Lake as the testbeds reach it. The upload secret is never stored.
+    d["upload_endpoint"] = DATALAKE_PUBLIC_ENDPOINT_URL if d["hosting"] == "facility" else None
     return d
 
 
@@ -296,6 +299,11 @@ def set_s3_credentials(slug: str, access_key: str | None, secret: str | None) ->
     with _db() as c:
         c.execute("UPDATE testbeds SET s3_access_key=?, s3_secret_enc=?, updated_at=? WHERE slug=?",
                   (access_key, encrypt(secret) if secret else None, _now(), slug))
+
+
+def set_upload_key(slug: str, access_key: str | None) -> None:
+    """The access key of a hosted testbed's upload user. Its secret is handed out once and not kept."""
+    update_testbed(slug, upload_access_key=access_key)
 
 
 def audit_log(slug: str, limit: int = 100) -> list[dict]:

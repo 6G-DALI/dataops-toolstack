@@ -32,7 +32,8 @@ def client(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(datalake_admin, "ensure_bucket", lambda b: calls.append(("bucket", b)) or "created")
     monkeypatch.setattr(datalake_admin, "create_scoped_user",
-                        lambda slug, b: calls.append(("user", slug, b)) or ("tb-kul-1", "s3cret"))
+                        lambda slug, b, purpose="": calls.append(("user", slug, b) + ((purpose,) if purpose else ()))
+                        or ((f"tb-{slug}-upload-{len(calls)}", f"up-secret-{len(calls)}") if purpose else ("tb-kul-1", "s3cret")))
     monkeypatch.setattr(datalake_admin, "remove_user", lambda ak: calls.append(("rm", ak)))
     monkeypatch.setattr(piveau_catalogue_client, "ensure_catalogue",
                         lambda *a: calls.append(("cat", a[0])) or "created")

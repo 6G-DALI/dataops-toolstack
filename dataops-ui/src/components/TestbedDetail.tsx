@@ -14,7 +14,8 @@ import { TestbedStatusBadge } from './TestbedList'
 import CatalogueAccess from './CatalogueAccess'
 import TestbedMembers from './TestbedMembers'
 import TestbedTimeline from './TestbedTimeline'
-import type { DeletionPreview, DeregisterResponse, NavigateFn, Testbed, TestbedAsset, TestbedAuditEntry } from '../types'
+import UploadKit from './UploadKit'
+import type { DeletionPreview, DeregisterResponse, NavigateFn, Testbed, TestbedAsset, TestbedAuditEntry, UploadCredentials } from '../types'
 
 interface TestbedDetailProps {
   slug: string
@@ -57,6 +58,8 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
   const [dspEdit, setDspEdit] = useState<string | null>(null)
   const [logoEdit, setLogoEdit] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('overview')
+  // A hosted testbed's upload secret, when re-running provisioning just created the key: shown once.
+  const [issuedUpload, setIssuedUpload] = useState<UploadCredentials | null>(null)
 
   const load = useCallback(() => {
     Promise.all([getTestbed(slug), getTestbedAudit(slug), getTestbedAssets(slug)])
@@ -117,6 +120,10 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
   }
 
   if (!tb) return error ? <ErrorMessage message={error} /> : <LoadingSpinner />
+
+  const hosted = tb.hosting === 'facility'
+  const provisioningSteps = ['bucket', 'credentials', 'catalogue', 'access',
+    ...(hosted ? ['upload_bucket', 'upload_key', 'asset', 'transfer'] : [])]
 
   // Where each provisioned thing can be looked at. Omitted when the matching URL is not configured.
   const links: Record<string, string | null> = {
@@ -203,13 +210,20 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
           </div>
 
           <div className="col-lg-5">
+            {hosted && (
+              <div className="mb-3">
+                <UploadKit testbed={tb} issued={issuedUpload} onRotated={load} />
+              </div>
+            )}
             <div className="card"><div className="card-body">
               <h6 className="mb-3">Get started</h6>
               <div className="d-grid gap-2">
-                <button className="btn btn-primary text-start" disabled={busy} onClick={() => act(() => downloadTestbedBundle(slug))}>
-                  <FiDownload className="me-2" />Download the connector bundle
-                  <div className="small opacity-75">Everything the testbed needs to run its connector.</div>
-                </button>
+                {!hosted && (
+                  <button className="btn btn-primary text-start" disabled={busy} onClick={() => act(() => downloadTestbedBundle(slug))}>
+                    <FiDownload className="me-2" />Download the connector bundle
+                    <div className="small opacity-75">Everything the testbed needs to run its connector.</div>
+                  </button>
+                )}
                 <button className="btn btn-outline-primary text-start" disabled={busy}
                   onClick={() => onNavigate('testbed-metadata', { dagId: slug })}>
                   <FiFileText className="me-2" />Build a dataset's metadata.json
@@ -354,7 +368,10 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
           <div className="col-lg-7">
             <div className="card"><div className="card-body">
               <h6 className="mb-3">Technical details</h6>
-              <Field label="Participant ID"><code>{tb.participant_id}</code></Field>
+              <Field label="Connector">
+                {hosted ? 'Hosted by the facility connector' : 'Its own connector'}
+              </Field>
+              {!hosted && <Field label="Participant ID"><code>{tb.participant_id}</code></Field>}
               <Field label="Experiment prefix"><code>{tb.experiment_prefix}</code></Field>
               <Field label="Bucket">
                 <code>{tb.bucket}</code>
@@ -364,6 +381,16 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
                   </a>
                 )}
               </Field>
+              {hosted && (
+                <Field label="Upload bucket">
+                  <code>{tb.upload_bucket}</code>
+                  {tb.upload_bucket && bucketUrl(tb.upload_bucket) && (
+                    <a href={bucketUrl(tb.upload_bucket)!} target="_blank" rel="noreferrer" className="ms-1 small" title="Open the upload bucket">
+                      <FiExternalLink />
+                    </a>
+                  )}
+                </Field>
+              )}
               <Field label="Data Lake access key">
                 {tb.s3_access_key ? (
                   <>
@@ -378,7 +405,8 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
                 {dspEdit === null ? (
                   <>
                     <span className="text-break">{tb.dsp_url}</span>
-                    {isTestbedAdmin() && (
+                    {hosted && <div className="text-muted small">The facility connector's.</div>}
+                    {isTestbedAdmin() && !hosted && (
                       <button className="btn btn-sm btn-link py-0 ms-1" disabled={busy} title="Edit the DSP endpoint"
                         onClick={() => setDspEdit(tb.dsp_url)}>
                         <FiEdit2 />
@@ -407,7 +435,7 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
             <div className="card mb-3"><div className="card-body">
               <h6 className="mb-3">Provisioning</h6>
               <ul className="list-unstyled mb-0">
-                {['bucket', 'credentials', 'catalogue', 'access'].map(key => {
+                {provisioningSteps.map(key => {
                   const s = tb.steps[key]
                   return (
                     <li key={key} className="mb-1">
@@ -415,7 +443,7 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
                         : s.status === 'ok' ? <FiCheckCircle className="text-success me-2" />
                         : s.status === 'skipped' ? <FiMinusCircle className="text-muted me-2" />
                         : <FiXCircle className="text-danger me-2" />}
-                      <strong className="text-capitalize">{key}</strong>
+                      <strong className="text-capitalize">{key.replace('_', ' ')}</strong>
                       <span className="text-muted small ms-2">{s ? s.detail : 'not run'}</span>
                     </li>
                   )
@@ -424,7 +452,13 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
               {isTestbedAdmin() && (
                 <div className="d-flex flex-wrap gap-2 mt-3">
                   <button className="btn btn-sm btn-outline-primary" disabled={busy}
-                    onClick={() => act(() => provisionTestbed(slug), 'Provisioning re-run.')}>
+                    onClick={() => act(async () => {
+                      const r = await provisionTestbed(slug)
+                      if (r.issued_upload_credentials) {  // a new upload key: show its secret now, on the Overview
+                        setIssuedUpload(r.issued_upload_credentials)
+                        setTab('overview')
+                      }
+                    }, 'Provisioning re-run.')}>
                     <FiRefreshCw className="me-1" />Re-run provisioning
                   </button>
                   <button className="btn btn-sm btn-outline-secondary" disabled={busy || !tb.has_credentials}
@@ -538,8 +572,19 @@ export default function TestbedDetail({ slug, onNavigate }: TestbedDetailProps) 
                   Also delete the Data Lake bucket <code>{tb.bucket}</code>
                   {preview?.objects != null && <> with all <strong>{preview.objects}{preview.objects_truncated ? '+' : ''}</strong> object{preview.objects !== 1 ? 's' : ''} in it</>}
                   {preview?.objects_error && <span className="text-muted"> (could not count its objects)</span>}
+                  {hosted && (
+                    <>
+                      {' '}and the upload bucket <code>{tb.upload_bucket}</code>
+                      {preview?.upload_objects != null && <> ({preview.upload_objects}{preview.upload_objects_truncated ? '+' : ''} object{preview.upload_objects !== 1 ? 's' : ''})</>}
+                    </>
+                  )}
                 </label>
               </div>
+              {hosted && (
+                <p className="small text-muted">
+                  The upload key is removed, and the facility connector stops the transfer and drops the upload asset.
+                </p>
+              )}
               {deletingData && (
                 <div className="mt-3">
                   <div className="alert alert-danger py-2 small">
