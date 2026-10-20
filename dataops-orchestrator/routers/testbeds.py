@@ -443,6 +443,33 @@ class DatasetEdit(BaseModel):
     license: str | None = Field(default=None, description="Licence URL; empty removes it")
     access_level: Literal["public", "restricted", "internal"] | None = Field(
         default=None, description="piveau access level: public, restricted (signed-in users), internal (members only)")
+    # The fields below are written as the asset monitor writes them from a metadata.json; empty removes one.
+    produced_by: str | None = Field(default=None, description="The organisation's GAIA-X participant IRI (gax:producedBy)")
+    publisher: str | None = None
+    contact_email: str | None = None
+    creator: "DatasetCreator | None" = None
+    themes: list[str] | None = Field(default=None, description="EU data theme codes, e.g. TECH")
+    language: str | None = Field(default=None, description="EU language code, e.g. ENG")
+    spatial: str | None = None
+    temporal_start: str | None = Field(default=None, description="YYYY-MM-DD; sent together with temporal_end")
+    temporal_end: str | None = None
+    version: str | None = None
+    contains_pii: bool | None = None
+
+
+class DatasetCreator(BaseModel):
+    name: str = ""
+    kind: Literal["Person", "Organization"] = "Person"
+    email: str = ""
+    orcid: str = ""
+    affiliation: str = ""
+
+
+DatasetEdit.model_rebuild()
+
+
+class DatasetRecord(BaseModel):
+    turtle: str = Field(description="The dataset's whole record as Turtle")
 
 
 @router.get("/{slug}/datasets", dependencies=[Depends(require_testbed_access)])
@@ -477,6 +504,23 @@ def edit_testbed_dataset(slug: str, dataset_id: str, body: DatasetEdit, claims: 
         raise HTTPException(status_code=422, detail="Nothing to change")
     result = testbed_datasets.update(tb["catalogue_id"], dataset_id, changes)
     store.audit(slug, _actor(claims), "edit-dataset", f"{dataset_id}: {', '.join(sorted(changes))}"[:200])
+    return result
+
+
+@router.get("/{slug}/datasets/{dataset_id}/record", dependencies=[Depends(require_testbed_admin)])
+def get_testbed_dataset_record(slug: str, dataset_id: str):
+    """The dataset's whole record as Turtle, for the platform administrators' advanced editor."""
+    tb = _get(slug)
+    return {"turtle": testbed_datasets.get_turtle(tb["catalogue_id"], dataset_id)}
+
+
+@router.put("/{slug}/datasets/{dataset_id}/record")
+def replace_testbed_dataset_record(slug: str, dataset_id: str, body: DatasetRecord,
+                                   claims: dict = Depends(require_testbed_admin)):
+    """Replace the dataset's whole record (platform administrators only). Its visibility is kept."""
+    tb = _get(slug)
+    result = testbed_datasets.replace_turtle(tb["catalogue_id"], dataset_id, body.turtle)
+    store.audit(slug, _actor(claims), "edit-dataset-record", dataset_id[:200])
     return result
 
 

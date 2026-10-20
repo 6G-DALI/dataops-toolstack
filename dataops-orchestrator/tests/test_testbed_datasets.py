@@ -106,6 +106,52 @@ def test_edits_that_are_refused(hub, monkeypatch):
     assert e.value.status_code == 404
 
 
+def test_the_other_fields_are_written_as_the_asset_monitor_writes_them(hub):
+    old = "https://dali-project.eu/participant/eurecom"
+    hub["ttl"][DS] = TURTLE.replace(
+        "dct:modified", f"<https://registry.lab.gaia-x.eu/v1/api/trusted-shape-registry/v1/shapes/jsonld/trustframework#producedBy> <{old}> ;"
+                        f" <http://www.w3.org/ns/prov#wasAttributedTo> <{old}> ; dct:modified")
+    assert td.summary("c", DS)["produced_by"] == old
+    new = "https://dataspace.6gdali.eu/participant/eurecom"
+    d = td.update("c", DS, {
+        "produced_by": new, "publisher": "EURECOM", "contact_email": "data@eurecom.fr",
+        "creator": {"name": "A. Researcher", "kind": "Person", "orcid": "0000-0002-1825-0097", "email": "", "affiliation": "EURECOM"},
+        "themes": ["tech", "ECON"], "language": "eng", "spatial": "Sophia Antipolis",
+        "temporal_start": "2026-01-01", "temporal_end": "2026-02-01", "version": "1.1", "contains_pii": True})
+    assert d["produced_by"] == new and d["publisher"] == "EURECOM" and d["contact_email"] == "data@eurecom.fr"
+    assert d["creator"] == {"name": "A. Researcher", "kind": "Person", "email": "",
+                            "orcid": "https://orcid.org/0000-0002-1825-0097", "affiliation": "EURECOM"}
+    assert d["themes"] == ["ECON", "TECH"] and d["language"] == "ENG" and d["spatial"] == "Sophia Antipolis"
+    assert (d["temporal_start"], d["temporal_end"], d["version"], d["contains_pii"]) == ("2026-01-01", "2026-02-01", "1.1", True)
+    assert old not in hub["ttl"][DS] and "registry.lab.gaia-x.eu" in hub["ttl"][DS]  # same predicate, new IRI
+    assert d["distributions"] == 1 and "accessLevel" not in hub["puts"][-1]
+
+    d = td.update("c", DS, {"creator": {"name": ""}, "publisher": "", "temporal_start": "", "temporal_end": "", "produced_by": ""})
+    assert d["creator"]["name"] == "" and d["publisher"] == "" and d["temporal_start"] == "" and d["produced_by"] == ""
+    g = Graph().parse(data=hub["ttl"][DS], format="turtle")
+    assert len(set(g.subjects())) == 3  # the dataset, its distribution, the contact point: no orphaned blank nodes
+
+    for bad in ({"produced_by": "eurecom"}, {"contact_email": "nope"}, {"themes": ["not a theme"]},
+                {"temporal_start": "2026-01-01"}, {"temporal_start": "2026-02-01", "temporal_end": "2026-01-01"},
+                {"creator": {"name": "", "orcid": "0000"}}):
+        with pytest.raises(Exception) as e:
+            td.update("c", DS, bad)
+        assert e.value.status_code == 422, bad
+
+
+def test_the_whole_record_can_be_replaced_but_not_lose_a_file(hub):
+    hub["level"][DS] = "internal"
+    ttl = td.get_turtle("c", DS)
+    d = td.replace_turtle("c", DS, ttl.replace("Edge AI inference", "Rewritten"))
+    assert d["title"] == "Rewritten" and d["access_level"] == "internal" and d["access_rights"] == "NON_PUBLIC"
+    assert "accessLevel" not in hub["puts"][-1]
+    for bad in ("not turtle {", ttl.replace("exp-1>", "exp-2>"), ttl.replace('"Edge AI inference"@en', '""'),
+                ttl.replace("dcat:distribution", "dct:relation")):
+        with pytest.raises(Exception) as e:
+            td.replace_turtle("c", DS, bad)
+        assert e.value.status_code == 422
+
+
 def test_testbed_endpoints(client, hub):  # noqa: F811
     cat = client.post("/testbeds", json={"slug": "pamak", "name": "PAMAK"}).json()["catalogue_id"]
     client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
@@ -122,5 +168,16 @@ def test_testbed_endpoints(client, hub):  # noqa: F811
     assert client.patch(f"/testbeds/kul/datasets/{DS}", json={"title": "x"}).status_code == 403
     assert client.patch(f"/testbeds/pamak/datasets/{DS}", json={}).status_code == 422
     assert client.patch(f"/testbeds/pamak/datasets/{DS}", json={"access_level": "secret"}).status_code == 422
+    assert client.patch(f"/testbeds/pamak/datasets/{DS}", json={"produced_by": "x"}).status_code == 422
+    assert client.get(f"/testbeds/pamak/datasets/{DS}/record").status_code == 403  # the whole record: admins only
+    assert client.put(f"/testbeds/pamak/datasets/{DS}/record", json={"turtle": TURTLE}).status_code == 403
     entries = client.get("/testbeds/pamak/audit").json()["entries"]
     assert any(e["action"] == "edit-dataset" and "access_level" in e["detail"] for e in entries)
+
+
+def test_admins_edit_the_whole_record(client, hub):  # noqa: F811
+    client.post("/testbeds", json={"slug": "pamak", "name": "PAMAK"})
+    ttl = client.get(f"/testbeds/pamak/datasets/{DS}/record").json()["turtle"]
+    r = client.put(f"/testbeds/pamak/datasets/{DS}/record", json={"turtle": ttl.replace("Edge AI inference", "Admin")})
+    assert r.status_code == 200 and r.json()["title"] == "Admin"
+    assert any(e["action"] == "edit-dataset-record" for e in client.get("/testbeds/pamak/audit").json()["entries"])

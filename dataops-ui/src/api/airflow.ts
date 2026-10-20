@@ -503,6 +503,18 @@ export function editTestbedDataset(slug: string, datasetId: string, changes: Dat
   })
 }
 
+/** The dataset's whole record as Turtle (platform administrators only). */
+export function getTestbedDatasetRecord(slug: string, datasetId: string): Promise<{ turtle: string }> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/datasets/${encodeURIComponent(datasetId)}/record`)
+}
+
+/** Replace the dataset's whole record (platform administrators only); its visibility is kept. */
+export function replaceTestbedDatasetRecord(slug: string, datasetId: string, turtle: string): Promise<TestbedDataset> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/datasets/${encodeURIComponent(datasetId)}/record`, {
+    method: 'PUT', body: JSON.stringify({ turtle }),
+  })
+}
+
 /** A hosted testbed's new upload key; the old one stops working. The secret is in the answer only. */
 export function rotateUploadCredentials(slug: string): Promise<UploadCredentials> {
   return request(`/testbeds/${encodeURIComponent(slug)}/upload-credentials/rotate`, { method: 'POST' })

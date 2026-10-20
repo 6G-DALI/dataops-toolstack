@@ -748,6 +748,29 @@ export interface TestbedDataset {
   modified?: string
   /** Set when the record could not be read. */
   error?: string
+  /** The organisation's GAIA-X participant IRI (gax:producedBy). */
+  produced_by?: string
+  publisher?: string
+  contact_email?: string
+  creator?: DatasetCreator
+  /** EU data theme codes, e.g. TECH. */
+  themes?: string[]
+  /** EU language code, e.g. ENG. */
+  language?: string
+  spatial?: string
+  temporal_start?: string
+  temporal_end?: string
+  version?: string
+  /** null when the record does not say. */
+  contains_pii?: boolean | null
+}
+
+export interface DatasetCreator {
+  name: string
+  kind: 'Person' | 'Organization'
+  email: string
+  orcid: string
+  affiliation: string
 }
 
 export interface TestbedDatasets {
@@ -777,6 +800,18 @@ export interface DatasetEditRequest {
   keywords?: string[]
   license?: string
   access_level?: DatasetAccessLevel
+  produced_by?: string
+  publisher?: string
+  contact_email?: string
+  creator?: DatasetCreator
+  themes?: string[]
+  language?: string
+  spatial?: string
+  /** Sent together with temporal_end. */
+  temporal_start?: string
+  temporal_end?: string
+  version?: string
+  contains_pii?: boolean
 }
 
 /** A hosted testbed's upload key. The secret is returned once (provisioning or rotation) and never stored. */
