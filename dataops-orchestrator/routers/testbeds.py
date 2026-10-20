@@ -76,6 +76,15 @@ def _logo_or_422(value: str | None) -> str | None:
         raise HTTPException(status_code=422, detail=str(e))
 
 
+def catalogue_text(name: str) -> tuple[str, str]:
+    """Title and description of a testbed's catalogue. Testbeds are often named "X Testbed", so "testbed" is added
+    only when the name lacks it."""
+    label = name.strip()
+    if not label.lower().endswith("testbed"):
+        label += " Testbed"
+    return f"{label} Catalogue", f"Datasets contributed by the {label} to the 6G-DALI Data Space."
+
+
 def _get(slug: str) -> dict:
     tb = store.get_testbed(slug)
     if not tb:
@@ -399,8 +408,7 @@ def provision(slug: str, claims: dict = Depends(require_testbed_admin)):
     def ensure_catalogue() -> str:
         private = tb["visibility"] == "private"
         result = piveau_catalogue_client.ensure_catalogue(
-            tb["catalogue_id"], f"{tb['name']} testbed datasets",
-            f"Datasets contributed by the {tb['name']} testbed to the 6G-DALI Data Space.",
+            tb["catalogue_id"], *catalogue_text(tb["name"]),
             tb["organisation"] or tb["name"], tb["logo_url"], private)
         # A catalogue's visibility is fixed when it is created: a testbed registered as private whose catalogue
         # already exists as public would publish everything it uploads, so that is a failed step, not 'exists'.

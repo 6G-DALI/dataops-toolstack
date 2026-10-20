@@ -645,3 +645,10 @@ def test_patch_logo_needs_testbed_admin(client):
     client.post("/testbeds", json={"slug": "kul", "name": "KU Leuven"})
     client.claims["realm_access"] = {"roles": []}
     assert client.patch("/testbeds/kul", json={"logo_url": NEW_LOGO}).status_code in (401, 403)
+
+
+def test_catalogue_text_does_not_repeat_testbed():
+    from routers.testbeds import catalogue_text
+    assert catalogue_text("NITOS Testbed") == (
+        "NITOS Testbed Catalogue", "Datasets contributed by the NITOS Testbed to the 6G-DALI Data Space.")
+    assert catalogue_text("KU Leuven")[0] == "KU Leuven Testbed Catalogue"
