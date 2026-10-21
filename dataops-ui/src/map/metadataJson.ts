@@ -87,12 +87,9 @@ export const SECTIONS: SectionDef[] = [
     { k: 'contributors', label: 'Contributors', type: 'list', req: 'O', hint: 'One name per line.' },
     { k: 'related_publications', label: 'Related publications (URIs)', type: 'list', req: 'O', uriList: true, hint: 'One DOI or arXiv URI per line.' },
   ] },
-  { id: 'content', title: 'Content description', desc: "What the data files contain. Columns and technique are attached to each file's catalogue entry.", fields: [
-    { k: 'columns', label: 'Columns / variables', type: 'list', req: 'R', wide: true, hint: 'One per line, matching the CSV header.' },
+  { id: 'content', title: 'Content description', desc: "How the data was measured. Each file's columns, format, size and checksum are read from the file itself and attached to its catalogue entry.", fields: [
     { k: 'measurement_technique', label: 'Measurement technique', type: 'text', req: 'R', wide: true, hint: 'e.g. "Prometheus-based 5G NR KPI monitoring with 1s scrape interval"' },
-    { k: 'file_format', label: 'File format', type: 'text', req: 'O', suggest: ['CSV', 'JSON'] },
-    { k: 'number_of_files', label: 'Number of files', type: 'int', req: 'O' },
-    { k: 'record_count', label: 'Approximate record count', type: 'int', req: 'O' },
+    { k: 'columns', label: 'Columns / variables', type: 'list', req: 'O', wide: true, hint: 'Only for files without a header line (not CSV or TSV): a CSV\'s columns are read from its header.' },
   ] },
   { id: 'infra', title: 'Testbed context: infrastructure', tc: true, desc: 'SNS-JU Common Metadata Template group 3A. Fill in only what applies.', fields: [
     { k: 'underlay_platform', label: 'Underlay platform (URI)', type: 'uri' },
