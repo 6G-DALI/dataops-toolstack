@@ -213,8 +213,12 @@ def update(catalogue_id: str, dataset_id: str, changes: dict) -> dict:
             g.add((s, DCTERMS.license, URIRef(changes["license"].strip())))
     params = {"catalogue": catalogue_id}
     if level is not None:
-        g.set((s, DCTERMS.accessRights, URIRef(piveau_access.ACCESS_RIGHT + _RIGHT_OF_LEVEL[level])))
         params.update(accessLevel=level, publicationStatus="published")
+    # dct:accessRights follows the level piveau enforces, also when the level is not changed: a record written by
+    # the asset monitor from a metadata.json may say PUBLIC for a dataset piveau keeps internal.
+    rights_level = level or (_level(catalogue_id, dataset_id) if piveau_access.enabled() else None)
+    if rights_level in _RIGHT_OF_LEVEL:
+        g.set((s, DCTERMS.accessRights, URIRef(piveau_access.ACCESS_RIGHT + _RIGHT_OF_LEVEL[rights_level])))
 
     r = _call("PUT", f"/datasets/{dataset_id}", body=g.serialize(format="turtle"), params=params)
     if r.status_code not in (200, 201, 204, 304):

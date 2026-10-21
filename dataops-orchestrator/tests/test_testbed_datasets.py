@@ -77,6 +77,11 @@ def test_an_edit_keeps_the_files_and_sets_visibility(hub):
     assert d["description"] == "Only this" and d["title"] == "New title" and d["access_level"] == "internal"
     assert "accessLevel" not in hub["puts"][-1]  # without a visibility change the level is left alone
 
+    # A record that claims more than piveau enforces (as the asset monitor wrote it) is put right by any edit.
+    hub["ttl"][DS] = hub["ttl"][DS].replace("access-right/NON_PUBLIC", "access-right/PUBLIC")
+    assert td.summary("6g-dali-pamak", DS)["access_rights"] == "PUBLIC"
+    assert td.update("6g-dali-pamak", DS, {"description": "Again"})["access_rights"] == "NON_PUBLIC"
+
     d = td.update("6g-dali-pamak", DS, {"license": ""})
     assert d["license"] == "" and not list(Graph().parse(data=hub["ttl"][DS], format="turtle").objects(None, DCTERMS.license))
 
