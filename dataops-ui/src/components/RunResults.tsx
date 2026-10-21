@@ -138,7 +138,7 @@ const CSV_WINDOW_BYTES = 4 * 1024 * 1024
 /** Where the walk gives up rather than pulling something unbounded into a tab. */
 const CSV_TOTAL_CAP = 64 * 1024 * 1024
 /** Points actually drawn; beyond this observed values are stride-sampled. */
-const MAX_PLOT_POINTS = 8000
+const MAX_PLOT_POINTS = 1000
 
 /**
  * Minimal RFC4180-ish parser: pandas quotes any field containing a comma.
