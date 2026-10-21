@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { FiDownload, FiCopy, FiUpload, FiSave, FiFilePlus, FiTrash2 } from 'react-icons/fi'
 import { getTestbed } from '../api/airflow'
 import {
-  ALL_FIELDS, SECTIONS, TESTBED_KEYS, defaultValues, importMetadata, newDatasetValues, toJson, uuid,
+  ALL_FIELDS, SECTIONS, TESTBED_KEYS, defaultValues, importMetadata, newDatasetValues, toJson,
   validateMetadata,
 } from '../map/metadataJson'
 import type { FieldDef, Values } from '../map/metadataJson'
@@ -76,16 +76,10 @@ function FieldInput({ f, value, error, warning, onChange }: {
     control = <textarea id={id} className={cls} rows={f.type === 'list' ? 3 : 3} spellCheck={false} value={str} onChange={e => onChange(e.target.value)} />
   } else {
     const type = ({ date: 'date', email: 'email', int: 'number' } as Record<string, string>)[f.type] ?? 'text'
-    const input = (
+    control = (
       <input id={id} className={cls} type={type} min={type === 'number' ? 0 : undefined} step={type === 'number' ? 1 : undefined}
         list={f.suggest ? `${id}-list` : undefined} value={str} onChange={e => onChange(e.target.value)} />
     )
-    control = f.uuid ? (
-      <div className="input-group input-group-sm">
-        {input}
-        <button className="btn btn-outline-secondary" type="button" onClick={() => onChange(uuid())}>Generate</button>
-      </div>
-    ) : input
   }
   const [badge, badgeText] = f.req ? OBLIGATION[f.req] : [null, null]
   return (

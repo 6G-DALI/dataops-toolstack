@@ -21,8 +21,6 @@ export interface FieldDef {
   suggest?: string[]
   hint?: string
   wide?: boolean
-  /** Offers a "Generate" button that fills in a UUID. */
-  uuid?: boolean
   /** A select whose values "true"/"false" are written as JSON booleans. */
   boolish?: boolean
   /** A list whose every entry must be a URI. */
@@ -56,7 +54,6 @@ export const SECTIONS: SectionDef[] = [
     { k: 'description', label: 'Description', type: 'textarea', req: 'M', wide: true, hint: 'Free text describing the content.' },
     { k: 'issued', label: 'Issued', type: 'date', req: 'M', hint: 'Date first published. modified is set to the same value on first registration.' },
     { k: 'version', label: 'Version', type: 'text', req: 'O', hint: 'e.g. "1.0"' },
-    { k: 'identifier', label: 'Identifier', type: 'text', req: 'O', uuid: true, hint: 'UUID or DOI. If empty, the dataset directory name is used.' },
     { k: 'spatial', label: 'Spatial coverage', type: 'text', req: 'R', hint: 'e.g. "Athens, Greece"' },
     { k: 'temporal_start', label: 'Temporal coverage start', type: 'date', req: 'R' },
     { k: 'temporal_end', label: 'Temporal coverage end', type: 'date', req: 'R', hint: 'Start and end are only published together.' },
@@ -68,7 +65,6 @@ export const SECTIONS: SectionDef[] = [
     { k: 'gdpr_compliant', label: 'The dataset complies with GDPR', type: 'bool', req: 'M', def: true },
     { k: 'fair_compliant', label: 'The dataset follows the FAIR principles', type: 'bool', req: 'M', def: true },
     { k: 'contains_pii', label: 'The data contains personally identifiable information', type: 'bool', req: 'M', def: false },
-    { k: 'exposed_through', label: 'Exposed through (URI)', type: 'uri', req: 'O', hint: 'Data space endpoint serving the dataset. Normally left to the platform.' },
   ] },
   { id: 'class', title: 'Classification', desc: 'How people find it.', fields: [
     { k: 'theme', label: 'EU data theme', type: 'text', req: 'R', def: 'TECH', suggest: THEMES, hint: 'Most 5G/6G datasets use TECH.' },
@@ -89,7 +85,6 @@ export const SECTIONS: SectionDef[] = [
   ] },
   { id: 'content', title: 'Content description', desc: "How the data was measured. Each file's columns, format, size and checksum are read from the file itself and attached to its catalogue entry.", fields: [
     { k: 'measurement_technique', label: 'Measurement technique', type: 'text', req: 'R', wide: true, hint: 'e.g. "Prometheus-based 5G NR KPI monitoring with 1s scrape interval"' },
-    { k: 'columns', label: 'Columns / variables', type: 'list', req: 'O', wide: true, hint: 'Only for files without a header line (not CSV or TSV): a CSV\'s columns are read from its header.' },
   ] },
   { id: 'infra', title: 'Testbed context: infrastructure', tc: true, desc: 'SNS-JU Common Metadata Template group 3A. Fill in only what applies.', fields: [
     { k: 'underlay_platform', label: 'Underlay platform (URI)', type: 'uri' },
@@ -229,7 +224,6 @@ export function validateMetadata(values: Values): Validation {
   const te = str('temporal_end')
   if (!!ts !== !!te) err(ts ? 'temporal_end' : 'temporal_start', 'Provide both start and end, or neither.')
   if (ts && te && realDate(ts) && realDate(te) && ts > te) err('temporal_end', 'End is before start.')
-  if (/\s|\//.test(str('identifier'))) err('identifier', 'No spaces or slashes.')
   if (data.contains_pii && data.gdpr_compliant) warn('contains_pii', 'Contains PII: double-check the GDPR declaration.')
   return { errors, warnings }
 }
@@ -262,14 +256,4 @@ export function importMetadata(base: Values, json: unknown): Values {
     else next[f.k] = String(v)
   }
   return next
-}
-
-/** A random v4 UUID; crypto.randomUUID needs a secure context, which a plain-http deployment is not. */
-export function uuid(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
-  const b = crypto.getRandomValues(new Uint8Array(16))
-  b[6] = (b[6] & 0x0f) | 0x40
-  b[8] = (b[8] & 0x3f) | 0x80
-  const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('')
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
