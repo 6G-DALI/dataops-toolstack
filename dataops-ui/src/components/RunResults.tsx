@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { FiDownload, FiExternalLink } from 'react-icons/fi'
-import { getDagRun, getDatasets, getDistributions, getRunArtifactCsv, getRunArtifacts, getRunArtifactText, getRunArtifactTimeline } from '../api/airflow'
+import { getDagRun, getDatasets, getDistributions, getRunArtifactCsv, getRunArtifacts, getRunArtifactText } from '../api/airflow'
 import type { RunArtifact, RunArtifacts, SeriesPoint } from '../types'
 import ErrorMessage from './ErrorMessage'
 import LoadingSpinner from './LoadingSpinner'
@@ -139,6 +139,8 @@ const CSV_WINDOW_BYTES = 512 * 1024
 const CSV_TOTAL_CAP = 64 * 1024 * 1024
 /** Points actually drawn; beyond this observed values are stride-sampled. */
 const MAX_PLOT_POINTS = 1000
+/** One page of the windowed view is this many bytes of the reference frame. */
+const PAGE_WINDOW_BYTES = 128 * 1024
 
 /**
  * Minimal RFC4180-ish parser: pandas quotes any field containing a comma.
@@ -247,16 +249,6 @@ function timeAxis(frame: Frame, preferred: string[]): TimeAxis | null {
   return null
 }
 
-/** A single timestamp cell as milliseconds, read the way `timeAxis` reads a column. */
-function instantMs(value: string): number {
-  const n = Number(value)
-  if (value.trim() !== '' && !Number.isNaN(n)) {
-    const scale = epochScale(Math.abs(n))
-    return scale ? scale(n) : NaN
-  }
-  return Date.parse(value)
-}
-
 type Frame = { header: string[], rows: string[][] }
 type StageId = 'raw' | 'soft' | 'remediated' | 'imputed_train' | 'imputed_test' | 'imputed_final'
 
@@ -279,6 +271,112 @@ function caughtUpTo(frame: Frame | null, bound: number | null, done: boolean, ti
   const lastRow = frame.rows[frame.rows.length - 1]
   const lastMs = axis && lastRow ? axis.toMs(lastRow[axis.idx]) : null
   return lastMs !== null && !Number.isNaN(lastMs) && lastMs >= bound
+}
+
+/**
+ * Windowed reading of a CSV whose rows are in time order.
+ *
+ * Nothing here downloads a whole frame. A page is one byte window of the
+ * reference frame, and any other frame is searched for the same slice of time by
+ * interpolating on its timestamps, a few ranged requests whatever the page. Rows
+ * outside the slice are dropped as they are read. Time order is assumed, not
+ * checked — the pipeline writes its frames that way.
+ */
+interface Win { rows: string[][], times: number[], next: number }
+interface StageSource {
+  header: string[]
+  total: number
+  firstMs: number
+  lastMs: number
+  read: (offset: number) => Promise<Win>
+}
+
+async function openSource(
+  dagId: string, runId: string, artifact: string, timeNames: string[],
+): Promise<StageSource | null> {
+  const cache = new Map<number, Win>()
+  let axis: TimeAxis | null = null
+  let header: string[] = []
+  let total = 0
+  const timesOf = (rows: string[][]) => (axis ? rows.map(r => axis!.toMs(r[axis!.idx])) : [])
+
+  const read = async (offset: number): Promise<Win> => {
+    const hit = cache.get(offset)
+    if (hit) return hit
+    const chunk = await getRunArtifactText(dagId, runId, artifact, PAGE_WINDOW_BYTES, offset)
+    let rows: string[][]
+    if (offset === 0) {
+      const parsed = parseCsv(chunk.text)
+      header = parsed.header
+      rows = parsed.rows
+      total = chunk.totalSize
+    } else {
+      rows = splitCsvRows(chunk.text)
+    }
+    const win = { rows, times: timesOf(rows), next: chunk.nextOffset }
+    cache.set(offset, win)
+    return win
+  }
+
+  const first = await read(0)
+  axis = timeAxis({ header, rows: first.rows }, timeNames)
+  if (!axis || total <= 0) return null
+  first.times = timesOf(first.rows)
+
+  const finite = (times: number[]) => times.filter(t => !Number.isNaN(t))
+  const firstMs = finite(first.times)[0]
+  const tail = total <= PAGE_WINDOW_BYTES ? first : await read(Math.max(0, total - PAGE_WINDOW_BYTES))
+  const lastTimes = finite(tail.times)
+  if (firstMs === undefined || lastTimes.length === 0) return null
+  return { header, total, firstMs, lastMs: lastTimes[lastTimes.length - 1], read }
+}
+
+/** The time of the first row at or after `offset`, or null past the end. */
+async function firstTimeAt(src: StageSource, offset: number): Promise<number | null> {
+  if (offset >= src.total) return null
+  const win = await src.read(offset)
+  return win.times.find(t => !Number.isNaN(t)) ?? null
+}
+
+/**
+ * A byte offset to start reading from so that time `t` is in, or after, the
+ * first window — interpolating on the file's timestamps, bisecting when that
+ * stops closing in. Few requests, whatever the file's size.
+ */
+async function locate(src: StageSource, t: number): Promise<number> {
+  if (t <= src.firstMs) return 0
+  if (t >= src.lastMs) return Math.max(0, src.total - PAGE_WINDOW_BYTES)
+  let lo = 0, hi = src.total, tLo = src.firstMs, tHi = src.lastMs
+  for (let i = 0; i < 24 && hi - lo > PAGE_WINDOW_BYTES; i++) {
+    const frac = i % 3 === 2 || tHi <= tLo ? 0.5 : (t - tLo) / (tHi - tLo)
+    const guess = Math.floor(lo + frac * (hi - lo) - PAGE_WINDOW_BYTES / 2)
+    const offset = Math.min(Math.max(guess, lo), hi - 1)
+    const win = await src.read(offset)
+    const times = win.times.filter(x => !Number.isNaN(x))
+    if (times.length === 0) { lo = Math.max(win.next, lo + 1); continue }
+    if (t < times[0]) { hi = offset; tHi = times[0] }
+    else if (t > times[times.length - 1] && win.next > offset) { lo = win.next; tLo = times[times.length - 1] }
+    else return offset
+  }
+  return lo
+}
+
+/** Rows with `from <= time < until`, read forward from `start`; the rest are dropped. */
+async function collect(src: StageSource, start: number, from: number, until: number): Promise<string[][]> {
+  const out: string[][] = []
+  let offset = start
+  for (let guard = 0; guard < 4096; guard++) {
+    const win = await src.read(offset)
+    for (let i = 0; i < win.rows.length; i++) {
+      const t = win.times[i]
+      if (Number.isNaN(t)) continue
+      if (t >= until) return out
+      if (t >= from) out.push(win.rows[i])
+    }
+    if (win.next <= offset || win.next >= src.total) return out
+    offset = win.next
+  }
+  return out
 }
 
 /**
@@ -345,13 +443,16 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
   } | null>(null)
   const [csvError, setCsvError] = useState<string | null>(null)
   /**
-   * The run's page boundaries, cut by the orchestrator so the browser never
-   * downloads a whole frame just to know where the pages are. `undefined`
-   * while it is being asked for; `null` when the server has none to give (no
-   * timestamp column, an older orchestrator), which sends the tab down the
-   * full-fetch path it always had.
+   * The windowed view of a time-ordered run: how many pages the reference frame
+   * has, from its size alone. `undefined` while the reference frame is being
+   * opened; `null` when it has no usable timestamp column, which sends the tab
+   * down the full-fetch path it always had.
    */
-  const [index, setIndex] = useState<{ pages: { min: number, max: number }[] } | null | undefined>(undefined)
+  const [win, setWin] = useState<{ pageCount: number } | null | undefined>(undefined)
+  /** The time slice of the page on screen, once its boundaries have been read. */
+  const [pageRange, setPageRange] = useState<{ page: number, min: number, max: number } | null>(null)
+  /** Each stage's windowed reader, opened on first use; null for one without a time axis. */
+  const sourcesRef = useRef<Partial<Record<StageId, StageSource | null>>>({})
   // Mirrors `frames` for the loader below to read synchronously — an async
   // loop reading `frames` itself would see whatever was current when the
   // closure was created, not what a concurrent chunk just appended.
@@ -536,13 +637,13 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
    * that failed before remediation, or one from before the raw frame was
    * uploaded, still renders everything it does have.
    *
-   * The pages come first, from the orchestrator (`getRunArtifactTimeline`) —
-   * only their boundaries cross the wire. With those in hand every wanted frame
-   * is loaded lazily, only as far as the page on screen, by the effect after
-   * `pages`: a run's whole duration is never downloaded to show one window of
-   * it. When the server cannot give pages (an older orchestrator, a frame with
-   * no timestamp column) the reference stage (`pickRefStage`) is fetched to
-   * completion instead, and `pages` is cut from it here, as it always was.
+   * The reference stage (`pickRefStage`) is opened first: one small window for
+   * its header and first timestamps, and one for its last. That is enough to
+   * page it, and the page effect below then reads only the page on screen from
+   * every frame — a run's whole duration is never downloaded to show one window
+   * of it. A reference frame with no timestamp column cannot be read that way,
+   * so it is fetched to completion instead and `pages` is cut from it here, as
+   * it always was.
    */
   useEffect(() => {
     if (!data) return
@@ -553,7 +654,9 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     loadingRef.current = new Set()
     loadCancelledRef.current = false
     setFrames(null)
-    setIndex(undefined)
+    setWin(undefined)
+    setPageRange(null)
+    sourcesRef.current = {}
     // A new run reuses the same StageId keys ('soft', 'imputed_train', …) —
     // without this a stage this run hasn't fetched a byte of yet could read
     // as "ready" from the previous run's flag and paint nothing as if it
@@ -571,19 +674,17 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
           offset: result.fetched, done: !result.truncated, header: null,
         }
         setFrames({ stages: { [ref.id]: parseCsv(result.text) }, truncated: result.truncated })
-        setIndex(null)
+        setWin(null)
       })
 
-    getRunArtifactTimeline(dagId, runId, ref.artifact, MAX_PLOT_POINTS, timeNames)
-      .then(res => {
+    openSource(dagId, runId, ref.artifact, timeNames)
+      .then(src => {
         if (cancelled) return
-        const pages = res.pages
-          .map(p => ({ min: instantMs(p.min), max: instantMs(p.max) }))
-          .filter(p => !Number.isNaN(p.min) && !Number.isNaN(p.max))
-        if (pages.length === 0) return fullFetch()
+        if (!src) return fullFetch()
+        sourcesRef.current[ref.id] = src
         setFrames({ stages: {}, truncated: false })
-        setIndex({ pages })
-      }, () => fullFetch()) // no timeline from the server is not a reason to show nothing
+        setWin({ pageCount: Math.max(1, Math.ceil(src.total / PAGE_WINDOW_BYTES)) })
+      })
       .catch(e => { if (!cancelled) setCsvError((e as Error).message) })
     return () => { cancelled = true; loadCancelledRef.current = true }
   }, [data, dagId, runId, timeNames])
@@ -724,8 +825,6 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
   }, [frames])
 
   const pages = useMemo<{ min: number, max: number }[]>(() => {
-    // Cut by the orchestrator, when it could — nothing to derive then.
-    if (index) return index.pages
     const ref = refFrame
     if (!ref || ref.rows.length === 0) return []
     const axis = timeAxis(ref, timeNames)
@@ -744,11 +843,14 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
       chunks.push({ min: slice[0], max: slice[slice.length - 1] })
     }
     return chunks
-  }, [index, refFrame, timeNames])
+  }, [refFrame, timeNames])
 
   const [page, setPage] = useState(0)
-  const pageCount = pages.length
-  const pageBounds = pageCount > 0 ? pages[Math.min(page, pageCount - 1)] : null
+  const pageCount = win ? win.pageCount : pages.length
+  // Windowed: the slice read for this page, once there is one. Otherwise cut from the whole frame.
+  const pageBounds = win
+    ? (pageRange && pageRange.page === Math.min(page, pageCount - 1) ? pageRange : null)
+    : (pageCount > 0 ? pages[Math.min(page, pageCount - 1)] : null)
   // The page window, once there is one, replaces the whole-run domain — both
   // charts are now showing a stretch of the timeline, not all of it.
   const pagedXDomain: [number, number] | undefined = pageBounds ? [pageBounds.min, pageBounds.max] : xDomain
@@ -775,12 +877,54 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     const names = new Set(data.artifacts.map(a => a.name))
     const wanted = FETCHED.filter(st => names.has(st.artifact))
     const ref = pickRefStage(wanted)
-    // With pages from the server no stage is fetched whole up front, so none is exempt.
-    return wanted.filter(st => index || st.id !== ref?.id).map(st => st.id)
-  }, [data, index])
+    return wanted.filter(st => st.id !== ref?.id).map(st => st.id)
+  }, [data])
   /** True once every stage the Data-tab chart can draw from has caught up to
    *  the page on screen — gates painting it, per the loader effect below. */
-  const pageReady = otherStageIds.every(id => stageReady[id] === true)
+  const pageReady = win
+    ? pageBounds !== null
+    : otherStageIds.every(id => stageReady[id] === true)
+
+  /**
+   * Windowed view: reads the page on screen from every frame, in one go. The
+   * reference frame's page is one byte window; its slice of time is bounded by
+   * the first timestamps of that window and the next, and every other frame is
+   * searched for the same slice (`locate`, `collect`). The whole page is painted
+   * once all of them have arrived, so no stage is ever drawn half-loaded.
+   */
+  useEffect(() => {
+    if (!data || !win) return
+    const names = new Set(data.artifacts.map(a => a.name))
+    const wanted = FETCHED.filter(st => names.has(st.artifact))
+    const ref = pickRefStage(wanted)
+    const refSrc = ref ? sourcesRef.current[ref.id] : null
+    if (!ref || !refSrc) return
+    const current = Math.min(page, win.pageCount - 1)
+    const last = current >= win.pageCount - 1
+    let cancelled = false
+    setCsvError(null)
+
+    ;(async () => {
+      const min = current === 0 ? refSrc.firstMs : (await firstTimeAt(refSrc, current * PAGE_WINDOW_BYTES)) ?? refSrc.lastMs
+      const nextMin = last ? null : await firstTimeAt(refSrc, (current + 1) * PAGE_WINDOW_BYTES)
+      const until = nextMin ?? Infinity
+      const stages: Partial<Record<StageId, Frame>> = {}
+      await Promise.all(wanted.map(async st => {
+        if (!(st.id in sourcesRef.current)) {
+          sourcesRef.current[st.id] = await openSource(dagId, runId, st.artifact, timeNames)
+        }
+        const src = sourcesRef.current[st.id]
+        if (!src) return
+        const isRef = st.id === ref.id
+        const start = isRef ? current * PAGE_WINDOW_BYTES : await locate(src, current === 0 ? -Infinity : min)
+        stages[st.id] = { header: src.header, rows: await collect(src, start, isRef || current === 0 ? -Infinity : min, until) }
+      }))
+      if (cancelled) return
+      setFrames({ stages, truncated: false })
+      setPageRange({ page: current, min, max: nextMin ?? refSrc.lastMs })
+    })().catch(e => { if (!cancelled) setCsvError((e as Error).message) })
+    return () => { cancelled = true }
+  }, [data, win, page, dagId, runId, timeNames])
 
   /**
    * Every frame besides the reference stage, walked forward only as far as
@@ -793,12 +937,12 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
    * advances together, in step with the page.
    */
   useEffect(() => {
-    if (!data || index === undefined) return
+    if (!data || win !== null) return
     const names = new Set(data.artifacts.map(a => a.name))
     const wanted = FETCHED.filter(st => names.has(st.artifact))
     const ref = pickRefStage(wanted)
     if (!ref) return
-    const others = wanted.filter(st => index || st.id !== ref.id)
+    const others = wanted.filter(st => st.id !== ref.id)
     const untilMs = pageBounds ? pageBounds.max : null
     others.forEach(st => { untilMsRef.current[st.id] = untilMs })
 
@@ -880,7 +1024,7 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     }
 
     others.forEach(st => { void extend(st) })
-  }, [data, index, dagId, runId, pageBounds, timeNames])
+  }, [data, win, dagId, runId, pageBounds, timeNames])
 
   const series = useMemo<{ points: SeriesPoint[], windowed: boolean, isTime: boolean, total: number }>(() => {
     if (!plotFrame || !plottedColumn) return { points: [], windowed: false, isTime: false, total: 0 }
