@@ -134,13 +134,11 @@ const UNIT_SUFFIXES = ['_mb', '_ms']
  * cut off a quarter of the way through. Walking the windows costs a few more
  * round trips and gets the whole file.
  */
-const CSV_WINDOW_BYTES = 4 * 1024 * 1024
+const CSV_WINDOW_BYTES = 512 * 1024
 /** Where the walk gives up rather than pulling something unbounded into a tab. */
 const CSV_TOTAL_CAP = 64 * 1024 * 1024
 /** Points actually drawn; beyond this observed values are stride-sampled. */
 const MAX_PLOT_POINTS = 1000
-/** Window for the page-by-page walk: a page is ~1000 rows, so far less than `CSV_WINDOW_BYTES`. */
-const CSV_PAGE_WINDOW_BYTES = 1024 * 1024
 
 /**
  * Minimal RFC4180-ish parser: pandas quotes any field containing a comma.
@@ -833,7 +831,7 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
             break
           }
 
-          const chunk = await getRunArtifactText(dagId, runId, st.artifact, index ? CSV_PAGE_WINDOW_BYTES : CSV_WINDOW_BYTES, cursor.offset)
+          const chunk = await getRunArtifactText(dagId, runId, st.artifact, CSV_WINDOW_BYTES, cursor.offset)
           // The server sends the CSV header only in the first window of a
           // walk — a continuation chunk is pure data (dataops-orchestrator's
           // own contract), so only the very first fetch for this stage runs
