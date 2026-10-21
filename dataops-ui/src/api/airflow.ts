@@ -370,7 +370,6 @@ export async function getRunArtifactText(
 }
 
 /**
-/**
  * How a CSV artifact's timeline divides into pages of `pageSize` rows, without
  * the rows themselves. Each page is its first and last timestamp as written in
  * the file; `time_column` is null (and `pages` empty) when no column reads as
@@ -391,6 +390,7 @@ export function getRunArtifactTimeline(
   )
 }
 
+/**
  * The whole of a CSV artifact, fetched as a series of ranged requests.
  *
  * The endpoint serves a byte window at a time so a large frame is never pulled
