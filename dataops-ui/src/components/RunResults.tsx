@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { FiDownload, FiExternalLink } from 'react-icons/fi'
-import { getDagRun, getDatasets, getDistributions, getRunArtifactCsv, getRunArtifacts, getRunArtifactText } from '../api/airflow'
+import { getDagRun, getDatasets, getDistributions, getRunArtifactCsv, getRunArtifacts, getRunArtifactText, getRunArtifactTimeline } from '../api/airflow'
 import type { RunArtifact, RunArtifacts, SeriesPoint } from '../types'
 import ErrorMessage from './ErrorMessage'
 import LoadingSpinner from './LoadingSpinner'
@@ -139,6 +139,8 @@ const CSV_WINDOW_BYTES = 4 * 1024 * 1024
 const CSV_TOTAL_CAP = 64 * 1024 * 1024
 /** Points actually drawn; beyond this observed values are stride-sampled. */
 const MAX_PLOT_POINTS = 1000
+/** Window for the page-by-page walk: a page is ~1000 rows, so far less than `CSV_WINDOW_BYTES`. */
+const CSV_PAGE_WINDOW_BYTES = 1024 * 1024
 
 /**
  * Minimal RFC4180-ish parser: pandas quotes any field containing a comma.
@@ -247,6 +249,16 @@ function timeAxis(frame: Frame, preferred: string[]): TimeAxis | null {
   return null
 }
 
+/** A single timestamp cell as milliseconds, read the way `timeAxis` reads a column. */
+function instantMs(value: string): number {
+  const n = Number(value)
+  if (value.trim() !== '' && !Number.isNaN(n)) {
+    const scale = epochScale(Math.abs(n))
+    return scale ? scale(n) : NaN
+  }
+  return Date.parse(value)
+}
+
 type Frame = { header: string[], rows: string[][] }
 type StageId = 'raw' | 'soft' | 'remediated' | 'imputed_train' | 'imputed_test' | 'imputed_final'
 
@@ -334,6 +346,14 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     truncated: boolean
   } | null>(null)
   const [csvError, setCsvError] = useState<string | null>(null)
+  /**
+   * The run's page boundaries, cut by the orchestrator so the browser never
+   * downloads a whole frame just to know where the pages are. `undefined`
+   * while it is being asked for; `null` when the server has none to give (no
+   * timestamp column, an older orchestrator), which sends the tab down the
+   * full-fetch path it always had.
+   */
+  const [index, setIndex] = useState<{ pages: { min: number, max: number }[] } | null | undefined>(undefined)
   // Mirrors `frames` for the loader below to read synchronously — an async
   // loop reading `frames` itself would see whatever was current when the
   // closure was created, not what a concurrent chunk just appended.
@@ -439,48 +459,6 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     return () => { cancelled = true }
   }, [data?.dataset_id, data?.asset_id, data?.catalogue_id])
 
-  /**
-   * Frames are fetched only once the artifact list says which exist. A run
-   * that failed before remediation, or one from before the raw frame was
-   * uploaded, still renders everything it does have.
-   *
-   * Only the reference stage (`pickRefStage`) is fetched here, to completion
-   * — it is what `pages` below cuts into windows, so its row count has to be
-   * known up front. Every other wanted frame is loaded lazily, only as far as
-   * the page on screen, by the effect after `pages` — fetching a frame's
-   * whole duration when paging shows one window of it at a time defeats the
-   * point of paging.
-   */
-  useEffect(() => {
-    if (!data) return
-    const names = new Set(data.artifacts.map(a => a.name))
-    const wanted = FETCHED.filter(st => names.has(st.artifact))
-    const ref = pickRefStage(wanted)
-    cursorsRef.current = {}
-    loadingRef.current = new Set()
-    loadCancelledRef.current = false
-    setFrames(null)
-    // A new run reuses the same StageId keys ('soft', 'imputed_train', …) —
-    // without this a stage this run hasn't fetched a byte of yet could read
-    // as "ready" from the previous run's flag and paint nothing as if it
-    // were a deliberately empty series.
-    setStageReady({})
-    if (!ref) return
-
-    let cancelled = false
-    setCsvError(null)
-    getRunArtifactCsv(dagId, runId, ref.artifact, CSV_WINDOW_BYTES, CSV_TOTAL_CAP)
-      .then(result => {
-        if (cancelled) return
-        cursorsRef.current[ref.id] = {
-          offset: result.fetched, done: !result.truncated, header: null,
-        }
-        setFrames({ stages: { [ref.id]: parseCsv(result.text) }, truncated: result.truncated })
-      })
-      .catch(e => { if (!cancelled) setCsvError((e as Error).message) })
-    return () => { cancelled = true; loadCancelledRef.current = true }
-  }, [data, dagId, runId])
-
   const available = useMemo(
     () => STAGES.filter(st => frames?.stages[st.id]),
     [frames],
@@ -554,6 +532,63 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     () => (plotFrame ? timeAxis(plotFrame, timeNames) : null),
     [plotFrame, timeNames],
   )
+
+  /**
+   * Frames are fetched only once the artifact list says which exist. A run
+   * that failed before remediation, or one from before the raw frame was
+   * uploaded, still renders everything it does have.
+   *
+   * The pages come first, from the orchestrator (`getRunArtifactTimeline`) —
+   * only their boundaries cross the wire. With those in hand every wanted frame
+   * is loaded lazily, only as far as the page on screen, by the effect after
+   * `pages`: a run's whole duration is never downloaded to show one window of
+   * it. When the server cannot give pages (an older orchestrator, a frame with
+   * no timestamp column) the reference stage (`pickRefStage`) is fetched to
+   * completion instead, and `pages` is cut from it here, as it always was.
+   */
+  useEffect(() => {
+    if (!data) return
+    const names = new Set(data.artifacts.map(a => a.name))
+    const wanted = FETCHED.filter(st => names.has(st.artifact))
+    const ref = pickRefStage(wanted)
+    cursorsRef.current = {}
+    loadingRef.current = new Set()
+    loadCancelledRef.current = false
+    setFrames(null)
+    setIndex(undefined)
+    // A new run reuses the same StageId keys ('soft', 'imputed_train', …) —
+    // without this a stage this run hasn't fetched a byte of yet could read
+    // as "ready" from the previous run's flag and paint nothing as if it
+    // were a deliberately empty series.
+    setStageReady({})
+    if (!ref) return
+
+    let cancelled = false
+    setCsvError(null)
+
+    const fullFetch = () => getRunArtifactCsv(dagId, runId, ref.artifact, CSV_WINDOW_BYTES, CSV_TOTAL_CAP)
+      .then(result => {
+        if (cancelled) return
+        cursorsRef.current[ref.id] = {
+          offset: result.fetched, done: !result.truncated, header: null,
+        }
+        setFrames({ stages: { [ref.id]: parseCsv(result.text) }, truncated: result.truncated })
+        setIndex(null)
+      })
+
+    getRunArtifactTimeline(dagId, runId, ref.artifact, MAX_PLOT_POINTS, timeNames)
+      .then(res => {
+        if (cancelled) return
+        const pages = res.pages
+          .map(p => ({ min: instantMs(p.min), max: instantMs(p.max) }))
+          .filter(p => !Number.isNaN(p.min) && !Number.isNaN(p.max))
+        if (pages.length === 0) return fullFetch()
+        setFrames({ stages: {}, truncated: false })
+        setIndex({ pages })
+      }, () => fullFetch()) // no timeline from the server is not a reason to show nothing
+      .catch(e => { if (!cancelled) setCsvError((e as Error).message) })
+    return () => { cancelled = true; loadCancelledRef.current = true }
+  }, [data, dagId, runId, timeNames])
 
   // The timeline is the axis, not a measure — offering it as something to plot
   // against itself is a diagonal line and a wasted slot in the picker.
@@ -691,6 +726,8 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
   }, [frames])
 
   const pages = useMemo<{ min: number, max: number }[]>(() => {
+    // Cut by the orchestrator, when it could — nothing to derive then.
+    if (index) return index.pages
     const ref = refFrame
     if (!ref || ref.rows.length === 0) return []
     const axis = timeAxis(ref, timeNames)
@@ -709,7 +746,7 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
       chunks.push({ min: slice[0], max: slice[slice.length - 1] })
     }
     return chunks
-  }, [refFrame, timeNames])
+  }, [index, refFrame, timeNames])
 
   const [page, setPage] = useState(0)
   const pageCount = pages.length
@@ -740,8 +777,9 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     const names = new Set(data.artifacts.map(a => a.name))
     const wanted = FETCHED.filter(st => names.has(st.artifact))
     const ref = pickRefStage(wanted)
-    return wanted.filter(st => st.id !== ref?.id).map(st => st.id)
-  }, [data])
+    // With pages from the server no stage is fetched whole up front, so none is exempt.
+    return wanted.filter(st => index || st.id !== ref?.id).map(st => st.id)
+  }, [data, index])
   /** True once every stage the Data-tab chart can draw from has caught up to
    *  the page on screen — gates painting it, per the loader effect below. */
   const pageReady = otherStageIds.every(id => stageReady[id] === true)
@@ -757,12 +795,12 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
    * advances together, in step with the page.
    */
   useEffect(() => {
-    if (!data) return
+    if (!data || index === undefined) return
     const names = new Set(data.artifacts.map(a => a.name))
     const wanted = FETCHED.filter(st => names.has(st.artifact))
     const ref = pickRefStage(wanted)
     if (!ref) return
-    const others = wanted.filter(st => st.id !== ref.id)
+    const others = wanted.filter(st => index || st.id !== ref.id)
     const untilMs = pageBounds ? pageBounds.max : null
     others.forEach(st => { untilMsRef.current[st.id] = untilMs })
 
@@ -795,7 +833,7 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
             break
           }
 
-          const chunk = await getRunArtifactText(dagId, runId, st.artifact, CSV_WINDOW_BYTES, cursor.offset)
+          const chunk = await getRunArtifactText(dagId, runId, st.artifact, index ? CSV_PAGE_WINDOW_BYTES : CSV_WINDOW_BYTES, cursor.offset)
           // The server sends the CSV header only in the first window of a
           // walk — a continuation chunk is pure data (dataops-orchestrator's
           // own contract), so only the very first fetch for this stage runs
@@ -844,7 +882,7 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     }
 
     others.forEach(st => { void extend(st) })
-  }, [data, dagId, runId, pageBounds, timeNames])
+  }, [data, index, dagId, runId, pageBounds, timeNames])
 
   const series = useMemo<{ points: SeriesPoint[], windowed: boolean, isTime: boolean, total: number }>(() => {
     if (!plotFrame || !plottedColumn) return { points: [], windowed: false, isTime: false, total: 0 }

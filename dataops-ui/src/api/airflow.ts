@@ -370,6 +370,27 @@ export async function getRunArtifactText(
 }
 
 /**
+/**
+ * How a CSV artifact's timeline divides into pages of `pageSize` rows, without
+ * the rows themselves. Each page is its first and last timestamp as written in
+ * the file; `time_column` is null (and `pages` empty) when no column reads as
+ * a timestamp.
+ */
+export function getRunArtifactTimeline(
+  dagId: string,
+  runId: string,
+  name: string,
+  pageSize: number,
+  timeColumns: string[],
+): Promise<{ time_column: string | null, rows: number, pages: { min: string, max: string }[] }> {
+  const params = new URLSearchParams({ page_size: String(pageSize) })
+  timeColumns.forEach(c => params.append('time_column', c))
+  return request(
+    `/dags/${encodeURIComponent(dagId)}/runs/${encodeURIComponent(runId)}`
+    + `/artifacts/${encodeURIComponent(name)}/timeline?${params}`,
+  )
+}
+
  * The whole of a CSV artifact, fetched as a series of ranged requests.
  *
  * The endpoint serves a byte window at a time so a large frame is never pulled

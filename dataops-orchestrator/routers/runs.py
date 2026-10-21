@@ -1,7 +1,11 @@
+import csv
 import json
+import math
 import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, Response
+from starlette.concurrency import run_in_threadpool
 
 import airflow_client as af
 import datalake_client as dlc
@@ -253,3 +257,136 @@ async def get_run_artifact(
             "X-Artifact-Next-Offset": str(next_offset),
         },
     )
+
+
+# ── Timeline index ────────────────────────────────────────────────────────────
+#
+# The Data tab pages a run's timeline, and cutting the pages needs every row's
+# timestamp. Fetching the whole CSV into the browser for that is what made the tab
+# slow, so the pages are cut here, next to the storage, and only their boundaries
+# are sent. The boundaries are the cells' own text rather than numbers: the browser
+# reads them with its own date parser, so a timestamp without a zone means the same
+# instant to the page as it does to the rows it filters.
+
+_MAX_TIMELINE_BYTES = 512 * 1024 * 1024
+
+
+def _parse_instant(value: str) -> float | None:
+    """A cell as milliseconds since the epoch, or None if it is not a timestamp.
+
+    Mirrors the Data tab's reading of a time column (RunResults.tsx timeAxis): a
+    number is an epoch in seconds, milliseconds or microseconds judged by its size,
+    and anything too small to be an epoch is just a number; text is an ISO date.
+    """
+    v = value.strip()
+    if not v or v.lower() == "nan":
+        return None
+    try:
+        n = float(v)
+    except ValueError:
+        try:
+            moment = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        return moment.timestamp() * 1000
+    n = abs(n)
+    if not math.isfinite(n):
+        return None
+    if n >= 1e15:
+        return n / 1000
+    if n >= 1e12:
+        return n
+    if n >= 1e9:
+        return n * 1000
+    return None
+
+
+def _timeline_pages(read_window, preferred: list[str], page_size: int) -> dict:
+    """Walk a CSV `read_window(offset) -> (bytes, total)` and cut its timeline into pages.
+
+    Returns {"time_column", "rows", "pages": [{"min", "max"}]}; time_column is None
+    (and pages empty) when no column of the file reads as a timestamp.
+    """
+    header: list[str] | None = None
+    column: int | None = None
+    stamps: list[tuple[float, str]] = []
+    carry = b""
+    offset = 0
+    rows = 0
+
+    while True:
+        body, total = read_window(offset)
+        offset += len(body)
+        buf = carry + body
+        at_end = not body or offset >= total
+        if at_end:
+            carry = b""
+        else:
+            cut = buf.rfind(b"\n")
+            buf, carry = (buf[:cut + 1], buf[cut + 1:]) if cut != -1 else (b"", buf)
+        if offset > _MAX_TIMELINE_BYTES:
+            raise HTTPException(status_code=413, detail="Artifact is too large to index")
+
+        for record in csv.reader(buf.decode("utf-8", errors="replace").splitlines()):
+            if header is None:
+                header = record
+                continue
+            rows += 1
+            if column is None:
+                # Same choice as the client: the pipeline's own timestamp column
+                # first, then any column whose first filled value is a timestamp.
+                named = [header.index(n) for n in preferred if n in header]
+                for idx in [*named, *(i for i in range(len(header)) if i not in named)]:
+                    cell = record[idx] if idx < len(record) else ""
+                    if cell.strip() and cell.strip().lower() != "nan":
+                        if _parse_instant(cell) is not None:
+                            column = idx
+                            break
+                if column is None:
+                    continue
+            cell = record[column] if column < len(record) else ""
+            ms = _parse_instant(cell)
+            if ms is not None:
+                stamps.append((ms, cell))
+        if at_end:
+            break
+
+    if column is None or not stamps:
+        return {"time_column": None, "rows": rows, "pages": []}
+    stamps.sort(key=lambda s: s[0])
+    pages = [
+        {"min": stamps[i][1], "max": stamps[min(i + page_size, len(stamps)) - 1][1]}
+        for i in range(0, len(stamps), page_size)
+    ]
+    return {"time_column": header[column], "rows": rows, "pages": pages}
+
+
+@router.get("/{run_id}/artifacts/{name}/timeline")
+async def get_run_artifact_timeline(
+    dag_id: str,
+    run_id: str,
+    name: str,
+    page_size: int = Query(1000, ge=1, le=100000),
+    time_column: list[str] = Query(default=[]),
+):
+    """The page boundaries of a CSV artifact's timeline, without its rows.
+
+    `time_column` names (repeatable) are tried first as the timestamp column, in
+    order, before the file's other columns. Each page holds `page_size` rows in
+    time order and is described by its first and last timestamp, as written in
+    the file.
+    """
+    run = await af.get_dag_run(dag_id, run_id)
+    catalogue_id = (run.get("conf") or {}).get("catalogue_id")
+    key = (await _artifact_map(dag_id, run_id)).get(name)
+    if not key:
+        raise HTTPException(status_code=404, detail=f"Run produced no artifact named '{name}'")
+    if not key.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV artifacts have a timeline")
+
+    def read_window(offset: int) -> tuple[bytes, int]:
+        return _read_artifact(catalogue_id, key, max_bytes=_MAX_CSV_BYTES, offset=offset)
+
+    return await run_in_threadpool(_timeline_pages, read_window, time_column, page_size)
