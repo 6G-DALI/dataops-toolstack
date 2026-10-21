@@ -2,6 +2,7 @@ import json
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, UploadFile
+from starlette.concurrency import run_in_threadpool
 import airflow_client as af
 
 import datalake_client as dlc
@@ -161,7 +162,8 @@ async def _register_distribution(
     # Step 1: upload the file to the Data Lake (S3) first — everything below
     # (the EDC asset's dataAddress, piveau's dcat:accessURL) points at this
     # object, so it has to exist before either is registered.
-    object_key = dlc.upload_dataset_file(catalogue_id, dataset_id, object_filename, content)
+    object_key = await run_in_threadpool(
+        dlc.upload_dataset_file, catalogue_id, dataset_id, object_filename, content)
     distribution_url = f"{DATASPACE_S3_ENDPOINT_URL.rstrip('/')}/{catalogue_id}/{object_key}"
 
     # dcat:mediaType: trust the browser/client's content-type unless it's
@@ -300,7 +302,8 @@ async def delete_distribution(dataset_id: str, asset_id: str, catalogue_id: str 
     """
     piveau_result = await pdc.delete_distribution(dataset_id, catalogue_id, asset_id)
     edc_result = await edc.delete_asset(asset_id)
-    s3_deleted = dlc.delete_objects_by_prefix(catalogue_id, f"{dataset_id}/{asset_id}.")
+    s3_deleted = await run_in_threadpool(
+        dlc.delete_objects_by_prefix, catalogue_id, f"{dataset_id}/{asset_id}.")
 
     return {
         "dataset_id":     dataset_id,
@@ -327,7 +330,7 @@ async def delete_dataset(dataset_id: str, catalogue_id: str = Query(...)):
     asset_ids = await pdc.list_asset_ids(dataset_id, catalogue_id)
     edc_results = [await edc.delete_asset(asset_id) for asset_id in asset_ids]
     piveau_result = await pdc.delete_dataset(dataset_id, catalogue_id)
-    s3_deleted = dlc.delete_objects_by_prefix(catalogue_id, f"{dataset_id}/")
+    s3_deleted = await run_in_threadpool(dlc.delete_objects_by_prefix, catalogue_id, f"{dataset_id}/")
 
     return {
         "dataset_id":         dataset_id,

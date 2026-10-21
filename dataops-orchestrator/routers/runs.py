@@ -150,7 +150,9 @@ async def list_run_artifacts(dag_id: str, run_id: str):
     report = None
     report_key = artifacts.get("report_json")
     if report_key and (catalogue_id or report_key.startswith(_DATAOPS_KEY_PREFIX)):
-        body, _ = _read_artifact(catalogue_id, report_key, max_bytes=_MAX_REPORT_BYTES)
+        # boto3 is blocking: off the event loop, or one slow read stalls every request.
+        body, _ = await run_in_threadpool(
+            _read_artifact, catalogue_id, report_key, max_bytes=_MAX_REPORT_BYTES)
         try:
             # The pipeline writes report.json with Python's json, which emits NaN/Infinity
             # for missing cells. They are not valid JSON and FastAPI refuses to serialise
@@ -210,8 +212,8 @@ async def get_run_artifact(
     # the leading line would eat a good row whenever the caller passed back the
     # boundary this endpoint had just handed them.
     probe = 1 if offset and key.endswith(".csv") else 0
-    body, total = _read_artifact(
-        catalogue_id, key, max_bytes=max_bytes + probe, offset=offset - probe,
+    body, total = await run_in_threadpool(
+        _read_artifact, catalogue_id, key, max_bytes=max_bytes + probe, offset=offset - probe,
     )
     reached_end = (offset - probe) + len(body) >= total
 
