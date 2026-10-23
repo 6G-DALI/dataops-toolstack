@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import rabbitmq_consumer
 from config import HOST, PORT, CORS_ORIGINS, EDC_PROVIDER_MANAGEMENT_URL
-from routers import dags, runs, tasks, datasets, stats, services, testbeds
+from routers import dags, runs, tasks, datasets, stats, services, testbeds, monitor
 
 
 # Uvicorn only configures its own loggers; without this our application logs (the "[edc] ..." lines)
@@ -63,6 +63,7 @@ app.include_router(datasets.router)
 app.include_router(stats.router)
 app.include_router(services.router)
 app.include_router(testbeds.router)
+app.include_router(monitor.router)
 
 
 @app.exception_handler(StarletteHTTPException)

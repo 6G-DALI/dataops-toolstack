@@ -82,6 +82,10 @@ TESTBED_DB_PATH = os.getenv("TESTBED_DB_PATH", "/srv/data/testbeds.db")
 TESTBED_SECRET_KEY = os.getenv("TESTBED_SECRET_KEY", "")
 # Defaults used to derive a new testbed's identity from its slug.
 TESTBED_BUCKET_PREFIX = os.getenv("TESTBED_BUCKET_PREFIX", "6g-dali-")
+# Token the s3-asset-monitor sends (X-Monitor-Token) to read the buckets of the provisioned testbeds, so that it
+# watches them without being told (GET /monitor/buckets). Empty: the endpoint answers 503 and the monitor's
+# MONITOR_BUCKETS must list every bucket by hand.
+MONITOR_API_TOKEN = os.getenv("MONITOR_API_TOKEN", "")
 TESTBED_DOMAIN_SUFFIX = os.getenv("TESTBED_DOMAIN_SUFFIX", "6gdali.eu")
 # Public URL of the central connector, written into each generated connector
 # properties as edc.dali.connector.url.

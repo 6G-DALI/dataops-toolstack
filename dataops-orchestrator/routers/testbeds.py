@@ -38,6 +38,7 @@ from config import (
     DATALAKE_PUBLIC_ENDPOINT_URL,
     FACILITY_DSP_URL,
     FACILITY_PARTICIPANT_ID,
+    MONITOR_API_TOKEN,
     TESTBED_BUCKET_PREFIX,
     TESTBED_DOMAIN_SUFFIX,
 )
@@ -860,11 +861,11 @@ def provision(slug: str, claims: dict = Depends(require_testbed_admin)):
         "issued_credentials": issued,
         # A hosted testbed's upload key, returned only when this call created it: hand it to the testbed now.
         "issued_upload_credentials": issued_upload,
-        # Not automated yet: the asset monitor takes its bucket list from its own env.
+        # With MONITOR_API_TOKEN set the asset monitor asks for its buckets (routers/monitor.py); without it, by hand.
         "followups": [
             f"Add '{tb['bucket']}' to MONITOR_BUCKETS of the s3-asset-monitor service and restart it "
-            "(until the registry feeds it directly)."
-        ] if all_ok else [],
+            "(or set MONITOR_API_TOKEN here and MONITOR_BUCKETS_TOKEN there, and it follows the registry)."
+        ] if all_ok and not MONITOR_API_TOKEN else [],
     }
 
 
@@ -1017,7 +1018,7 @@ def deregister(slug: str, delete_bucket: bool = False, delete_catalogue: bool = 
     store.delete_testbed(slug)
 
     followups = []
-    if delete_bucket:
+    if delete_bucket and not MONITOR_API_TOKEN:
         followups.append(f"Remove '{tb['bucket']}' from MONITOR_BUCKETS of the s3-asset-monitor service and restart it.")
     if delete_bucket or delete_catalogue:
         followups.append("EDC assets that were registered on the central connector for the deleted files are not removed.")

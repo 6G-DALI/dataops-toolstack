@@ -59,6 +59,7 @@ Keycloak user id) to the testbed's Keycloak group, so they own it, and runs prov
 |---|---|---|
 | `TESTBED_SECRET_KEY` | (required) | Master secret: encrypts stored data-lake secrets, derives bundle passwords. Keep it stable. |
 | `KEYCLOAK_ISSUER` | (required) | e.g. `https://auth.dspace.sparkworks.net/auth/realms/dspace` |
+| `MONITOR_API_TOKEN` | (unset) | Token the s3-asset-monitor sends (`X-Monitor-Token`) to read `GET /monitor/buckets`, the Data Lake bucket of every provisioned testbed, so it watches them without `MONITOR_BUCKETS` being edited. Unset: the endpoint answers 503 |
 | `TESTBED_ADMIN_ROLE` | `testbed-admin` | Realm role that manages every testbed and the registry |
 | `KEYCLOAK_ADMIN_CLIENT_ID` / `_SECRET` | (unset) | Service-account client that creates a testbed's group when it is provisioned. Unset: that step is skipped and the group is made by hand |
 | `FACILITY_DSP_URL` | `$CENTRAL_CONNECTOR_URL/protocol` | The facility connector's DSP address: the provider for testbeds hosted by it (registered with `hosted: true`: an upload bucket `<bucket>-upload` and key instead of their own connector) |
