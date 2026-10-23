@@ -37,6 +37,20 @@ def test_a_request_is_a_testbed_row_that_provisions_nothing(client):
     assert client.get("/testbeds/kul/audit").json()["entries"][0]["action"] == "request"
 
 
+@pytest.mark.parametrize("slug", ["kul-leuven", "1kul", "Kul", "ku", "k" * 33, "kul_1", "kul.be", "-kul"])
+def test_a_slug_is_lowercase_letters_and_digits_starting_with_a_letter(client, slug):
+    _as(client, ANN)
+    assert _request(client, slug=slug).status_code == 422
+    _as(client, ADMIN)
+    assert client.post("/testbeds", json={"slug": slug, "name": "x"}).status_code == 422
+
+
+@pytest.mark.parametrize("slug", ["kul", "kul2", "k" * 32, "eurecom5g"])
+def test_valid_slugs_are_accepted(client, slug):
+    _as(client, ANN)
+    assert _request(client, slug=slug).status_code == 201
+
+
 def test_requests_are_checked_like_registrations(client):
     _as(client, ANN)
     assert _request(client, slug="Bad Slug").status_code == 422

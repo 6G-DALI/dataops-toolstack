@@ -4,7 +4,10 @@ import keycloak from '../auth/keycloak'
 import ErrorMessage from './ErrorMessage'
 import type { NavigateFn, TestbedRequestBody } from '../types'
 
-const SLUG_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/
+const SLUG_RE = /^[a-z][a-z0-9]{2,31}$/
+
+/** The slug as typed: lowercase, letters and digits only (anything else is dropped as it is typed). */
+const cleanSlug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '')
 
 /** What each connector choice means, shown under the choice. */
 const HOSTING_HINT = {
@@ -71,10 +74,10 @@ export default function TestbedRequestForm({ onNavigate }: TestbedRequestFormPro
         <div className="mb-3">
           <label className="form-label fw-semibold" htmlFor="req-slug">Short id (slug)</label>
           <input id="req-slug" className={`form-control ${form.slug && !slugOk ? 'is-invalid' : ''}`} value={form.slug}
-            onChange={set('slug')} placeholder="e.g. kul" />
+            onChange={e => setForm(f => ({ ...f, slug: cleanSlug(e.target.value) }))} placeholder="e.g. kul" maxLength={32} />
           <div className="form-text">
-            3-32 characters: lowercase letters, digits and “-”. It names the testbed’s bucket and catalogue and cannot be
-            changed later.
+            3-32 characters: lowercase letters and digits only, starting with a letter. It names the testbed’s bucket and
+            catalogue and cannot be changed later.
           </div>
         </div>
         <div className="mb-3">

@@ -47,7 +47,7 @@ from testbed_bundle import build_bundle
 # piveau reads made here (the dataset count before a deregistration) go out with the caller's token.
 router = APIRouter(prefix="/testbeds", tags=["Testbeds"], dependencies=[Depends(piveau_access.forward_caller_token)])
 
-_SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}[a-z0-9]$")
+_SLUG_RE = re.compile(r"^[a-z][a-z0-9]{2,31}$")
 _DSP_URL_RE = re.compile(r"^https?://[^\s/]+(/\S*)?$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -140,7 +140,7 @@ def list_testbeds(claims: dict = Depends(require_testbed_user)):
 def _testbed_values(body: TestbedCreate) -> dict:
     """Validate a registration (or a request for one) and derive the registry row's identity from it."""
     if not _SLUG_RE.match(body.slug):
-        raise HTTPException(status_code=422, detail="slug must be 3-32 chars: lowercase letters, digits, '-', starting with a letter")
+        raise HTTPException(status_code=422, detail="slug must be 3-32 chars: lowercase letters and digits only, starting with a letter")
     bucket = body.bucket or f"{TESTBED_BUCKET_PREFIX}{body.slug}"
     if not datalake_admin.valid_bucket_name(bucket):
         raise HTTPException(status_code=422, detail=f"'{bucket}' is not a valid bucket name (3-63 chars, lowercase, digits, '.', '-')")

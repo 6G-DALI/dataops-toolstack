@@ -5,7 +5,10 @@ import ErrorMessage from './ErrorMessage'
 import UploadKit from './UploadKit'
 import type { NavigateFn, Testbed, TestbedCreateRequest, UploadCredentials } from '../types'
 
-const SLUG_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/
+const SLUG_RE = /^[a-z][a-z0-9]{2,31}$/
+
+/** The slug as typed: lowercase, letters and digits only (anything else is dropped as it is typed). */
+const cleanSlug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '')
 
 const STEP_LABELS: Record<string, string> = {
   bucket: 'Data Lake bucket',
@@ -135,8 +138,8 @@ export default function TestbedRegister({ onNavigate }: TestbedRegisterProps) {
           <div className="mb-3">
             <label className="form-label fw-semibold">Short id (slug)</label>
             <input className={`form-control ${form.slug && !slugOk ? 'is-invalid' : ''}`} value={form.slug}
-              onChange={set('slug')} placeholder="e.g. kul" />
-            <div className="form-text">3-32 characters: lowercase letters, digits and “-”. Drives the default identity.</div>
+              onChange={e => setForm(f => ({ ...f, slug: cleanSlug(e.target.value) }))} placeholder="e.g. kul" maxLength={32} />
+            <div className="form-text">3-32 characters: lowercase letters and digits only, starting with a letter. Drives the default identity.</div>
           </div>
           <div className="mb-3">
             <label className="form-label fw-semibold">Name</label>
