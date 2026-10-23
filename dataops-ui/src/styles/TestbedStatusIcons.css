@@ -1,0 +1,41 @@
+/* The nine lifecycle levels of a testbed as a row of small icons, in the testbed list. */
+.tb-levels {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.tb-level {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--bs-border-color, #dee2e6);
+  background: var(--bs-body-bg, #fff);
+  color: var(--bs-secondary-color, #6c757d);
+  font-size: 12px;
+}
+
+.tb-level--done {
+  background: var(--bs-success, #198754);
+  border-color: var(--bs-success, #198754);
+  color: #fff;
+}
+
+.tb-level--failed {
+  background: var(--bs-danger, #dc3545);
+  border-color: var(--bs-danger, #dc3545);
+  color: #fff;
+}
+
+.tb-level--current {
+  border-color: var(--bs-primary, #0d6efd);
+  color: var(--bs-primary, #0d6efd);
+}
+
+.tb-level--upcoming {
+  opacity: 0.55;
+}

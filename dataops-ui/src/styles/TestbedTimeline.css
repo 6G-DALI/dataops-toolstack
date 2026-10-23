@@ -91,3 +91,24 @@
 .tb-timeline__stage--failed .tb-timeline__meta {
   color: var(--bs-danger, #dc3545);
 }
+
+/* done / failed corner mark on a stage's icon */
+.tb-timeline__mark {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 2px solid var(--bs-body-bg, #fff);
+  background: var(--bs-success, #198754);
+  color: #fff;
+  font-size: 9px;
+}
+
+.tb-timeline__stage--failed .tb-timeline__mark {
+  background: var(--bs-danger, #dc3545);
+}

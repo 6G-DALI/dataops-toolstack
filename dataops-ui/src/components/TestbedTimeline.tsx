@@ -1,10 +1,14 @@
-import { FiCheck, FiX, FiMinus, FiCircle } from 'react-icons/fi'
+import {
+  FiCheck, FiX, FiCircle, FiClipboard, FiDatabase, FiKey, FiBookOpen, FiPackage, FiLink, FiBox, FiFileText, FiRepeat,
+  FiUploadCloud,
+} from 'react-icons/fi'
+import type { IconType } from 'react-icons'
 import type { Testbed, TestbedAsset } from '../types'
 import '../styles/TestbedTimeline.css'
 
-type StageState = 'done' | 'failed' | 'current' | 'upcoming' | 'unavailable'
+export type StageState = 'done' | 'failed' | 'current' | 'upcoming' | 'unavailable'
 
-interface Stage {
+export interface Stage {
   key: string
   label: string
   state: StageState
@@ -24,7 +28,7 @@ function shortTime(iso: string | null | undefined): string {
  * through the central connector; "Transfer active" comes from "Find transfer" on an asset, a
  * transfer lookup on the central connector.
  */
-function buildStages(tb: Testbed, assets: TestbedAsset[]): Stage[] {
+export function buildStages(tb: Testbed, assets: TestbedAsset[]): Stage[] {
   const adopted = tb.status === 'adopted'
   const provisioning: Stage[] = [
     ['bucket', 'Data Lake bucket'],
@@ -112,12 +116,25 @@ function transferStage(assets: TestbedAsset[]): Stage {
   return { key: 'transfer', label: 'Transfer active', state: 'upcoming', meta: 'use Find transfer' }
 }
 
-const ICONS: Record<StageState, JSX.Element> = {
+/** The icon of each stage, by its key: the same ones the testbed list shows for the lifecycle levels. */
+export const STAGE_ICONS: Record<string, IconType> = {
+  registered: FiClipboard,
+  bucket: FiDatabase,
+  credentials: FiKey,
+  catalogue: FiBookOpen,
+  upload_bucket: FiUploadCloud,
+  upload_key: FiKey,
+  provisioned: FiPackage,
+  connected: FiLink,
+  asset: FiBox,
+  contract: FiFileText,
+  transfer: FiRepeat,
+}
+
+/** A small mark on the icon for the states colour alone would leave unclear. */
+const MARKS: Partial<Record<StageState, JSX.Element>> = {
   done: <FiCheck />,
   failed: <FiX />,
-  current: <FiCircle />,
-  upcoming: <FiCircle />,
-  unavailable: <FiMinus />,
 }
 
 export default function TestbedTimeline({ testbed, assets }: { testbed: Testbed; assets: TestbedAsset[] }) {
@@ -129,7 +146,10 @@ export default function TestbedTimeline({ testbed, assets }: { testbed: Testbed;
           {stages.map(s => (
             <li key={s.key} className={`tb-timeline__stage tb-timeline__stage--${s.state}`}
               aria-current={s.state === 'current' ? 'step' : undefined} title={s.meta}>
-              <span className="tb-timeline__dot">{ICONS[s.state]}</span>
+              <span className="tb-timeline__dot">
+                {(() => { const Icon = STAGE_ICONS[s.key] ?? FiCircle; return <Icon aria-hidden="true" /> })()}
+                {MARKS[s.state] && <span className="tb-timeline__mark" aria-hidden="true">{MARKS[s.state]}</span>}
+              </span>
               <div className="tb-timeline__label">{s.label}</div>
               <div className="tb-timeline__meta">{s.meta}</div>
             </li>
@@ -138,4 +158,21 @@ export default function TestbedTimeline({ testbed, assets }: { testbed: Testbed;
       </div>
     </div>
   )
+}
+
+/** The nine levels of a testbed's lifecycle, in order. A hosted testbed's upload steps count towards "Provisioned". */
+export const LEVEL_KEYS = [
+  'registered', 'bucket', 'credentials', 'catalogue', 'provisioned', 'connected', 'asset', 'contract', 'transfer',
+] as const
+
+export function lifecycleLevels(tb: Testbed, assets: TestbedAsset[]): Stage[] {
+  const all = buildStages(tb, assets)
+  const levels = LEVEL_KEYS.map(key => {
+    const stage = all.find(s => s.key === key)!
+    return stage.state === 'current' ? { ...stage, state: 'upcoming' as StageState } : stage
+  })
+  // Where the testbed is now: the first level not yet reached (a hosted testbed's upload steps are not levels).
+  const next = levels.findIndex(s => s.state === 'upcoming')
+  if (next >= 0) levels[next] = { ...levels[next], state: 'current' }
+  return levels
 }

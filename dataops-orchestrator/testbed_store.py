@@ -215,10 +215,24 @@ def delete_testbed(slug: str) -> None:
         c.execute("DELETE FROM testbeds WHERE slug=?", (slug,))
 
 
+def _asset_row(r) -> dict:
+    return {**{k: r[k] for k in r.keys()}, "present": bool(r["present"])}
+
+
 def list_assets(slug: str) -> list[dict]:
     with _db() as c:
         rows = c.execute("SELECT * FROM testbed_assets WHERE slug=? ORDER BY asset_id", (slug,)).fetchall()
-    return [{**{k: r[k] for k in r.keys()}, "present": bool(r["present"])} for r in rows]
+    return [_asset_row(r) for r in rows]
+
+
+def list_all_assets() -> dict[str, list[dict]]:
+    """Every testbed's assets in one query, by slug: what the testbed list needs for the later lifecycle levels."""
+    with _db() as c:
+        rows = c.execute("SELECT * FROM testbed_assets ORDER BY slug, asset_id").fetchall()
+    by_slug: dict[str, list[dict]] = {}
+    for r in rows:
+        by_slug.setdefault(r["slug"], []).append(_asset_row(r))
+    return by_slug
 
 
 def record_contract(slug: str, asset_id: str, negotiation_id: str | None, negotiation_state: str | None,

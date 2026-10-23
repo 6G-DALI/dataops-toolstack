@@ -718,6 +718,8 @@ export interface Testbed {
   requested_by_email: string | null
   request_note: string | null
   decision_note: string | null
+  /** Only in the testbed list: the testbed's assets, for the asset / contract / transfer levels of its status. */
+  assets?: TestbedAsset[]
 }
 
 /** What a user supplies to ask for a testbed; the identity (bucket, participant id) is derived from the slug. */

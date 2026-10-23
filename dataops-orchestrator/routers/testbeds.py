@@ -134,6 +134,9 @@ def list_testbeds(claims: dict = Depends(require_testbed_user)):
     if not is_testbed_admin(claims):
         mine = owned_slugs(claims)
         items = [t for t in items if t["slug"] in mine or _is_requester(t, claims)]
+    # The assets come with each testbed: the list shows how far each has got (asset, contract, transfer).
+    assets = store.list_all_assets()
+    items = [{**t, "assets": assets.get(t["slug"], [])} for t in items]
     return {"testbeds": items, "total": len(items)}
 
 

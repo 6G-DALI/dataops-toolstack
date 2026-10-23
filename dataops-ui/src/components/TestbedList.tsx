@@ -4,6 +4,7 @@ import { getTestbeds } from '../api/airflow'
 import { canRequestTestbed, isTestbedAdmin } from '../auth/testbedAccess'
 import ErrorMessage from './ErrorMessage'
 import LoadingSpinner from './LoadingSpinner'
+import TestbedStatusIcons from './TestbedStatusIcons'
 import type { NavigateFn, Testbed } from '../types'
 
 export function TestbedStatusBadge({ status }: { status: string }) {
@@ -63,29 +64,29 @@ export default function TestbedList({ onNavigate }: TestbedListProps) {
             <table className="table table-hover align-middle mb-0">
               <thead>
                 <tr>
-                  <th>Testbed</th>
-                  <th style={{ width: 170 }}>Participant ID</th>
-                  <th style={{ width: 200 }}>Bucket / catalogue</th>
+                  <th>Slug</th>
+                  <th>Name</th>
+                  <th>Organization</th>
+                  <th>Participant ID</th>
+                  <th>Bucket / catalogue</th>
+                  <th>Type</th>
                   <th>DSP endpoint</th>
-                  <th style={{ width: 120 }}>Status</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {testbeds.length === 0 ? (
-                  <tr><td colSpan={5} className="text-center text-muted py-4">No testbeds registered yet</td></tr>
+                  <tr><td colSpan={8} className="text-center text-muted py-4">No testbeds registered yet</td></tr>
                 ) : testbeds.map(tb => (
                   <tr key={tb.slug} role="button" onClick={() => onNavigate('testbed-detail', { dagId: tb.slug })}>
-                    <td>
-                      <div className="fw-semibold">{tb.name}</div>
-                      <code className="small text-muted">{tb.slug}</code>
-                      {tb.organisation && <div className="small text-muted">{tb.organisation}</div>}
-                    </td>
+                    <td><code className="small">{tb.slug}</code></td>
+                    <td className="fw-semibold">{tb.name}</td>
+                    <td className="small">{tb.organisation ?? '—'}</td>
                     <td><code className="small">{tb.participant_id}</code></td>
                     <td><code className="small">{tb.bucket}</code></td>
+                    <td className="small text-nowrap">{tb.hosting === 'facility' ? 'Hosted' : 'Own connector'}</td>
                     <td className="small text-break">{tb.dsp_url}</td>
-                    <td>
-                      <TestbedStatusBadge status={tb.status} />
-                    </td>
+                    <td className="text-nowrap"><TestbedStatusIcons testbed={tb} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -95,7 +96,8 @@ export default function TestbedList({ onNavigate }: TestbedListProps) {
       </div>
       <p className="text-muted small mt-3 mb-0">
         <FiExternalLink className="me-1" />
-        Connection and transfer status will appear here once the central connector integration lands.
+        Status, left to right: registered, bucket, key, catalogue, provisioned, connector, asset, contract, transfer.
+        Green is reached, red failed, outlined is the next level; hover an icon for the detail.
       </p>
     </div>
   )
