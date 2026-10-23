@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch, FiActivity, FiExternalLink, FiFileText, FiPlay, FiEdit2 } from 'react-icons/fi'
+import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch, FiActivity, FiExternalLink, FiFileText, FiPlay, FiEdit2, FiStopCircle } from 'react-icons/fi'
 import {
-  deleteTestbed, discoverTestbedAssets, getTestbedDeletionPreview, downloadTestbedBundle, findTestbedTransfer, negotiateTestbedAsset, startTestbedTransfer, getTestbed, getTestbedAssets, getTestbedAudit,
+  deleteTestbed, discoverTestbedAssets, getTestbedDeletionPreview, downloadTestbedBundle, findTestbedTransfer, negotiateTestbedAsset, startTestbedTransfer, terminateTestbedTransfer, getTestbed, getTestbedAssets, getTestbedAudit,
   provisionTestbed, rotateTestbedCredentials, updateTestbedDspUrl, updateTestbedLogo,
 } from '../api/airflow'
 import { isTestbedAdmin } from '../auth/testbedAccess'
@@ -46,6 +46,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
+/** Transfer states that have ended (the orchestrator's ENDED_STATES): anything else can still be terminated. */
+const ENDED_TRANSFER_STATES = ['COMPLETED', 'TERMINATING', 'TERMINATED', 'DEPROVISIONING', 'DEPROVISIONED', 'SUSPENDED']
+
 export default function TestbedDetail({ slug, onNavigate, initialTab }: TestbedDetailProps) {
   const [tb, setTb] = useState<Testbed | null>(null)
   const [audit, setAudit] = useState<TestbedAuditEntry[]>([])
@@ -60,6 +63,7 @@ export default function TestbedDetail({ slug, onNavigate, initialTab }: TestbedD
   const [preview, setPreview] = useState<DeletionPreview | null>(null)
   const [deregistered, setDeregistered] = useState<DeregisterResponse | null>(null)
   const [confirmStart, setConfirmStart] = useState<TestbedAsset | null>(null)
+  const [confirmTerminate, setConfirmTerminate] = useState<TestbedAsset | null>(null)
   const [dspEdit, setDspEdit] = useState<string | null>(null)
   const [logoEdit, setLogoEdit] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>(TABS.find(t => t.id === initialTab)?.id ?? 'overview')
@@ -289,6 +293,7 @@ export default function TestbedDetail({ slug, onNavigate, initialTab }: TestbedD
                   {(() => {
                     const agreed = !!a.contract_agreement_id && a.negotiation_state === 'FINALIZED'
                     const running = a.transfer_state === 'STARTED'
+                    const live = !!a.transfer_state && !ENDED_TRANSFER_STATES.includes(a.transfer_state)
                     return (
                       <>
                         <div className="d-flex flex-wrap align-items-center gap-2 mt-1">
@@ -312,6 +317,12 @@ export default function TestbedDetail({ slug, onNavigate, initialTab }: TestbedD
                               : 'Start the transfer from the testbed to the central data lake'}
                             onClick={() => setConfirmStart(a)}>
                             <FiPlay className="me-1" />Start transfer
+                          </button>
+                          <button className="btn btn-sm btn-outline-danger py-0" disabled={busy || !live}
+                            title={live ? 'End the running transfer on the central connector, to start a new one'
+                              : 'No transfer is running: use Find transfer to refresh'}
+                            onClick={() => setConfirmTerminate(a)}>
+                            <FiStopCircle className="me-1" />Terminate transfer
                           </button>
                           <button className="btn btn-sm btn-outline-secondary py-0" disabled={busy}
                             title="Look up this asset's contract and transfer on the central connector"
@@ -508,6 +519,60 @@ export default function TestbedDetail({ slug, onNavigate, initialTab }: TestbedD
           </div>
         </div>
       )}
+
+      {confirmTerminate && (() => {
+        const asset = confirmTerminate
+        const canRestart = !!asset.contract_agreement_id && asset.negotiation_state === 'FINALIZED' && tb.has_credentials
+        const terminate = (restart: boolean) => {
+          setConfirmTerminate(null)
+          return act(async () => {
+            const r = await terminateTestbedTransfer(slug, asset.asset_id)
+            if (r.result === 'not_running' && !restart) {
+              setNotice(`No transfer of ${asset.asset_id} was running.`)
+              return
+            }
+            if (r.result === 'terminating') {
+              setNotice(r.message ?? `Terminating the transfer of ${asset.asset_id}. Use Find transfer to refresh.`)
+              return
+            }
+            if (!restart) {
+              setNotice(`Transfer of ${asset.asset_id} terminated. Start transfer requests a new one.`)
+              return
+            }
+            const s = await startTestbedTransfer(slug, asset.asset_id)
+            setNotice(s.result === 'started' ? `Transfer of ${asset.asset_id} terminated and started again.`
+              : `Transfer of ${asset.asset_id} terminated; a new one was requested (${s.state}). Use Find transfer to refresh.`)
+          })
+        }
+        return (
+          <Modal
+            title="Terminate transfer"
+            onClose={() => setConfirmTerminate(null)}
+            footer={
+              <>
+                <button className="btn btn-outline-secondary" onClick={() => setConfirmTerminate(null)}>Cancel</button>
+                <button className="btn btn-outline-danger" disabled={busy} onClick={() => terminate(false)}>Terminate</button>
+                <button className="btn btn-danger" disabled={busy || !canRestart}
+                  title={canRestart ? undefined : "Needs an agreed contract and the testbed's Data Lake key"}
+                  onClick={() => terminate(true)}>
+                  Terminate and start again
+                </button>
+              </>
+            }
+          >
+            <p>
+              This ends the running transfer of <code>{asset.asset_id}</code> on the central connector. Until a new
+              transfer is started, files uploaded to <strong>{tb.name}</strong>&rsquo;s bucket no longer reach the
+              Data Lake or the catalogue.
+            </p>
+            <p className="mb-0">
+              Starting again requests a new transfer under the same contract, for example after the testbed&rsquo;s
+              connector{hosted ? ' or the facility connector' : ''} was redeployed. Files that already reached the
+              Data Lake are not transferred twice.
+            </p>
+          </Modal>
+        )
+      })()}
 
       {confirmStart && (
         <Modal

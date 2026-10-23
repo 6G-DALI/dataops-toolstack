@@ -259,3 +259,60 @@ def test_a_rejected_request_reports_the_connectors_answer(monkeypatch):
     with pytest.raises(HTTPException) as e:
         ec.start_negotiation(KUL_URL, "provider-kul", "a", "o")
     assert "Contract negotiation failed: 400" in e.value.detail and "bad policy" in e.value.detail
+
+
+def _live_transfer(client, monkeypatch):
+    """An agreed asset whose PiveauData transfer is running, on a provisioned testbed ready to start another."""
+    import piveau_dataset_client as pdc
+    from routers import testbeds as router
+    monkeypatch.setattr(pdc, "PIVEAU_HUB_URL", "https://piveau.example/")
+    monkeypatch.setattr(pdc, "PIVEAU_API_KEY", "pk")
+    monkeypatch.setattr(router, "DATALAKE_PUBLIC_ENDPOINT_URL", "http://lake:9000")
+    ec = _agreed(client, monkeypatch)
+    state = {"t-live": "STARTED"}
+    monkeypatch.setattr(ec, "find_transfers", lambda a, u: ec.parse_transfers(
+        [{"@id": t, "state": s, "contractId": "ag-1", "counterPartyAddress": KUL_URL, "stateTimestamp": 200 + i}
+         for i, (t, s) in enumerate(state.items())], u))
+    return ec, state, router
+
+
+def test_a_running_transfer_can_be_terminated_and_started_again(client, monkeypatch):
+    ec, state, _ = _live_transfer(client, monkeypatch)
+    ended = []
+    monkeypatch.setattr(ec, "terminate_transfer", lambda t, reason: ended.append((t, reason)) or state.update({t: "TERMINATED"}) or True)
+
+    r = client.post("/testbeds/kul/assets/kul-experiments-1/transfers/terminate").json()
+    assert r["result"] == "terminated" and r["terminated"] == ["t-live"] and r["message"] is None
+    assert ended[0][0] == "t-live" and "DataOps" in ended[0][1]
+    assert r["asset"]["status"] == "agreed" and r["asset"]["transfer_state"] == "TERMINATED"
+    assert any(e["action"] == "terminate-transfer" for e in client.get("/testbeds/kul/audit").json()["entries"])
+
+    # Nothing left to end, and the same contract starts a new transfer.
+    assert client.post("/testbeds/kul/assets/kul-experiments-1/transfers/terminate").json()["result"] == "not_running"
+    sent = {}
+    monkeypatch.setattr(ec, "start_transfer", lambda **kw: sent.update(kw) or state.update({"t-new": "STARTED"}) or "t-new")
+    monkeypatch.setattr(ec, "get_transfer_state", lambda t: "STARTED")
+    r = client.post("/testbeds/kul/assets/kul-experiments-1/transfers/start").json()
+    assert r["result"] == "started" and r["transfer_id"] == "t-new" and sent["agreement_id"] == "ag-1"
+
+
+def test_a_refused_termination_is_reported(client, monkeypatch):
+    ec, state, router = _live_transfer(client, monkeypatch)
+    monkeypatch.setattr(ec, "terminate_transfer", lambda t, reason: False)
+    clock = iter(range(0, 1000, 10))  # no real waiting: each look at the clock is 10 s later
+
+    class FakeTime:
+        monotonic = staticmethod(lambda: next(clock))
+        sleep = staticmethod(lambda s: None)
+    monkeypatch.setattr(router, "time", FakeTime)
+
+    r = client.post("/testbeds/kul/assets/kul-experiments-1/transfers/terminate").json()
+    assert r["result"] == "terminating" and r["terminated"] == [] and "refused" in r["message"]
+    assert r["asset"]["status"] == "transferring"
+
+
+def test_only_the_testbeds_users_terminate(client, monkeypatch):
+    from test_testbeds import _act_as_owner
+    client.post("/testbeds", json={"slug": "isi", "name": "ISI", "dsp_url": KUL_URL})
+    _act_as_owner(client, "/testbeds/kul")
+    assert client.post("/testbeds/isi/assets/a1/transfers/terminate").status_code == 403

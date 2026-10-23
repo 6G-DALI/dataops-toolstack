@@ -508,6 +508,43 @@ def start_asset_transfer(slug: str, asset_id: str, claims: dict = Depends(requir
             "transfer_id": transfer_id, "state": state}
 
 
+@router.post("/{slug}/assets/{asset_id}/transfers/terminate")
+def terminate_asset_transfer(slug: str, asset_id: str, claims: dict = Depends(require_testbed_access)):
+    """End this asset's transfers that have not ended yet, on the central connector, so a new one can be started with
+    the same contract (Start transfer): e.g. after the testbed's connector, or the facility connector, was redeployed
+    with a fix. Waits up to ~15 s for them to end."""
+    tb = _get(slug)
+    _asset(slug, asset_id)
+    transfers = edc_consumer_client.find_transfers(asset_id, tb["dsp_url"])
+    live = {t["transfer_id"] for t in transfers if t["state"] not in edc_consumer_client.ENDED_STATES}
+    if not live:
+        asset = store.record_transfer(slug, asset_id, edc_consumer_client.best_transfer(transfers))
+        return {"result": "not_running", "asset": asset, "terminated": [], "message": None}
+
+    reason = f"Terminated from DataOps by {_actor(claims)}"
+    refused = [t for t in sorted(live) if not edc_consumer_client.terminate_transfer(t, reason)]
+    still = live
+    deadline = time.monotonic() + 15  # the connector usually ends it within a few seconds
+    while True:
+        transfers = edc_consumer_client.find_transfers(asset_id, tb["dsp_url"])
+        still = {t["transfer_id"] for t in transfers
+                 if t["transfer_id"] in live and t["state"] not in edc_consumer_client.ENDED_STATES}
+        if not still or time.monotonic() >= deadline:
+            break
+        time.sleep(1)
+    asset = store.record_transfer(slug, asset_id, edc_consumer_client.best_transfer(transfers))
+    ended = sorted(live - still)
+    store.audit(slug, _actor(claims), "terminate-transfer",
+                f"{asset_id}: ended {', '.join(ended) or 'none'}" + (f"; still running {', '.join(sorted(still))}" if still else ""))
+    message = None
+    if refused:
+        message = (f"The central connector refused to terminate {', '.join(refused)}. Check its log; "
+                   "Find transfer shows the current state.")
+    elif still:
+        message = "Termination was requested but has not finished yet. Use Find transfer to refresh."
+    return {"result": "terminating" if still else "terminated", "asset": asset, "terminated": ended, "message": message}
+
+
 @router.get("/{slug}/audit", dependencies=[Depends(require_testbed_access)])
 def get_audit(slug: str):
     _get(slug)

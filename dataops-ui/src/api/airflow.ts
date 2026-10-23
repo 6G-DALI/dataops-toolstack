@@ -33,6 +33,7 @@ import type {
   FindTransferResponse,
   NegotiateResponse,
   StartTransferResponse,
+  TerminateTransferResponse,
   TestbedAsset,
   TestbedAuditEntry,
   TestbedMember,
@@ -596,4 +597,9 @@ export function negotiateTestbedAsset(slug: string, assetId: string): Promise<Ne
 /** Starts the PiveauData PUSH transfer for an asset that has a finalized contract. */
 export function startTestbedTransfer(slug: string, assetId: string): Promise<StartTransferResponse> {
   return request(`/testbeds/${encodeURIComponent(slug)}/assets/${encodeURIComponent(assetId)}/transfers/start`, { method: 'POST' })
+}
+
+/** Ends the asset's running transfer on the central connector (waits ~15 s), so a new one can be started. */
+export function terminateTestbedTransfer(slug: string, assetId: string): Promise<TerminateTransferResponse> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/assets/${encodeURIComponent(assetId)}/transfers/terminate`, { method: 'POST' })
 }

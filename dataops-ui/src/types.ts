@@ -935,6 +935,14 @@ export interface StartTransferResponse {
   state: string
 }
 
+export interface TerminateTransferResponse {
+  result: 'terminated' | 'terminating' | 'not_running'
+  asset: TestbedAsset
+  /** The transfers that have ended. */
+  terminated: string[]
+  message: string | null
+}
+
 export interface DeletionPreview {
   slug: string
   bucket: string
