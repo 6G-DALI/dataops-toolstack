@@ -109,10 +109,14 @@ server {
     #                 ERR_BLOCKED_BY_CSP reported against the auth URL.
     # With a bare `default-src 'self'` both are blocked and login fails, which
     # is not obvious from the symptom.
+    #   img-src     — https: because a testbed's logo (foaf:logo) is a URL its
+    #                 operator chose, on any host; without it the testbed page
+    #                 reports the image as (blocked:csp). Images only: scripts,
+    #                 styles and connections stay on the lists below.
     #
     # 'unsafe-inline' is needed for style-src only, because of index.html's
     # pre-paint background block.
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' ${KEYCLOAK_ORIGIN} ${ORCHESTRATOR_ORIGIN} ${DESCRIPTOR_ORIGIN}; frame-src 'self' ${KEYCLOAK_ORIGIN}; frame-ancestors 'none'; base-uri 'self'; form-action 'self' ${KEYCLOAK_ORIGIN}" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; connect-src 'self' ${KEYCLOAK_ORIGIN} ${ORCHESTRATOR_ORIGIN} ${DESCRIPTOR_ORIGIN}; frame-src 'self' ${KEYCLOAK_ORIGIN}; frame-ancestors 'none'; base-uri 'self'; form-action 'self' ${KEYCLOAK_ORIGIN}" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header X-Frame-Options "DENY" always;
