@@ -83,6 +83,9 @@ function buildCrumbs(
   if (view === 'testbed-register') {
     return [crumb('Testbeds', 'testbeds'), crumb('Register testbed', 'testbed-register')]
   }
+  if (view === 'testbed-request') {
+    return [crumb('Testbeds', 'testbeds'), crumb('Request testbed registration', 'testbed-request')]
+  }
   if (view === 'testbed-detail') {
     return [crumb('Testbeds', 'testbeds'), crumb(dagId ?? '', 'testbed-detail', { dagId: dagId ?? '' })]
   }

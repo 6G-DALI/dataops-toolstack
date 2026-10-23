@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FiPlus, FiExternalLink, FiFileText } from 'react-icons/fi'
 import { getTestbeds } from '../api/airflow'
-import { isTestbedAdmin } from '../auth/testbedAccess'
+import { canRequestTestbed, isTestbedAdmin } from '../auth/testbedAccess'
 import ErrorMessage from './ErrorMessage'
 import LoadingSpinner from './LoadingSpinner'
 import type { NavigateFn, Testbed } from '../types'
@@ -9,8 +9,9 @@ import type { NavigateFn, Testbed } from '../types'
 export function TestbedStatusBadge({ status }: { status: string }) {
   const cls = status === 'provisioned' ? 'text-bg-success'
     : status === 'adopted' ? 'text-bg-info'
+    : status === 'rejected' ? 'text-bg-danger'
     : status === 'draft' ? 'text-bg-secondary' : 'text-bg-warning'
-  return <span className={`badge ${cls}`}>{status}</span>
+  return <span className={`badge ${cls}`}>{status === 'requested' ? 'awaiting approval' : status}</span>
 }
 
 interface TestbedListProps {
@@ -45,6 +46,12 @@ export default function TestbedList({ onNavigate }: TestbedListProps) {
             <button className="btn btn-sm btn-primary" onClick={() => onNavigate('testbed-register')}>
               <FiPlus className="me-1" />
               Register testbed
+            </button>
+          )}
+          {canRequestTestbed() && (
+            <button className="btn btn-sm btn-primary" onClick={() => onNavigate('testbed-request')}>
+              <FiPlus className="me-1" />
+              Request testbed registration
             </button>
           )}
         </div>

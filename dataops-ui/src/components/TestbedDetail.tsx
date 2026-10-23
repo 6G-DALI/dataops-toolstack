@@ -14,6 +14,7 @@ import { TestbedStatusBadge } from './TestbedList'
 import CatalogueAccess from './CatalogueAccess'
 import TestbedDatasets from './TestbedDatasets'
 import TestbedMembers from './TestbedMembers'
+import TestbedRequestView from './TestbedRequestView'
 import TestbedTimeline from './TestbedTimeline'
 import UploadKit from './UploadKit'
 import type { DeletionPreview, DeregisterResponse, NavigateFn, Testbed, TestbedAsset, TestbedAuditEntry, UploadCredentials } from '../types'
@@ -66,8 +67,17 @@ export default function TestbedDetail({ slug, onNavigate, initialTab }: TestbedD
   const [issuedUpload, setIssuedUpload] = useState<UploadCredentials | null>(null)
 
   const load = useCallback(() => {
-    Promise.all([getTestbed(slug), getTestbedAudit(slug), getTestbedAssets(slug)])
-      .then(([t, a, as]) => { setTb(t); setAudit(a.entries); setAssets(as.assets) })
+    const testbed = getTestbed(slug)
+    const rest = Promise.all([getTestbedAudit(slug), getTestbedAssets(slug)])
+    rest.catch(() => {})  // a request has neither (they are refused); awaited below only for a real testbed
+    testbed
+      .then(async t => {
+        setTb(t)
+        if (t.status === 'requested' || t.status === 'rejected') return
+        const [a, as] = await rest
+        setAudit(a.entries)
+        setAssets(as.assets)
+      })
       .catch(e => setError(e instanceof Error ? e.message : String(e)))
   }, [slug])
 
@@ -124,6 +134,14 @@ export default function TestbedDetail({ slug, onNavigate, initialTab }: TestbedD
   }
 
   if (!tb) return error ? <ErrorMessage message={error} /> : <LoadingSpinner />
+
+  // A request (waiting for, or refused by, an administrator) has none of the tabs below: they exist once it is approved.
+  if (tb.status === 'requested' || tb.status === 'rejected') {
+    return (
+      <TestbedRequestView tb={tb} onNavigate={onNavigate}
+        onChanged={followups => { if (followups?.length) setNotice(followups.join(' ')); load() }} />
+    )
+  }
 
   const hosted = tb.hosting === 'facility'
   const provisioningSteps = ['bucket', 'credentials', 'catalogue', 'access',

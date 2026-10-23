@@ -45,6 +45,7 @@ import type {
   TestbedDatasetDetail,
   DatasetEditRequest,
   TestbedCreateRequest,
+  TestbedRequestBody,
   TestbedProvisionResponse,
 } from '../types'
 import keycloak from '../auth/keycloak'
@@ -431,6 +432,26 @@ export function getTestbed(slug: string): Promise<Testbed> {
 
 export function registerTestbed(body: TestbedCreateRequest): Promise<Testbed> {
   return request('/testbeds', { method: 'POST', body: JSON.stringify(body) })
+}
+
+/** Any signed-in user: asks for a testbed to be registered. An administrator decides on it. */
+export function requestTestbed(body: TestbedRequestBody): Promise<Testbed> {
+  return request('/testbeds/requests', { method: 'POST', body: JSON.stringify(body) })
+}
+
+/** Admin only: enables a requested testbed, makes its requester the owner and provisions it. */
+export function approveTestbedRequest(slug: string, note?: string): Promise<TestbedProvisionResponse> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/approve`, { method: 'POST', body: JSON.stringify({ note }) })
+}
+
+/** Admin only: refuses a requested testbed; the note is shown to the requester. */
+export function rejectTestbedRequest(slug: string, note?: string): Promise<Testbed> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/reject`, { method: 'POST', body: JSON.stringify({ note }) })
+}
+
+/** The requester (or an admin): removes a request that was not approved, freeing its slug. */
+export function withdrawTestbedRequest(slug: string): Promise<{ slug: string, status: string }> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/request`, { method: 'DELETE' })
 }
 
 /** Admin only: changes the DSP endpoint the central connector uses to reach this testbed. */

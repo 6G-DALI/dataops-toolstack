@@ -15,7 +15,7 @@ export function isDataopsOperator(): boolean {
 
 /** The pages that need the operator group: everything except the home page and the testbed pages. The home
  *  page is for everyone and gates its own blocks. */
-const OPEN_VIEWS: View[] = ['home', 'testbeds', 'testbed-register', 'testbed-detail', 'testbed-metadata', 'testbed-dataset']
+const OPEN_VIEWS: View[] = ['home', 'testbeds', 'testbed-register', 'testbed-request', 'testbed-detail', 'testbed-metadata', 'testbed-dataset']
 
 export function isOperationsView(view: View): boolean {
   return !OPEN_VIEWS.includes(view)

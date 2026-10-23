@@ -96,7 +96,7 @@ interface HomePageProps {
 
 /**
  * The home page is for everyone signed in, and each block is shown only to those it is for: the DataOps
- * dashboard to the operator group, the testbeds block to anyone with access to a testbed. The dashboard is a
+ * dashboard to the operator group, the testbeds block to everyone (a user with no testbed can request one). The dashboard is a
  * separate component so its stats are not even requested (or polled) for people who cannot see it.
  */
 export default function HomePage({ onNavigate }: HomePageProps) {
@@ -107,12 +107,6 @@ export default function HomePage({ onNavigate }: HomePageProps) {
     <div>
       {testbeds && <HomeTestbeds onNavigate={onNavigate} />}
       {operator && <OperationsDashboard onNavigate={onNavigate} />}
-      {!operator && !testbeds && (
-        <div className="alert alert-warning">
-          <strong>No access yet.</strong> Your account is not a member of the DataOps operators or of any testbed.
-          Ask a DataOps administrator to add you.
-        </div>
-      )}
     </div>
   )
 }

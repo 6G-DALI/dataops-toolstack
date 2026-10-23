@@ -145,19 +145,31 @@ def list_members(slug: str) -> list[dict]:
         return sorted((_member(u) for u in r.json()), key=lambda m: (m["email"] or m["username"] or "").lower())
 
 
+def _group_id_or_create(kc: _Admin, slug: str) -> str:
+    gid = kc.group_id(slug)
+    if gid is None:
+        kc.create_group(slug)
+        gid = kc.group_id(slug)
+    if gid is None:
+        raise HTTPException(status_code=502, detail=f"Keycloak: the group for '{slug}' was not found after creating it")
+    return gid
+
+
 def add_member(slug: str, email: str) -> dict:
     """Add the Keycloak user with this e-mail address to the testbed's group (created if missing)."""
     with _session(f"adding {email} to '{slug}'") as kc:
         user = kc.user_by_email(email)
-        gid = kc.group_id(slug)
-        if gid is None:
-            kc.create_group(slug)
-            gid = kc.group_id(slug)
-        if gid is None:
-            raise HTTPException(status_code=502, detail=f"Keycloak: the group for '{slug}' was not found after creating it")
-        r = kc.put(f"/users/{user['id']}/groups/{gid}")
+        r = kc.put(f"/users/{user['id']}/groups/{_group_id_or_create(kc, slug)}")
         r.raise_for_status()
         return _member(user)
+
+
+def add_member_by_id(slug: str, user_id: str) -> None:
+    """Add the Keycloak user with this id (the `sub` of their token) to the testbed's group (created if missing).
+    No lookup, so nothing about their e-mail address can get in the way."""
+    with _session(f"adding user {user_id} to '{slug}'") as kc:
+        r = kc.put(f"/users/{user_id}/groups/{_group_id_or_create(kc, slug)}")
+        r.raise_for_status()
 
 
 def remove_member(slug: str, user_id: str) -> None:

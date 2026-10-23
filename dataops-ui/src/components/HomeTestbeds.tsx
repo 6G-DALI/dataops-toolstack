@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FiServer } from 'react-icons/fi'
 import { getTestbeds } from '../api/airflow'
-import { isTestbedAdmin } from '../auth/testbedAccess'
+import { canRequestTestbed, isTestbedAdmin } from '../auth/testbedAccess'
 import { TestbedStatusBadge } from './TestbedList'
 import type { NavigateFn, Testbed } from '../types'
 
@@ -47,8 +47,13 @@ export default function HomeTestbeds({ onNavigate }: HomeTestbedsProps) {
             <p className="state-panel-text">
               {isTestbedAdmin()
                 ? 'No testbed is registered yet.'
-                : 'You are not a member of any testbed. Ask a DataOps administrator to add you to one.'}
+                : 'You are not a member of any testbed. Ask a DataOps administrator to add you to one, or request a new testbed.'}
             </p>
+            {canRequestTestbed() && (
+              <button type="button" className="btn btn-sm btn-primary" onClick={() => onNavigate('testbed-request', {})}>
+                Request testbed registration
+              </button>
+            )}
           </div>
         ) : (
           <>

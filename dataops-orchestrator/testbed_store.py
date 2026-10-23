@@ -32,6 +32,7 @@ _COLUMNS = (
     "experiment_prefix", "bucket", "catalogue_id", "dsp_url", "produced_by_iri",
     "status", "steps", "s3_access_key", "s3_secret_enc", "created_at", "updated_at", "created_by", "logo_url",
     "visibility", "hosting", "upload_bucket", "upload_access_key",
+    "requested_by_sub", "requested_by_email", "request_note", "decision_note",
 )
 
 
@@ -73,7 +74,8 @@ _DDL = (
         bucket TEXT UNIQUE NOT NULL, catalogue_id TEXT UNIQUE NOT NULL, dsp_url TEXT NOT NULL,
         produced_by_iri TEXT, status TEXT NOT NULL, steps TEXT NOT NULL DEFAULT '{}',
         s3_access_key TEXT, s3_secret_enc TEXT, created_at TEXT, updated_at TEXT, created_by TEXT,
-        logo_url TEXT, visibility TEXT, hosting TEXT, upload_bucket TEXT, upload_access_key TEXT)""",
+        logo_url TEXT, visibility TEXT, hosting TEXT, upload_bucket TEXT, upload_access_key TEXT,
+        requested_by_sub TEXT, requested_by_email TEXT, request_note TEXT, decision_note TEXT)""",
     """CREATE TABLE IF NOT EXISTS testbed_assets (
         slug TEXT NOT NULL, asset_id TEXT NOT NULL, title TEXT, offer_id TEXT,
         status TEXT NOT NULL DEFAULT 'discovered', present INTEGER NOT NULL DEFAULT 1,
@@ -104,7 +106,8 @@ class _Conn:
 
 
 _NEW_ASSET_COLUMNS = ("transfer_state", "transfer_checked_at", "negotiation_id", "negotiation_state")
-_NEW_TESTBED_COLUMNS = ("logo_url", "visibility", "hosting", "upload_bucket", "upload_access_key")
+_NEW_TESTBED_COLUMNS = ("logo_url", "visibility", "hosting", "upload_bucket", "upload_access_key",
+                        "requested_by_sub", "requested_by_email", "request_note", "decision_note")
 
 
 def _migrate(conn: "_Conn") -> None:
@@ -183,7 +186,8 @@ def get_testbed(slug: str) -> dict | None:
 
 def create_testbed(values: dict, actor: str | None) -> dict:
     now = _now()
-    row = {**values, "status": "draft", "steps": "{}", "s3_access_key": None, "s3_secret_enc": None,
+    # A testbed is 'draft' once registered; a user's request for one starts as 'requested' (see routers/testbeds.py).
+    row = {"status": "draft", **values, "steps": "{}", "s3_access_key": None, "s3_secret_enc": None,
            "created_at": now, "updated_at": now, "created_by": actor}
     try:
         with _db() as c:
@@ -191,7 +195,7 @@ def create_testbed(values: dict, actor: str | None) -> dict:
                       [row.get(k) for k in _COLUMNS])
     except _integrity_errors() as e:
         raise HTTPException(status_code=409, detail=f"Testbed identity already in use: {e}")
-    audit(values["slug"], actor, "register", values["participant_id"])
+    audit(values["slug"], actor, "request" if row["status"] == "requested" else "register", values["participant_id"])
     return get_testbed(values["slug"])
 
 

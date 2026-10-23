@@ -17,6 +17,7 @@ export type View =
   | 'run-results'
   | 'testbeds'
   | 'testbed-register'
+  | 'testbed-request'
   | 'testbed-detail'
   | 'testbed-metadata'
   | 'testbed-dataset'
@@ -697,7 +698,8 @@ export interface Testbed {
   logo_url: string | null
   /** Whether the testbed's catalogue is private (dct:accessRights NON_PUBLIC). Fixed when the catalogue is created. */
   visibility: 'public' | 'private'
-  status: 'draft' | 'provisioned' | string
+  /** 'requested' / 'rejected': a user's request for the testbed, not yet (or never) approved by an administrator. */
+  status: 'requested' | 'rejected' | 'draft' | 'provisioned' | string
   steps: Record<string, TestbedStep>
   /** Access key of the testbed's bucket-scoped Data Lake user. Not secret; the secret key is never returned. */
   s3_access_key: string | null
@@ -711,6 +713,24 @@ export interface Testbed {
   created_at: string
   updated_at: string
   created_by: string | null
+  /** Requests only: who asked, what they said it is for, and the administrator's reason once decided. */
+  requested_by_sub: string | null
+  requested_by_email: string | null
+  request_note: string | null
+  decision_note: string | null
+}
+
+/** What a user supplies to ask for a testbed; the identity (bucket, participant id) is derived from the slug. */
+export interface TestbedRequestBody {
+  slug: string
+  name: string
+  organisation?: string
+  contact_email?: string
+  dsp_url?: string
+  logo_url?: string
+  private?: boolean
+  hosted?: boolean
+  note?: string
 }
 
 export interface TestbedCreateRequest {

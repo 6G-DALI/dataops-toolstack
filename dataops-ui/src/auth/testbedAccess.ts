@@ -16,7 +16,15 @@ export function ownsTestbeds(): boolean {
   return groups.some(g => g.replace(/^\/+/, '').startsWith(`${TESTBED_GROUP_PREFIX}/`))
 }
 
-/** Whether the Testbeds menu is shown. This only hides the UI; the orchestrator enforces access. */
+/**
+ * Whether the Testbeds menu is shown: to everyone signed in, since a user with no testbed can ask for one. What a
+ * user sees there is decided by the orchestrator (their testbeds and their own requests; every testbed for an admin).
+ */
 export function canSeeTestbeds(): boolean {
-  return isTestbedAdmin() || ownsTestbeds()
+  return true
+}
+
+/** Whether to offer "request testbed registration": to everyone signed in, admins included. */
+export function canRequestTestbed(): boolean {
+  return true
 }

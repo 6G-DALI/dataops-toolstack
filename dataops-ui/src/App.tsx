@@ -15,6 +15,7 @@ import TaskCreator from './components/TaskCreator'
 import HomePage from './components/HomePage'
 import TestbedList from './components/TestbedList'
 import TestbedRegister from './components/TestbedRegister'
+import TestbedRequestForm from './components/TestbedRequestForm'
 import TestbedDetail from './components/TestbedDetail'
 import TestbedMetadataBuilder from './components/TestbedMetadataBuilder'
 import TestbedDatasetEdit from './components/TestbedDatasetEdit'
@@ -128,6 +129,9 @@ export default function App() {
       )}
       {view === 'testbeds' && (
         <TestbedList onNavigate={navigate} />
+      )}
+      {view === 'testbed-request' && (
+        <TestbedRequestForm onNavigate={navigate} />
       )}
       {view === 'testbed-register' && (
         <TestbedRegister onNavigate={navigate} />

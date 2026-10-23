@@ -47,6 +47,14 @@ its members see only that testbed (detail, assets, audit, bundle) and can find a
 transfers for it, but cannot use the registry-wide actions. The token needs a `groups` claim (a Group
 Membership mapper on the `dataops-ui` client).
 
+Requests: any signed-in user can ask for a testbed (`POST /testbeds/requests`: slug, name, organisation,
+connector choice, catalogue visibility, a note on what it is). It is stored as a testbed in status
+`requested` (up to 3 waiting per user), reserving its slug and identity; nothing is provisioned. The requester
+sees it, and only it, until an administrator decides: `POST /testbeds/<slug>/approve` adds the requester (by their
+Keycloak user id) to the testbed's Keycloak group, so they own it, and runs provisioning;
+`POST /testbeds/<slug>/reject` keeps it as `rejected` with the reason for the requester to read.
+`DELETE /testbeds/<slug>/request` withdraws a request that was not approved, freeing the slug.
+
 | Variable | Default | Description |
 |---|---|---|
 | `TESTBED_SECRET_KEY` | (required) | Master secret: encrypts stored data-lake secrets, derives bundle passwords. Keep it stable. |

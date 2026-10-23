@@ -31,7 +31,9 @@ import piveau_dataset_client as pdc
 import piveau_catalogue_client
 import testbed_datasets
 import testbed_store as store
-from auth import is_testbed_admin, owned_slugs, require_testbed_access, require_testbed_admin, require_testbed_user
+from auth import (
+    current_claims, is_testbed_admin, owned_slugs, require_testbed_access, require_testbed_admin, require_testbed_user,
+)
 from config import (
     DATALAKE_PUBLIC_ENDPOINT_URL,
     FACILITY_DSP_URL,
@@ -130,12 +132,12 @@ def list_testbeds(claims: dict = Depends(require_testbed_user)):
     items = store.list_testbeds()
     if not is_testbed_admin(claims):
         mine = owned_slugs(claims)
-        items = [t for t in items if t["slug"] in mine]
+        items = [t for t in items if t["slug"] in mine or _is_requester(t, claims)]
     return {"testbeds": items, "total": len(items)}
 
 
-@router.post("", status_code=201)
-def register_testbed(body: TestbedCreate, claims: dict = Depends(require_testbed_admin)):
+def _testbed_values(body: TestbedCreate) -> dict:
+    """Validate a registration (or a request for one) and derive the registry row's identity from it."""
     if not _SLUG_RE.match(body.slug):
         raise HTTPException(status_code=422, detail="slug must be 3-32 chars: lowercase letters, digits, '-', starting with a letter")
     bucket = body.bucket or f"{TESTBED_BUCKET_PREFIX}{body.slug}"
@@ -158,25 +160,136 @@ def register_testbed(body: TestbedCreate, claims: dict = Depends(require_testbed
         # On piveau without access control a NON_PUBLIC catalogue is only a label: its datasets stay public.
         raise HTTPException(status_code=422, detail="A private catalogue needs piveau access control "
                                                     "(PIVEAU_ACCESS_CONTROL), which is not enabled on this deployment")
-    return store.create_testbed(
-        {
-            "slug": body.slug, "name": body.name, "organisation": body.organisation,
-            "contact_email": body.contact_email, "participant_id": participant_id,
-            "ids_id": f"urn:connector:{participant_id}", "experiment_prefix": prefix,
-            "bucket": bucket, "catalogue_id": bucket,
-            "dsp_url": FACILITY_DSP_URL if body.hosted
-            else body.dsp_url or f"https://edc.{body.slug}.{TESTBED_DOMAIN_SUFFIX}/protocol",
-            "produced_by_iri": body.produced_by_iri, "logo_url": logo_url,
-            "visibility": "private" if body.private else "public",
-            "hosting": "facility" if body.hosted else "own", "upload_bucket": upload_bucket,
-        },
-        _actor(claims),
-    )
+    return {
+        "slug": body.slug, "name": body.name, "organisation": body.organisation,
+        "contact_email": body.contact_email, "participant_id": participant_id,
+        "ids_id": f"urn:connector:{participant_id}", "experiment_prefix": prefix,
+        "bucket": bucket, "catalogue_id": bucket,
+        "dsp_url": FACILITY_DSP_URL if body.hosted
+        else body.dsp_url or f"https://edc.{body.slug}.{TESTBED_DOMAIN_SUFFIX}/protocol",
+        "produced_by_iri": body.produced_by_iri, "logo_url": logo_url,
+        "visibility": "private" if body.private else "public",
+        "hosting": "facility" if body.hosted else "own", "upload_bucket": upload_bucket,
+    }
 
 
-@router.get("/{slug}", dependencies=[Depends(require_testbed_access)])
-def get_testbed(slug: str):
-    return _get(slug)
+@router.post("", status_code=201)
+def register_testbed(body: TestbedCreate, claims: dict = Depends(require_testbed_admin)):
+    return store.create_testbed(_testbed_values(body), _actor(claims))
+
+
+# --- requests: a user asks for a testbed, an administrator approves it ------------------------------------------------
+# A request is a testbed row in status 'requested'. It reserves the slug and identity, and nothing is provisioned. The
+# requester sees it (and only it) through the user that made it; approving makes the requester the testbed's owner
+# (a member of its Keycloak group), enables it and provisions it. A refused request stays as 'rejected', with the
+# reason, until the requester withdraws it.
+
+MAX_PENDING_REQUESTS = 3
+REQUEST_STATUSES = ("requested", "rejected")
+
+
+class TestbedRequest(BaseModel):
+    slug: str = Field(description="Short lowercase id the testbed would be known by, e.g. 'kul'")
+    name: str
+    organisation: str | None = None
+    contact_email: str | None = Field(default=None, description="Operator contact; defaults to the requester's e-mail")
+    dsp_url: str | None = Field(default=None, description="The testbed connector's DSP endpoint (own connector only)")
+    logo_url: str | None = None
+    private: bool = False
+    hosted: bool = False
+    note: str | None = Field(default=None, max_length=2000, description="What the testbed is and why it is needed")
+
+
+class Decision(BaseModel):
+    note: str | None = Field(default=None, max_length=2000, description="Shown to the requester")
+
+
+def _is_requester(tb: dict, claims: dict) -> bool:
+    """The user who asked for the testbed, while it is still a request. Once approved, ownership is the group."""
+    return tb["status"] in REQUEST_STATUSES and bool(claims.get("sub")) and tb["requested_by_sub"] == claims["sub"]
+
+
+@router.post("/requests", status_code=201)
+def request_testbed(body: TestbedRequest, claims: dict = Depends(require_testbed_user)):
+    """Ask for a testbed to be registered. Needs no role (administrators may too); an administrator decides on it."""
+    sub, email = claims.get("sub"), (claims.get("email") or "").strip()
+    if not sub:
+        raise HTTPException(status_code=401, detail="The token has no subject, so the request cannot be tied to you")
+    pending = [t for t in store.list_testbeds() if t["status"] == "requested" and t["requested_by_sub"] == sub]
+    if len(pending) >= MAX_PENDING_REQUESTS:
+        raise HTTPException(status_code=429, detail=f"You already have {len(pending)} requests waiting for a decision")
+    values = _testbed_values(TestbedCreate(
+        slug=body.slug, name=body.name.strip(), organisation=body.organisation, contact_email=body.contact_email,
+        dsp_url=body.dsp_url, logo_url=body.logo_url, private=body.private, hosted=body.hosted))
+    values.update(
+        status="requested", requested_by_sub=sub, requested_by_email=email or None,
+        request_note=(body.note or "").strip() or None, contact_email=(body.contact_email or "").strip() or email or None)
+    return store.create_testbed(values, _actor(claims))
+
+
+@router.post("/{slug}/approve")
+def approve_request(slug: str, body: Decision | None = None, claims: dict = Depends(require_testbed_admin)):
+    """Enable a requested testbed: make the requester its owner, then provision it (as 'Provision' would).
+
+    The requester is added to the testbed's group by their Keycloak user id (the `sub` of the token they asked with),
+    first and, if Keycloak refuses, nothing changes, so the request can be approved again. Provisioning problems
+    do not undo the approval: the testbed is enabled and its steps show what to retry.
+    """
+    tb = _get(slug)
+    if tb["status"] != "requested":
+        raise HTTPException(status_code=409, detail=f"Testbed '{slug}' is not waiting for approval (it is {tb['status']})")
+    who = tb["requested_by_email"] or tb["created_by"] or tb["requested_by_sub"]
+    followups: list[str] = []
+    if keycloak_admin.configured():
+        keycloak_admin.add_member_by_id(slug, tb["requested_by_sub"])
+    else:
+        followups.append(f"KEYCLOAK_ADMIN_CLIENT_ID/_SECRET not set: add {who} to the Keycloak "
+                         f"group for '{slug}' by hand so they can manage it")
+    store.update_testbed(slug, status="draft", decision_note=((body.note if body else None) or "").strip() or None)
+    store.audit(slug, _actor(claims), "approve", who or "")
+    try:
+        provisioned = provision(slug, claims)
+    except HTTPException as e:
+        return {"testbed": _get(slug), "provision": None, "followups": [*followups, f"Provisioning failed: {e.detail}"]}
+    provisioned["followups"] = [*followups, *provisioned["followups"]]
+    return provisioned
+
+
+@router.post("/{slug}/reject")
+def reject_request(slug: str, body: Decision | None = None, claims: dict = Depends(require_testbed_admin)):
+    tb = _get(slug)
+    if tb["status"] != "requested":
+        raise HTTPException(status_code=409, detail=f"Testbed '{slug}' is not waiting for approval (it is {tb['status']})")
+    note = ((body.note if body else None) or "").strip() or None
+    updated = store.update_testbed(slug, status="rejected", decision_note=note)
+    store.audit(slug, _actor(claims), "reject", (note or "")[:200])
+    return updated
+
+
+@router.delete("/{slug}/request")
+def withdraw_request(slug: str, claims: dict = Depends(current_claims)):
+    """Remove a request that has not been approved, freeing its slug: by whoever asked for it, or an administrator."""
+    tb = store.get_testbed(slug)
+    if tb is None and is_testbed_admin(claims):
+        raise HTTPException(status_code=404, detail=f"Testbed '{slug}' not found")
+    if tb is None or not (is_testbed_admin(claims) or _is_requester(tb, claims)):
+        raise HTTPException(status_code=403, detail=f"No access to testbed '{slug}'")
+    if tb["status"] not in REQUEST_STATUSES:
+        raise HTTPException(status_code=409, detail=f"Testbed '{slug}' is already approved: deregister it instead")
+    store.audit(slug, _actor(claims), "withdraw-request", tb["status"])
+    store.delete_testbed(slug)
+    return {"slug": slug, "status": "withdrawn"}
+
+
+@router.get("/{slug}")
+def get_testbed(slug: str, claims: dict = Depends(current_claims)):
+    """One testbed: for an administrator, an owner, or the user who asked for it while it is still a request."""
+    if is_testbed_admin(claims) or slug in owned_slugs(claims):
+        return _get(slug)
+    tb = store.get_testbed(slug)
+    if tb is None or not _is_requester(tb, claims):
+        raise HTTPException(status_code=403, detail=f"No access to testbed '{slug}'")
+    return tb
 
 
 @router.patch("/{slug}")
@@ -644,6 +757,8 @@ def provision(slug: str, claims: dict = Depends(require_testbed_admin)):
     it is stored encrypted for the transfer step and is never returned again.
     """
     tb = _get(slug)
+    if tb["status"] in REQUEST_STATUSES:
+        raise HTTPException(status_code=409, detail=f"Testbed '{slug}' is a request ({tb['status']}): approve it first")
     steps = dict(tb["steps"])
     issued: dict | None = None
 
