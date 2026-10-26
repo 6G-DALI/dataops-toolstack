@@ -14,18 +14,20 @@ bucket as an asset and transfers it, to itself, into the testbed's Data Lake buc
 """
 
 import asyncio
+import hashlib
 import re
 import time
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 
 import datalake_admin
 import edc_client
 import edc_consumer_client
 import keycloak_admin
+import logo_image
 import piveau_access
 import piveau_dataset_client as pdc
 import piveau_catalogue_client
@@ -39,6 +41,7 @@ from config import (
     FACILITY_DSP_URL,
     FACILITY_PARTICIPANT_ID,
     MONITOR_API_TOKEN,
+    ORCHESTRATOR_PUBLIC_URL,
     TESTBED_BUCKET_PREFIX,
     TESTBED_DOMAIN_SUFFIX,
 )
@@ -323,6 +326,8 @@ def update_testbed(slug: str, body: TestbedUpdate, claims: dict = Depends(requir
     if "logo_url" in changes:
         logo_url = _logo_or_422(body.logo_url)
         fields["logo_url"] = logo_url
+        if not _is_hosted_logo_url(slug, logo_url):
+            store.delete_logo(slug)  # a logo from another address replaces (or removes) the uploaded one
     updated = store.update_testbed(slug, **fields) if fields else tb
     if "dsp_url" in fields:
         store.audit(slug, _actor(claims), "update-dsp-url", f"{tb['dsp_url']} -> {fields['dsp_url']}"[:200])
@@ -334,6 +339,90 @@ def update_testbed(slug: str, body: TestbedUpdate, claims: dict = Depends(requir
             raise HTTPException(status_code=e.status_code,
                                 detail=f"The logo is saved, but the catalogue in piveau was not updated: {e.detail}")
     return updated
+
+
+# --- the testbed's logo as an uploaded file -------------------------------------------------------------------------
+# The image is kept here and served from GET /testbeds/<slug>/logo, a public address (the catalogue's visitors load it,
+# and a catalogue's logo is public anyway). That address, with the image's hash as ?v= so that a new upload is not
+# shadowed by a cached one, is what becomes the testbed's logo_url and the catalogue's foaf:logo in piveau.
+
+def _logo_base() -> str:
+    base = ORCHESTRATOR_PUBLIC_URL.strip().rstrip("/")
+    if not base.startswith(("http://", "https://")):
+        raise HTTPException(status_code=503, detail="ORCHESTRATOR_PUBLIC_URL is not set (or is not an absolute http(s) "
+                                                    "URL) on the orchestrator, so an uploaded logo has no public "
+                                                    "address; paste a logo URL instead")
+    return base
+
+
+def _is_hosted_logo_url(slug: str, url: str | None) -> bool:
+    return bool(url) and bool(ORCHESTRATOR_PUBLIC_URL.strip()) \
+        and url.startswith(f"{ORCHESTRATOR_PUBLIC_URL.strip().rstrip('/')}/testbeds/{slug}/logo")
+
+
+def _set_catalogue_logo(tb: dict, url: str | None) -> None:
+    try:
+        piveau_catalogue_client.set_catalogue_logo(tb["catalogue_id"], url)
+    except HTTPException as e:
+        raise HTTPException(status_code=e.status_code,
+                            detail=f"The logo is saved, but the catalogue in piveau was not updated: {e.detail}")
+
+
+@router.post("/{slug}/logo")
+def upload_logo(slug: str, file: UploadFile = File(...), claims: dict = Depends(require_testbed_access)):
+    """Set the testbed's logo from an image file: a PNG, JPEG, WebP or GIF of up to 512 KB (judged by its bytes).
+
+    The file is kept here, its public address becomes the testbed's logo_url and is written to its catalogue in
+    piveau. If piveau refuses, the logo stays saved and 'Re-run provisioning' applies it later.
+    """
+    tb = _get(slug)
+    base = _logo_base()
+    data = file.file.read(logo_image.MAX_LOGO_BYTES + 1)
+    if len(data) > logo_image.MAX_LOGO_BYTES:
+        raise HTTPException(status_code=413, detail=f"The logo is larger than {logo_image.MAX_LOGO_BYTES // 1024} KB")
+    content_type = logo_image.sniff(data)
+    if content_type is None:
+        raise HTTPException(status_code=415, detail=f"The logo must be a {logo_image.ALLOWED} image")
+    sha = hashlib.sha256(data).hexdigest()
+    url = f"{base}/testbeds/{slug}/logo?v={sha[:12]}"
+    store.set_logo(slug, content_type, data, sha)
+    updated = store.update_testbed(slug, logo_url=url)
+    store.audit(slug, _actor(claims), "upload-logo", f"{content_type}, {len(data)} bytes"[:200])
+    _set_catalogue_logo(tb, url)
+    return updated
+
+
+@router.delete("/{slug}/logo")
+def delete_logo(slug: str, claims: dict = Depends(require_testbed_access)):
+    """Remove the uploaded logo, from the testbed and from its catalogue in piveau."""
+    tb = _get(slug)
+    if store.get_logo(slug) is None and not _is_hosted_logo_url(slug, tb["logo_url"]):
+        raise HTTPException(status_code=404, detail=f"Testbed '{slug}' has no uploaded logo")
+    store.delete_logo(slug)
+    updated = store.update_testbed(slug, logo_url=None)
+    store.audit(slug, _actor(claims), "delete-logo", "")
+    _set_catalogue_logo(tb, None)
+    return updated
+
+
+@router.get("/{slug}/logo")
+def get_logo(slug: str, if_none_match: str | None = Header(default=None)):
+    """The testbed's uploaded logo. Public: no token, the catalogue's visitors load it."""
+    logo = store.get_logo(slug)
+    if logo is None:
+        raise HTTPException(status_code=404, detail=f"Testbed '{slug}' has no uploaded logo")
+    etag = f'"{logo["sha256"][:16]}"'
+    headers = {
+        "ETag": etag,
+        "Cache-Control": "public, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
+        # An image shown in a page; opened on its own it has nothing to load or run.
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+    }
+    if if_none_match == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=logo["data"], media_type=logo["content_type"], headers=headers)
 
 
 @router.get("/{slug}/assets", dependencies=[Depends(require_testbed_access)])

@@ -86,6 +86,10 @@ TESTBED_BUCKET_PREFIX = os.getenv("TESTBED_BUCKET_PREFIX", "6g-dali-")
 # watches them without being told (GET /monitor/buckets). Empty: the endpoint answers 503 and the monitor's
 # MONITOR_BUCKETS must list every bucket by hand.
 MONITOR_API_TOKEN = os.getenv("MONITOR_API_TOKEN", "")
+# Where this API is reached from outside, e.g. https://dataops.6gdali.eu/api: the base of the URL a testbed's uploaded
+# logo gets (<this>/testbeds/<slug>/logo), which is what is written into its catalogue in piveau. Unset: logo uploads
+# answer 503.
+ORCHESTRATOR_PUBLIC_URL = os.getenv("ORCHESTRATOR_PUBLIC_URL", "")
 TESTBED_DOMAIN_SUFFIX = os.getenv("TESTBED_DOMAIN_SUFFIX", "6gdali.eu")
 # Public URL of the central connector, written into each generated connector
 # properties as edc.dali.connector.url.

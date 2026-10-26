@@ -92,8 +92,18 @@ Keycloak user id) to the testbed's Keycloak group, so they own it, and runs prov
 `POST /testbeds/<slug>/reject` keeps it as `rejected` with the reason for the requester to read.
 `DELETE /testbeds/<slug>/request` withdraws a request that was not approved, freeing the slug.
 
+Logo: a testbed's catalogue logo (`foaf:logo` in piveau) can be an uploaded file. `POST /testbeds/<slug>/logo`
+(multipart, field `file`; the testbed's owner or an administrator) takes a PNG, JPEG, WebP or GIF of up to 512 KB,
+judged by the file's own bytes (SVG is refused: opened directly it can run scripts). The orchestrator keeps the image
+in its database and serves it, to anyone and without a token, at `GET /testbeds/<slug>/logo` (with `ETag`, `nosniff`
+and a restrictive `Content-Security-Policy`). The address `<ORCHESTRATOR_PUBLIC_URL>/testbeds/<slug>/logo?v=<hash>`
+becomes the testbed's `logo_url` and is written to its catalogue; the hash changes with each upload, so a cached image
+never hides a new one. `DELETE /testbeds/<slug>/logo` removes it. Setting a logo URL by `PATCH` (administrators) replaces
+an uploaded logo. If piveau refuses the update the logo stays saved, and re-running provisioning applies it.
+
 | Variable | Default | Description |
 |---|---|---|
+| `ORCHESTRATOR_PUBLIC_URL` | (unset) | Where the API is reached from outside, e.g. `https://dataops.6gdali.eu/api`: the base of an uploaded logo's public address. Unset or not an absolute http(s) URL: uploading a logo answers 503 (424 in the registry's mapping). The compose file defaults it to the DataOps UI's address + `/api` |
 | `TESTBED_SECRET_KEY` | (required) | Master secret: encrypts stored data-lake secrets, derives bundle passwords. Keep it stable. |
 | `KEYCLOAK_ISSUER` | (required) | e.g. `https://auth.dspace.sparkworks.net/auth/realms/dspace` |
 | `MONITOR_API_TOKEN` | (unset) | Token the s3-asset-monitor sends (`X-Monitor-Token`) to read `GET /monitor/buckets`, the Data Lake bucket of every provisioned testbed, so it watches them without `MONITOR_BUCKETS` being edited. Unset: the endpoint answers 503 |

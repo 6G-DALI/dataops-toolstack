@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
-import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch, FiActivity, FiExternalLink, FiFileText, FiPlay, FiEdit2, FiStopCircle } from 'react-icons/fi'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { FiCheckCircle, FiXCircle, FiMinusCircle, FiDownload, FiRefreshCw, FiKey, FiTrash2, FiSearch, FiActivity, FiExternalLink, FiFileText, FiPlay, FiEdit2, FiStopCircle, FiUpload } from 'react-icons/fi'
 import {
   deleteTestbed, discoverTestbedAssets, getTestbedDeletionPreview, downloadTestbedBundle, findTestbedTransfer, negotiateTestbedAsset, startTestbedTransfer, terminateTestbedTransfer, getTestbed, getTestbedAssets, getTestbedAudit,
-  provisionTestbed, rotateTestbedCredentials, updateTestbedDspUrl, updateTestbedLogo,
+  provisionTestbed, rotateTestbedCredentials, updateTestbedDspUrl, updateTestbedLogo, uploadTestbedLogo, deleteTestbedLogo,
 } from '../api/airflow'
 import { isTestbedAdmin } from '../auth/testbedAccess'
 import { bucketUrl, catalogueUrl } from '../config'
@@ -49,6 +49,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 /** Transfer states that have ended (the orchestrator's ENDED_STATES): anything else can still be terminated. */
 const ENDED_TRANSFER_STATES = ['COMPLETED', 'TERMINATING', 'TERMINATED', 'DEPROVISIONING', 'DEPROVISIONED', 'SUSPENDED']
 
+/** The largest logo file the orchestrator accepts (logo_image.MAX_LOGO_BYTES); checked here to say so before uploading. */
+const MAX_LOGO_BYTES = 512 * 1024
+
 export default function TestbedDetail({ slug, onNavigate, initialTab }: TestbedDetailProps) {
   const [tb, setTb] = useState<Testbed | null>(null)
   const [audit, setAudit] = useState<TestbedAuditEntry[]>([])
@@ -66,6 +69,7 @@ export default function TestbedDetail({ slug, onNavigate, initialTab }: TestbedD
   const [confirmTerminate, setConfirmTerminate] = useState<TestbedAsset | null>(null)
   const [dspEdit, setDspEdit] = useState<string | null>(null)
   const [logoEdit, setLogoEdit] = useState<string | null>(null)
+  const logoInput = useRef<HTMLInputElement>(null)
   const [tab, setTab] = useState<Tab>(TABS.find(t => t.id === initialTab)?.id ?? 'overview')
   // A hosted testbed's upload secret, when re-running provisioning just created the key: shown once.
   const [issuedUpload, setIssuedUpload] = useState<UploadCredentials | null>(null)
@@ -206,12 +210,38 @@ export default function TestbedDetail({ slug, onNavigate, initialTab }: TestbedD
                         style={{ maxHeight: 48, maxWidth: 200 }} className="d-inline-block"
                         onError={e => { e.currentTarget.style.display = 'none' }} />
                     ) : <span className="text-muted">none</span>}
-                    {isTestbedAdmin() && (
-                      <button className="btn btn-sm btn-link py-0 ms-1" disabled={busy} title="Edit the logo URL"
-                        onClick={() => setLogoEdit(tb.logo_url ?? '')}>
-                        <FiEdit2 />
+                    <div className="mt-1 d-flex flex-wrap align-items-center gap-1">
+                      <input ref={logoInput} type="file" className="d-none" aria-label="Logo file"
+                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        onChange={e => {
+                          const file = e.target.files?.[0]
+                          e.target.value = ''  // so choosing the same file again still fires
+                          if (!file) return
+                          if (file.size > MAX_LOGO_BYTES) {
+                            setError(`The logo is ${Math.ceil(file.size / 1024)} KB; the limit is ${MAX_LOGO_BYTES / 1024} KB.`)
+                            return
+                          }
+                          act(() => uploadTestbedLogo(slug, file), 'Logo uploaded and set on the catalogue.')
+                        }} />
+                      <button className="btn btn-sm btn-outline-primary" disabled={busy}
+                        title="PNG, JPEG, WebP or GIF, up to 512 KB. It is hosted here and its address is set on the catalogue."
+                        onClick={() => logoInput.current?.click()}>
+                        <FiUpload className="me-1" />Upload logo
                       </button>
-                    )}
+                      {tb.logo_url?.includes(`/testbeds/${slug}/logo`) && (
+                        <button className="btn btn-sm btn-outline-danger" disabled={busy}
+                          title="Remove the uploaded logo from the testbed and its catalogue"
+                          onClick={() => act(() => deleteTestbedLogo(slug), 'Logo removed from the catalogue.')}>
+                          <FiTrash2 className="me-1" />Remove
+                        </button>
+                      )}
+                      {isTestbedAdmin() && (
+                        <button className="btn btn-sm btn-link py-0" disabled={busy} title="Set the logo from a URL instead"
+                          onClick={() => setLogoEdit(tb.logo_url ?? '')}>
+                          <FiEdit2 className="me-1" />Use a URL
+                        </button>
+                      )}
+                    </div>
                   </>
                 ) : (
                   <form onSubmit={e => {

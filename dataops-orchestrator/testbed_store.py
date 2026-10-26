@@ -82,6 +82,9 @@ _DDL = (
         contract_agreement_id TEXT, transfer_id TEXT, transfer_state TEXT, transfer_checked_at TEXT,
         negotiation_id TEXT, negotiation_state TEXT,
         discovered_at TEXT, last_seen_at TEXT, PRIMARY KEY (slug, asset_id))""",
+    """CREATE TABLE IF NOT EXISTS testbed_logos (
+        slug TEXT PRIMARY KEY, content_type TEXT NOT NULL, data {blob} NOT NULL, sha256 TEXT NOT NULL,
+        updated_at TEXT)""",
     """CREATE TABLE IF NOT EXISTS testbed_audit (
         id {id_type}, ts TEXT NOT NULL, slug TEXT NOT NULL,
         actor TEXT, action TEXT NOT NULL, detail TEXT)""",
@@ -144,8 +147,9 @@ def _db():
     try:
         if not _schema_ready or not _PG:
             id_type = "BIGSERIAL PRIMARY KEY" if _PG else "INTEGER PRIMARY KEY AUTOINCREMENT"
+            blob = "BYTEA" if _PG else "BLOB"
             for ddl in _DDL:
-                conn.execute(ddl.format(id_type=id_type) if "{id_type}" in ddl else ddl)
+                conn.execute(ddl.format(id_type=id_type, blob=blob) if ("{id_type}" in ddl or "{blob}" in ddl) else ddl)
             _migrate(conn)
             _schema_ready = _PG
         yield conn
@@ -209,8 +213,31 @@ def update_testbed(slug: str, **fields) -> dict:
     return get_testbed(slug)
 
 
+def set_logo(slug: str, content_type: str, data: bytes, sha256: str) -> None:
+    """Keep the testbed's uploaded logo (one per testbed; a new one replaces it)."""
+    with _db() as c:
+        c.execute(
+            """INSERT INTO testbed_logos (slug, content_type, data, sha256, updated_at) VALUES (?,?,?,?,?)
+               ON CONFLICT (slug) DO UPDATE SET content_type=excluded.content_type, data=excluded.data,
+                 sha256=excluded.sha256, updated_at=excluded.updated_at""",
+            (slug, content_type, data, sha256, _now()))
+
+
+def get_logo(slug: str) -> dict | None:
+    with _db() as c:
+        r = c.execute("SELECT content_type, data, sha256, updated_at FROM testbed_logos WHERE slug=?", (slug,)).fetchone()
+    return None if r is None else {"content_type": r["content_type"], "data": bytes(r["data"]),
+                                   "sha256": r["sha256"], "updated_at": r["updated_at"]}
+
+
+def delete_logo(slug: str) -> None:
+    with _db() as c:
+        c.execute("DELETE FROM testbed_logos WHERE slug=?", (slug,))
+
+
 def delete_testbed(slug: str) -> None:
     with _db() as c:
+        c.execute("DELETE FROM testbed_logos WHERE slug=?", (slug,))
         c.execute("DELETE FROM testbed_assets WHERE slug=?", (slug,))
         c.execute("DELETE FROM testbeds WHERE slug=?", (slug,))
 

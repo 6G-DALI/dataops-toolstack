@@ -465,6 +465,19 @@ export function updateTestbedLogo(slug: string, logoUrl: string): Promise<Testbe
   return request(`/testbeds/${encodeURIComponent(slug)}`, { method: 'PATCH', body: JSON.stringify({ logo_url: logoUrl }) })
 }
 
+/** Owner or admin: sets the testbed's logo from an image file (PNG, JPEG, WebP or GIF, up to 512 KB). The orchestrator
+ *  hosts it and sets its public address as the catalogue's logo in piveau. */
+export function uploadTestbedLogo(slug: string, file: File): Promise<Testbed> {
+  const form = new FormData()
+  form.append('file', file)
+  return request(`/testbeds/${encodeURIComponent(slug)}/logo`, { method: 'POST', body: form })
+}
+
+/** Owner or admin: removes the uploaded logo from the testbed and its catalogue. */
+export function deleteTestbedLogo(slug: string): Promise<Testbed> {
+  return request(`/testbeds/${encodeURIComponent(slug)}/logo`, { method: 'DELETE' })
+}
+
 export function provisionTestbed(slug: string): Promise<TestbedProvisionResponse> {
   return request(`/testbeds/${encodeURIComponent(slug)}/provision`, { method: 'POST' })
 }
