@@ -370,24 +370,37 @@ def _set_catalogue_logo(tb: dict, url: str | None) -> None:
 
 @router.post("/{slug}/logo")
 def upload_logo(slug: str, file: UploadFile = File(...), claims: dict = Depends(require_testbed_access)):
-    """Set the testbed's logo from an image file: a PNG, JPEG, WebP or GIF of up to 512 KB (judged by its bytes).
+    """Set the testbed's logo from a file: a PNG, JPEG, WebP or GIF of up to 512 KB, or a PDF of up to 2 MB (judged by
+    its bytes).
 
-    The file is kept here, its public address becomes the testbed's logo_url and is written to its catalogue in
-    piveau. If piveau refuses, the logo stays saved and 'Re-run provisioning' applies it later.
+    A PDF is not kept: its first page, cropped to what is drawn on it, becomes a PNG (browsers do not show a PDF as an
+    image), and that PNG is the logo. The file is kept here, its public address becomes the testbed's logo_url and is
+    written to its catalogue in piveau. If piveau refuses, the logo stays saved and 'Re-run provisioning' applies it
+    later.
     """
     tb = _get(slug)
     base = _logo_base()
-    data = file.file.read(logo_image.MAX_LOGO_BYTES + 1)
-    if len(data) > logo_image.MAX_LOGO_BYTES:
-        raise HTTPException(status_code=413, detail=f"The logo is larger than {logo_image.MAX_LOGO_BYTES // 1024} KB")
+    data = file.file.read(logo_image.MAX_PDF_BYTES + 1)
     content_type = logo_image.sniff(data)
     if content_type is None:
-        raise HTTPException(status_code=415, detail=f"The logo must be a {logo_image.ALLOWED} image")
+        raise HTTPException(status_code=415, detail=f"The logo must be a {logo_image.ALLOWED} file")
+    limit = logo_image.MAX_PDF_BYTES if content_type == logo_image.PDF else logo_image.MAX_LOGO_BYTES
+    if len(data) > limit:
+        raise HTTPException(status_code=413, detail=f"The logo is larger than {limit // 1024} KB")
+    from_pdf = content_type == logo_image.PDF
+    if from_pdf:
+        try:
+            data, content_type = logo_image.pdf_to_png(data), "image/png"
+        except logo_image.PdfTooLarge as e:
+            raise HTTPException(status_code=413, detail=f"The PDF cannot be used as a logo: {e}")
+        except logo_image.PdfError as e:
+            raise HTTPException(status_code=422, detail=f"The PDF cannot be used as a logo: {e}")
     sha = hashlib.sha256(data).hexdigest()
     url = f"{base}/testbeds/{slug}/logo?v={sha[:12]}"
     store.set_logo(slug, content_type, data, sha)
     updated = store.update_testbed(slug, logo_url=url)
-    store.audit(slug, _actor(claims), "upload-logo", f"{content_type}, {len(data)} bytes"[:200])
+    store.audit(slug, _actor(claims), "upload-logo",
+                f"{content_type}, {len(data)} bytes{' (from a PDF)' if from_pdf else ''}"[:200])
     _set_catalogue_logo(tb, url)
     return updated
 

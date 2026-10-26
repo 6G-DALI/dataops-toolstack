@@ -94,7 +94,9 @@ Keycloak user id) to the testbed's Keycloak group, so they own it, and runs prov
 
 Logo: a testbed's catalogue logo (`foaf:logo` in piveau) can be an uploaded file. `POST /testbeds/<slug>/logo`
 (multipart, field `file`; the testbed's owner or an administrator) takes a PNG, JPEG, WebP or GIF of up to 512 KB,
-judged by the file's own bytes (SVG is refused: opened directly it can run scripts). The orchestrator keeps the image
+judged by the file's own bytes (SVG is refused: opened directly it can run scripts), or a PDF of up to 2 MB: its first
+page, cropped to what is drawn on it and with a transparent background, is rendered to a PNG (PyMuPDF; about 512 px on
+the long side) and only that PNG is kept. A password-protected, damaged or empty PDF is refused (422). The orchestrator keeps the image
 in its database and serves it, to anyone and without a token, at `GET /testbeds/<slug>/logo` (with `ETag`, `nosniff`
 and a restrictive `Content-Security-Policy`). The address `<ORCHESTRATOR_PUBLIC_URL>/testbeds/<slug>/logo?v=<hash>`
 becomes the testbed's `logo_url` and is written to its catalogue; the hash changes with each upload, so a cached image

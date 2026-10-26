@@ -49,8 +49,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 /** Transfer states that have ended (the orchestrator's ENDED_STATES): anything else can still be terminated. */
 const ENDED_TRANSFER_STATES = ['COMPLETED', 'TERMINATING', 'TERMINATED', 'DEPROVISIONING', 'DEPROVISIONED', 'SUSPENDED']
 
-/** The largest logo file the orchestrator accepts (logo_image.MAX_LOGO_BYTES); checked here to say so before uploading. */
+/** The largest logo files the orchestrator accepts (logo_image.MAX_LOGO_BYTES / MAX_PDF_BYTES); checked here to say so
+ *  before uploading. A PDF may be larger: its first page becomes the PNG that is kept. */
 const MAX_LOGO_BYTES = 512 * 1024
+const MAX_PDF_BYTES = 2 * 1024 * 1024
 
 export default function TestbedDetail({ slug, onNavigate, initialTab }: TestbedDetailProps) {
   const [tb, setTb] = useState<Testbed | null>(null)
@@ -212,19 +214,21 @@ export default function TestbedDetail({ slug, onNavigate, initialTab }: TestbedD
                     ) : <span className="text-muted">none</span>}
                     <div className="mt-1 d-flex flex-wrap align-items-center gap-1">
                       <input ref={logoInput} type="file" className="d-none" aria-label="Logo file"
-                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.pdf"
                         onChange={e => {
                           const file = e.target.files?.[0]
                           e.target.value = ''  // so choosing the same file again still fires
                           if (!file) return
-                          if (file.size > MAX_LOGO_BYTES) {
-                            setError(`The logo is ${Math.ceil(file.size / 1024)} KB; the limit is ${MAX_LOGO_BYTES / 1024} KB.`)
+                          const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+                          const limit = isPdf ? MAX_PDF_BYTES : MAX_LOGO_BYTES
+                          if (file.size > limit) {
+                            setError(`The logo is ${Math.ceil(file.size / 1024)} KB; the limit is ${limit / 1024} KB.`)
                             return
                           }
                           act(() => uploadTestbedLogo(slug, file), 'Logo uploaded and set on the catalogue.')
                         }} />
                       <button className="btn btn-sm btn-outline-primary" disabled={busy}
-                        title="PNG, JPEG, WebP or GIF, up to 512 KB. It is hosted here and its address is set on the catalogue."
+                        title="PNG, JPEG, WebP or GIF up to 512 KB, or a PDF up to 2 MB (its first page becomes the logo). It is hosted here and its address is set on the catalogue."
                         onClick={() => logoInput.current?.click()}>
                         <FiUpload className="me-1" />Upload logo
                       </button>

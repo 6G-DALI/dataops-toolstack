@@ -15,3 +15,5 @@ cryptography>=43
 # Postgres driver for the orchestrator's own database (testbed registry)
 psycopg[binary]==3.2.3
 argon2-cffi>=23.1
+# Turns an uploaded PDF logo into the PNG that is served (logo_image.py). Large wheel (~70 MB).
+pymupdf==2.0

@@ -36,6 +36,7 @@ def test_sniff_reads_the_type_from_the_bytes():
     assert logo_image.sniff(JPEG) == "image/jpeg"
     assert logo_image.sniff(GIF) == "image/gif"
     assert logo_image.sniff(WEBP) == "image/webp"
+    assert logo_image.sniff(b"%PDF-1.7\n") == "application/pdf"
     assert logo_image.sniff(b"<svg xmlns='http://www.w3.org/2000/svg'/>") is None
     assert logo_image.sniff(b"just text") is None
     assert logo_image.sniff(b"") is None
@@ -162,3 +163,82 @@ def test_deregistering_a_testbed_removes_its_logo(logos):
     _upload(logos)
     assert logos.delete("/testbeds/kul").status_code == 200
     assert TestClient(app).get("/testbeds/kul/logo").status_code == 404
+
+
+# --- a PDF logo: its first page becomes the PNG that is kept and served ---------------------------------------------
+
+def _pdf(draw=True, pages=1, encrypt=False, width=595, height=842):
+    import pymupdf
+    doc = pymupdf.open()
+    for _ in range(pages):
+        page = doc.new_page(width=width, height=height)
+        if draw:
+            page.draw_rect(pymupdf.Rect(200, 300, 400, 380), color=(1, 0, 0), fill=(1, 0, 0))
+    if encrypt:
+        return doc.tobytes(encryption=pymupdf.PDF_ENCRYPT_AES_256, owner_pw="owner", user_pw="user")
+    return doc.tobytes()
+
+
+def _png_size(png):
+    return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+
+
+def _upload_pdf(c, data, slug="kul"):
+    return c.post(f"/testbeds/{slug}/logo", files={"file": ("logo.pdf", data, "application/pdf")})
+
+
+def test_a_pdf_is_stored_and_served_as_a_png_cropped_to_what_is_drawn(logos):
+    assert _upload_pdf(logos, _pdf()).status_code == 200  # a 200 x 80 rectangle in the middle of an A4 page
+    served = TestClient(app).get("/testbeds/kul/logo")
+    assert served.headers["content-type"] == "image/png" and served.content.startswith(b"\x89PNG\r\n\x1a\n")
+    w, h = _png_size(served.content)
+    assert 510 <= max(w, h) <= 514 and 2.2 < w / h < 2.6   # the drawn area (plus a margin), not the whole page
+    assert logos.sent and logos.sent[-1][1].startswith(f"{BASE}/testbeds/kul/logo?v=")
+
+
+def test_only_the_first_page_of_a_pdf_is_used(logos):
+    assert _upload_pdf(logos, _pdf(pages=3)).status_code == 200
+
+
+def test_the_audit_log_says_the_logo_came_from_a_pdf(logos):
+    _upload_pdf(logos, _pdf())
+    entries = logos.get("/testbeds/kul/audit").json()["entries"]
+    assert any(e["action"] == "upload-logo" and "from a PDF" in e["detail"] for e in entries)
+
+
+def test_a_pdf_with_nothing_drawn_is_refused(logos):
+    r = _upload_pdf(logos, _pdf(draw=False))
+    assert r.status_code == 422 and "nothing" in r.json()["detail"]
+    assert logos.sent == []
+
+
+def test_a_password_protected_pdf_is_refused(logos):
+    r = _upload_pdf(logos, _pdf(encrypt=True))
+    assert r.status_code == 422 and "password" in r.json()["detail"]
+
+
+def test_a_damaged_pdf_is_refused_not_a_server_error(logos):
+    for data in (b"%PDF-1.7\nthis is not a pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n", b"%PDF-"):
+        r = _upload_pdf(logos, data)
+        assert r.status_code == 422 and "PDF" in r.json()["detail"]
+    assert TestClient(app).get("/testbeds/kul/logo").status_code == 404
+
+
+def test_a_pdf_over_two_megabytes_is_refused(logos):
+    r = _upload_pdf(logos, _pdf() + b"\x00" * logo_image.MAX_PDF_BYTES)
+    assert r.status_code == 413 and "2048 KB" in r.json()["detail"]
+
+
+def test_a_pdf_whose_picture_does_not_fit_the_limit_is_refused(logos, monkeypatch):
+    monkeypatch.setattr(logo_image, "MAX_LOGO_BYTES", 100)   # smaller than any PNG of the page
+    r = _upload_pdf(logos, _pdf())
+    assert r.status_code == 413 and "even when small" in r.json()["detail"]
+
+
+def test_an_image_is_still_limited_to_the_smaller_size_not_the_pdf_size(logos):
+    assert _upload(logos, PNG + b"\x00" * (logo_image.MAX_LOGO_BYTES + 1)).status_code == 413
+
+
+def test_a_pdf_is_recognised_by_its_bytes_not_its_name(logos):
+    assert _upload(logos, _pdf(), "logo.png", ctype="image/png").status_code == 200   # a PDF named .png: still converted
+    assert _upload(logos, b"not a pdf", "logo.pdf", ctype="application/pdf").status_code == 415
