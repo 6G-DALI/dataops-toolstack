@@ -1,14 +1,15 @@
 import json
 import re
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from starlette.concurrency import run_in_threadpool
 
 import airflow_client as af
 import datalake_client as dlc
+from auth import require_dataops_operator
 from config import DATAOPS_BUCKET
 
-router = APIRouter(prefix="/dags/{dag_id}/runs", tags=["DAG Runs"])
+router = APIRouter(prefix="/dags/{dag_id}/runs", tags=["DAG Runs"], dependencies=[Depends(require_dataops_operator)])
 
 
 @router.get("")

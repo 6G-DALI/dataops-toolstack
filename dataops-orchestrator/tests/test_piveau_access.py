@@ -18,7 +18,7 @@ import piveau_access  # noqa: E402
 import piveau_catalogue_client  # noqa: E402
 import piveau_dataset_client as pdc  # noqa: E402
 import testbed_store  # noqa: E402
-from auth import current_claims  # noqa: E402
+from auth import claims_or_error, current_claims  # noqa: E402
 from main import app  # noqa: E402
 
 AR = "http://publications.europa.eu/resource/authority/access-right/"
@@ -210,6 +210,8 @@ def test_a_private_testbed_with_an_existing_public_catalogue_fails_its_catalogue
 def test_listings_forward_the_callers_token_only_with_access_control(monkeypatch):
     import piveau_client
     monkeypatch.setattr(piveau_client.httpx, "AsyncClient", _Recorder)
+    # /datasets is for dataops operators; their token is what is forwarded to piveau
+    app.dependency_overrides[claims_or_error] = lambda: ({"groups": ["/dataops-operators"]}, None)
     c = TestClient(app)
     for on, expected in ((False, {}), (True, {"Authorization": "Bearer user-token"})):
         monkeypatch.setattr(config, "PIVEAU_ACCESS_CONTROL", on)
@@ -217,5 +219,6 @@ def test_listings_forward_the_callers_token_only_with_access_control(monkeypatch
         c.get("/datasets/catalogues", headers={"Authorization": "Bearer user-token"})
         assert _Recorder.calls[0][2] == expected
     _Recorder.calls = []
-    c.get("/datasets/catalogues")  # anonymous caller: anonymous read
+    c.get("/datasets/catalogues")  # no Authorization header to forward: anonymous read
     assert _Recorder.calls[0][2] == {}
+    app.dependency_overrides.pop(claims_or_error, None)

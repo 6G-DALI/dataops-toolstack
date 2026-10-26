@@ -1,9 +1,13 @@
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body, Depends, Query
 from typing import Any
 from pydantic import BaseModel
 import airflow_client as af
+from auth import require_dataops_operator, require_operator_or_monitor_token
 
-router = APIRouter(prefix="/dags", tags=["DAGs"])
+router = APIRouter(prefix="/dags", tags=["DAGs"], dependencies=[Depends(require_dataops_operator)])
+# The trigger is the one route the s3-asset-monitor also calls (with its X-Monitor-Token), so it has its own router
+# (included in main.py): a router-level dependency cannot be left out of one route.
+trigger_router = APIRouter(prefix="/dags", tags=["DAGs"], dependencies=[Depends(require_operator_or_monitor_token)])
 
 
 class DagCreateRequest(BaseModel):
@@ -38,7 +42,7 @@ async def pause_dag(dag_id: str, is_paused: bool = Query(...)):
     return await af.set_dag_paused(dag_id, is_paused)
 
 
-@router.post("/{dag_id}/trigger")
+@trigger_router.post("/{dag_id}/trigger")
 async def trigger_dag(dag_id: str, conf: dict[str, Any] = Body(default_factory=dict)):
     """
     Trigger a new DAG run. `conf` is passed straight through as dag_run.conf.

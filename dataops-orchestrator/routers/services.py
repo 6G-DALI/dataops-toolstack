@@ -3,11 +3,12 @@ import os
 import sys
 
 import asyncio
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 import piveau_service_client as psc
+from auth import require_dataops_operator
 
-router = APIRouter(prefix="/services", tags=["Services"])
+router = APIRouter(prefix="/services", tags=["Services"], dependencies=[Depends(require_dataops_operator)])
 
 PLUGINS_PATH = os.getenv("AIRFLOW_PLUGINS_FOLDER", "/opt/airflow/plugins")
 

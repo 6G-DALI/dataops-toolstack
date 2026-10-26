@@ -57,6 +57,7 @@ app.add_middleware(
 )
 
 app.include_router(dags.router)
+app.include_router(dags.trigger_router)
 app.include_router(runs.router)
 app.include_router(tasks.router)
 app.include_router(datasets.router)

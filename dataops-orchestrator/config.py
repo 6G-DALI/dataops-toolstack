@@ -101,6 +101,13 @@ DATASPACE_S3_ADMIN_SECRET_KEY = os.getenv("DATASPACE_S3_ADMIN_SECRET_KEY", "") o
 # testbed endpoints answer 503 (they hand out credentials, so never open).
 KEYCLOAK_ISSUER = os.getenv("KEYCLOAK_ISSUER", "")
 TESTBED_ADMIN_ROLE = os.getenv("TESTBED_ADMIN_ROLE", "testbed-admin")
+# --- Keycloak token validation for the DataOps endpoints (dags, runs, tasks, datasets, services) ---------------
+# Members of this Keycloak group (the token needs the "groups" claim) run DataOps: the same group the DataOps UI
+# shows its operations pages to. A path ("/dataops-operators") or a bare name both match.
+DATAOPS_OPERATOR_GROUP = os.getenv("DATAOPS_OPERATOR_GROUP", "dataops-operators").strip().strip("/")
+# POST /dags/<this DAG>/trigger also accepts MONITOR_API_TOKEN (header X-Monitor-Token), for the s3-asset-monitor,
+# which starts the validation of each new distribution. No other DAG, and nothing else, accepts it.
+MONITOR_TRIGGER_DAG_ID = os.getenv("MONITOR_TRIGGER_DAG_ID", "dali_dataspace_validate_dataset")
 # Owners of a testbed are members of the Keycloak group <prefix>/<slug> (the token needs a "groups" claim:
 # a Group Membership mapper on the dataops-ui client). Empty prefix = top-level groups named by slug.
 TESTBED_GROUP_PREFIX = os.getenv("TESTBED_GROUP_PREFIX", "testbeds")

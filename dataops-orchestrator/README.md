@@ -36,6 +36,43 @@ GET /health
 
 Returns `{"status": "ok"}` when the service is up.
 
+## Authentication of the DataOps endpoints
+
+`/dags` (including the runs and their results), `/tasks`, `/datasets` and `/services` take a Keycloak bearer token
+(the DataOps UI sends one on every call) of a member of the `dataops-operators` group, the group the UI shows its
+operations pages to. The token needs the `groups` claim, like the testbed endpoints. `/stats`, `/health` and the
+public `/stats/portal` stay open; `/testbeds` and `/monitor` have their own checks (below).
+
+A call without a valid operator token is refused, and the refusal is easy to trace. It is logged as
+`auth refused (<status>): <method> <path> by <user> (client <client>) from <host>: <reason>` (a warning; an error when
+the cause is on our side, such as Keycloak being unreachable; never the token), and the response says the same reason:
+
+| Status | Reason in the response |
+|---|---|
+| 401 | `Missing bearer token`; `Token expired`; `Token issuer '<iss>' is not the expected '<KEYCLOAK_ISSUER>'`; `The token's signature cannot be verified, no Keycloak key matches it`; `Invalid token: …`. Carries `WWW-Authenticate: Bearer`. |
+| 403 | `'<user>' is not a member of the 'dataops-operators' group (the token, issued to client '<client>', has groups: […])`, or `The token … has no 'groups' claim`: a Group Membership mapper is missing on that client in Keycloak. |
+| 503 | `KEYCLOAK_ISSUER is not configured` (also logged once at startup), or `Could not fetch Keycloak's signing keys from <url>`: the orchestrator cannot reach Keycloak. |
+
+`POST /dags/dali_dataspace_validate_dataset/trigger` also accepts the s3-asset-monitor's `X-Monitor-Token` (the same
+`MONITOR_API_TOKEN` it reads `/monitor/buckets` with, set on the monitor as `MONITOR_BUCKETS_TOKEN`), for that DAG
+only. The token opens nothing else.
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATAOPS_OPERATOR_GROUP` | `dataops-operators` | The Keycloak group (path or bare name) whose members may use the DataOps endpoints |
+| `MONITOR_TRIGGER_DAG_ID` | `dali_dataspace_validate_dataset` | The one DAG the monitor token may trigger |
+
+### Open items
+
+- **Audience.** The token's issuer and the operator group are checked, but not its audience or authorized party
+  (`aud` / `azp`): a token the realm issued to another application, for a user in the group, is accepted. Check them
+  against the clients that may call (`dataops-ui`, the monitor's).
+- **Service account for the monitor.** The monitor authenticates its trigger with a shared token (`X-Monitor-Token`).
+  Replace it with a Keycloak service account (client-credentials grant, as it already does for piveau) with a role of
+  its own, and drop the header.
+- **CORS** is still `*` (`main.py`). The UI reaches the API through its same-origin `/api` proxy, so it can be limited
+  to the known origins.
+
 ## Testbed registry (`/testbeds`)
 
 Endpoints (Keycloak bearer token) that register a testbed, provision its bucket, scoped Data Lake key
