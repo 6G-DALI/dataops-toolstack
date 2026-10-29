@@ -126,6 +126,12 @@ KEYCLOAK_ADMIN_CLIENT_SECRET = os.getenv("KEYCLOAK_ADMIN_CLIENT_SECRET", "")
 # from the address the orchestrator itself uses. Defaults to DATASPACE_S3_ENDPOINT_URL.
 DATALAKE_PUBLIC_ENDPOINT_URL = os.getenv("DATALAKE_PUBLIC_ENDPOINT_URL", "") or DATASPACE_S3_ENDPOINT_URL
 
+# --- Download links for the catalogue (routers/downloads.py) ---------------------
+# Presigned GET URLs for a distribution's Data Lake file, for whoever may read its dataset in piveau. They are signed
+# for this endpoint, which must be reachable from the user's browser, and stay valid this many seconds.
+DATALAKE_DOWNLOAD_ENDPOINT_URL = os.getenv("DATALAKE_DOWNLOAD_ENDPOINT_URL", "") or DATALAKE_PUBLIC_ENDPOINT_URL
+DOWNLOAD_URL_TTL_SECONDS = int(os.getenv("DOWNLOAD_URL_TTL_SECONDS", "900"))
+
 # --- Testbeds hosted by the facility connector -----------------------------------
 # A testbed without its own connector uploads to an upload bucket in the Data Lake; the facility (central)
 # connector offers that bucket as an asset and transfers it, to itself, into the testbed's Data Lake bucket.
