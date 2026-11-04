@@ -5,7 +5,7 @@
  * key names and accepted values. Keys are snake_case; the monitor also accepts camelCase aliases on import.
  */
 
-export type FieldType = 'text' | 'textarea' | 'date' | 'email' | 'uri' | 'orcid' | 'int' | 'bool' | 'select' | 'list'
+export type FieldType = 'text' | 'textarea' | 'date' | 'datetime' | 'email' | 'uri' | 'orcid' | 'int' | 'bool' | 'select' | 'list'
 /** M = mandatory, R = recommended, O = optional. */
 export type Obligation = 'M' | 'R' | 'O'
 
@@ -25,6 +25,8 @@ export interface FieldDef {
   boolish?: boolean
   /** A list whose every entry must be a URI. */
   uriList?: boolean
+  /** Only expected together with this field: left empty without it, nothing is recommended. */
+  needs?: string
 }
 
 export interface SectionDef {
@@ -57,6 +59,11 @@ export const SECTIONS: SectionDef[] = [
     { k: 'spatial', label: 'Spatial coverage', type: 'text', req: 'R', hint: 'e.g. "Athens, Greece"' },
     { k: 'temporal_start', label: 'Temporal coverage start', type: 'date', req: 'R' },
     { k: 'temporal_end', label: 'Temporal coverage end', type: 'date', req: 'R', hint: 'Start and end are only published together.' },
+  ] },
+  { id: 'experiment', title: 'Experiment', desc: 'Only for a dataset produced by an experiment 6G-DALI asked your testbed to run. Leave all three empty otherwise.', fields: [
+    { k: 'experiment_id', label: 'Experiment identifier', type: 'text', req: 'O', hint: 'Mandatory for such a dataset: copy the identifier (a UUID) from the experiment request, unchanged.' },
+    { k: 'experiment_started_at', label: 'Experiment started (UTC)', type: 'datetime', req: 'R', needs: 'experiment_id', hint: 'YYYY-MM-DDThh:mm:ssZ, e.g. 2026-10-21T09:00:00Z' },
+    { k: 'experiment_ended_at', label: 'Experiment ended (UTC)', type: 'datetime', req: 'R', needs: 'experiment_id', hint: 'Same format; not before the start.' },
   ] },
   { id: 'rights', title: 'Rights and compliance', desc: "Licence, access conditions and the owner's declarations.", fields: [
     { k: 'license', label: 'Licence (URI)', type: 'uri', req: 'M', def: LICENSES[0], suggest: LICENSES, wide: true },
@@ -185,6 +192,13 @@ export function toJson(values: Values): string {
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 const realDate = (s: string) => DATE_RE.test(s) && !isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0, 10) === s
+const DATETIME_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/
+/** A real UTC date and time with seconds, as xsd:dateTime needs. */
+export const realDateTime = (s: string) => {
+  const m = DATETIME_RE.exec(s)
+  return !!m && realDate(m[1]) && +m[2] < 24 && +m[3] < 60 && +m[4] < 60
+}
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const EMAIL_RE = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/
 const URI_RE = /^[a-z][a-z0-9+.-]*:\/\/[^\s<>"]+$/i
 const ORCID_RE = /^(https?:\/\/orcid\.org\/)?\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/
@@ -205,12 +219,14 @@ export function validateMetadata(values: Values): Validation {
   for (const f of ALL_FIELDS) {
     const v = (f.tc ? tcData : data)[f.k]
     if (v === undefined || v === '') {
+      if (f.needs && !data[f.needs]) continue // only expected together with its parent field
       if (f.req === 'M' && f.type !== 'bool') err(f.k, 'Required.')
       else if (f.req === 'R') warn(f.k, 'Recommended: improves discoverability.')
       continue
     }
     const s = typeof v === 'string' ? v : ''
     if (f.type === 'date' && !realDate(s)) err(f.k, 'Use YYYY-MM-DD, a real date, no time.')
+    if (f.type === 'datetime' && !realDateTime(s)) err(f.k, 'Use YYYY-MM-DDThh:mm:ssZ (UTC), a real date and time.')
     if (f.type === 'email' && !EMAIL_RE.test(s)) err(f.k, 'Not a valid e-mail address.')
     if (f.type === 'uri' && !URI_RE.test(s)) err(f.k, 'Must be a full URI such as https://…')
     if (f.type === 'orcid' && !ORCID_RE.test(s)) err(f.k, 'Expected 0000-0002-1825-0097 or the orcid.org URL.')
@@ -224,6 +240,13 @@ export function validateMetadata(values: Values): Validation {
   const te = str('temporal_end')
   if (!!ts !== !!te) err(ts ? 'temporal_end' : 'temporal_start', 'Provide both start and end, or neither.')
   if (ts && te && realDate(ts) && realDate(te) && ts > te) err('temporal_end', 'End is before start.')
+  if (str('experiment_id') && !UUID_RE.test(str('experiment_id'))) warn('experiment_id', 'Expected the UUID from the experiment request: copy it unchanged.')
+  for (const k of ['experiment_started_at', 'experiment_ended_at']) {
+    if (str(k) && !str('experiment_id')) err(k, 'Only published together with an experiment identifier.')
+  }
+  const xs = str('experiment_started_at')
+  const xe = str('experiment_ended_at')
+  if (realDateTime(xs) && realDateTime(xe) && xs > xe) err('experiment_ended_at', 'End is before start.')
   if (data.contains_pii && data.gdpr_compliant) warn('contains_pii', 'Contains PII: double-check the GDPR declaration.')
   return { errors, warnings }
 }
