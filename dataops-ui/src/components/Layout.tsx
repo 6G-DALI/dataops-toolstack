@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import {
-  FiHome, FiGrid, FiList, FiDatabase, FiPlusCircle, FiSettings, FiServer,
+  FiHome, FiGrid, FiList, FiDatabase, FiPlusCircle, FiSettings, FiServer, FiMessageSquare,
 } from 'react-icons/fi'
 import {
   AppShell,
@@ -35,6 +35,7 @@ const NAV_ITEMS: NavItem<View>[] = [
   { label: 'Add Dataset', view: 'dataset-creator', icon: FiPlusCircle },
   { label: 'Services',    view: 'services',        icon: FiSettings },
   { label: 'Testbeds',    view: 'testbeds',        icon: FiServer },
+  { label: 'Agent chat',  view: 'chat',            icon: FiMessageSquare },
 ]
 
 /** The portal owns the single account page for the whole DALI SSO environment,
@@ -79,6 +80,7 @@ function buildCrumbs(
     return [crumb('Datasets', 'datasets'), crumb('Add Dataset', 'dataset-creator')]
   }
   if (view === 'services') return [crumb('Services', 'services')]
+  if (view === 'chat') return [crumb('Agent chat', 'chat')]
   if (view === 'testbeds') return [crumb('Testbeds', 'testbeds')]
   if (view === 'testbed-register') {
     return [crumb('Testbeds', 'testbeds'), crumb('Register testbed', 'testbed-register')]
@@ -138,6 +140,7 @@ function topLevelView(view: View): View {
   if (view === 'dataset-creator') return 'dataset-creator'
   if (view === 'datasets') return 'datasets'
   if (view === 'services') return 'services'
+  if (view === 'chat') return 'chat'
   if (view.startsWith('testbed')) return 'testbeds'
   return 'dags'
 }
@@ -156,7 +159,7 @@ export default function Layout({ view, dagId, runId, taskId, onNavigate, childre
     <AppShell<View>
       brand={<>6G-<span className="dali-accent">DALI</span> DataOps</>}
       homeView="home"
-      nav={NAV_ITEMS.filter(i => i.view === 'home' || (isOperationsView(i.view) ? isDataopsOperator() : canSeeTestbeds()))}
+      nav={NAV_ITEMS.filter(i => i.view === 'home' || i.view === 'chat' || (isOperationsView(i.view) ? isDataopsOperator() : canSeeTestbeds()))}
       activeView={topLevelView(view)}
       onNavigate={next => onNavigate(next, {})}
       tools={daliTools(config)}

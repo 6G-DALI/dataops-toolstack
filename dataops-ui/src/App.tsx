@@ -11,6 +11,7 @@ import DagBuilder from './components/DagBuilder'
 import DatasetList from './components/DatasetList'
 import DatasetCreator from './components/DatasetCreator'
 import ServiceList from './components/ServiceList'
+import ChatPage from './components/ChatPage'
 import TaskCreator from './components/TaskCreator'
 import HomePage from './components/HomePage'
 import TestbedList from './components/TestbedList'
@@ -126,6 +127,9 @@ export default function App() {
       )}
       {view === 'services' && (
         <ServiceList />
+      )}
+      {view === 'chat' && (
+        <ChatPage />
       )}
       {view === 'testbeds' && (
         <TestbedList onNavigate={navigate} />

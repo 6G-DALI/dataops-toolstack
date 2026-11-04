@@ -21,6 +21,7 @@ export type View =
   | 'testbed-detail'
   | 'testbed-metadata'
   | 'testbed-dataset'
+  | 'chat'
 
 export interface NavParams {
   dagId?: string
@@ -30,6 +31,13 @@ export interface NavParams {
 }
 
 export type NavigateFn = (view: View, params?: NavParams) => void
+
+// ── Agent chat ───────────────────────────────────────────────────────────────
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+}
 
 // ── DAGs ─────────────────────────────────────────────────────────────────────
 export interface Dag {
