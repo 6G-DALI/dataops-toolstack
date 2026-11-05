@@ -24,5 +24,14 @@ FROM apache/airflow:${AIRFLOW_VERSION}
 # --- Python packages ----------------------------------------------------------
 # Install as the unprivileged "airflow" user (the image's default user), which
 # is the supported way to extend the official image.
+#
+# Installed under Airflow's own constraints file, so adding a package here cannot
+# move a dependency Airflow pins (numpy, scikit-learn, pydantic, ...) off the
+# version it was tested with. The file is fetched at build time, as PyPI is.
+# A requirement that contradicts a constraint fails the build rather than
+# silently overriding it.
+ARG AIRFLOW_VERSION
 COPY requirements.txt /requirements.txt
-RUN pip install --no-cache-dir -r /requirements.txt
+RUN PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" \
+ && pip install --no-cache-dir -r /requirements.txt \
+      --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
