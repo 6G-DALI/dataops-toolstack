@@ -19,3 +19,21 @@ apache-airflow-providers-amazon
 # Pinned to WaveStitchPlus/requirements.txt's version; nothing else here uses
 # pandera, so matching the pipeline that does is free.
 pandera==0.20.4
+
+# Imputation (dali.processing.impute_prepared_bundle), both engines of
+# dataops.imputation_runner.
+#
+# scipy: the "pandas" engine reproduces Darts' interpolation filler in-process,
+# and pandas hands every method except linear to SciPy — nearest, quadratic,
+# cubic, slinear and zero fail without it.
+#
+# u8darts[notorch]: the "darts" engine runs the vendored Darts runner
+# (plugins/Darts_app) in a subprocess, which is the only way to run darts/kalman.
+# The runner needs MissingValuesFiller and KalmanFilter, neither of which needs
+# torch, so the notorch variant is enough. It still brings about fifty packages
+# (catboost, lightgbm, prophet, statsforecast, numba, matplotlib, ...), so this
+# is the heavy line in the file. The image installs under Airflow's constraints
+# file (see Dockerfile), which keeps numpy and scikit-learn at the versions
+# Airflow was tested with; unconstrained, pip moves both.
+scipy
+u8darts[notorch]
