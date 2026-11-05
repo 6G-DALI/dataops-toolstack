@@ -376,6 +376,27 @@ export async function getRunArtifactText(
   }
 }
 
+/**
+ * A link that downloads one artifact straight from the object store.
+ *
+ * The file does not pass through the orchestrator or this page: the browser opens the URL and the store answers
+ * it, with a header that makes the browser save it. The URL carries its own signature and expires after
+ * `expires_in` seconds, so it needs no token — only asking for it does.
+ */
+export async function getRunArtifactDownloadUrl(
+  dagId: string,
+  runId: string,
+  name: string,
+): Promise<{ url: string, expires_in: number, filename: string }> {
+  const path = `/dags/${encodeURIComponent(dagId)}/runs/${encodeURIComponent(runId)}`
+    + `/artifacts/${encodeURIComponent(name)}/download`
+  const response = await fetch(`${BASE_URL}${path}`, { headers: await authHeader() })
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`)
+  }
+  return response.json()
+}
+
 /** A whole CSV artifact thinned by the server to about `maxPoints` evenly spaced rows. */
 export interface ArtifactOverview {
   header: string[]

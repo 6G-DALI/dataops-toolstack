@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { FiDownload, FiExternalLink } from 'react-icons/fi'
-import { getDagRun, getDatasets, getDistributions, getRunArtifactCsv, getRunArtifactOverview, getRunArtifacts, getRunArtifactText } from '../api/airflow'
+import { getDagRun, getDatasets, getDistributions, getRunArtifactCsv, getRunArtifactDownloadUrl, getRunArtifactOverview, getRunArtifacts, getRunArtifactText } from '../api/airflow'
 import type { RunArtifact, RunArtifacts, SeriesPoint } from '../types'
 import ErrorMessage from './ErrorMessage'
 import LoadingSpinner from './LoadingSpinner'
@@ -114,6 +114,17 @@ function artifactInfo(name: string): { label: string, note: string, derivedFrom?
   const base = match ? ARTIFACTS[`imputed_${match[2]}_csv`] : undefined
   if (!match || !base) return undefined
   return match[1] ? { ...base, label: `${base.label} (${imputerName(match[1])})` } : base
+}
+
+/**
+ * The imputed train and test splits are working frames — the full timeline is
+ * stitched from them and is the one to read — so the Artifacts tab leaves them
+ * out. They stay in the Data tab's stage picker, which reads the artifact list
+ * itself, and in the bucket.
+ */
+function isImputedSplit(name: string): boolean {
+  const match = IMPUTED_ARTIFACT.exec(name)
+  return match !== null && match[2] !== 'final'
 }
 
 function byProvenance(a: RunArtifact, b: RunArtifact): number {
@@ -560,6 +571,10 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     truncated: boolean
   } | null>(null)
   const [csvError, setCsvError] = useState<string | null>(null)
+  // A failed download is shown on the Artifacts tab, which is where it was started:
+  // csvError only renders on the Data tabs, so an error sent there is never seen.
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+  const [downloading, setDownloading] = useState<string | null>(null)
   /**
    * The windowed view of a time-ordered run: how many pages the reference frame
    * has, from its size alone. `undefined` while the reference frame is being
@@ -1276,19 +1291,30 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     return Number.isFinite(lo) && Number.isFinite(hi) && lo !== hi ? [lo, hi] : undefined
   }, [overviews, timeNames])
 
-  function download(name: string, key: string) {
-    // Fetched rather than linked: the endpoint needs the bearer token, which a
-    // plain href cannot carry.
-    getRunArtifactText(dagId, runId, name, 64 * 1024 * 1024)
-      .then(({ text }) => {
-        const url = URL.createObjectURL(new Blob([text]))
-        const el = document.createElement('a')
-        el.href = url
-        el.download = key.split('/').pop() ?? name
-        el.click()
-        URL.revokeObjectURL(url)
-      })
-      .catch(err => setCsvError((err as Error).message))
+  async function download(name: string) {
+    // The endpoint needs the bearer token, which a plain href cannot carry, so
+    // what is asked for with it is not the file but a link to it: the object
+    // store signs a short-lived URL and the browser fetches the file from there.
+    // Nothing is copied through the orchestrator or this page, so there is no
+    // size to limit and no memory to hold it in. (The orchestrator used to serve
+    // the bytes itself, in windows of at most 16 MB, and answered the whole-file
+    // request this made with a 422 — so no download ever worked.)
+    setDownloadError(null)
+    setDownloading(name)
+    try {
+      const { url, filename } = await getRunArtifactDownloadUrl(dagId, runId, name)
+      const el = document.createElement('a')
+      el.href = url
+      el.download = filename          // ignored across origins; the store's Content-Disposition does the work
+      el.rel = 'noopener'
+      document.body.appendChild(el)
+      el.click()
+      el.remove()
+    } catch (err) {
+      setDownloadError(`Could not download ${name}: ${(err as Error).message}`)
+    } finally {
+      setDownloading(null)
+    }
   }
 
   const TABS: { id: Tab, label: string }[] = [
@@ -1846,8 +1872,9 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
               )}
             </p>
           )}
+          {downloadError && <ErrorMessage message={downloadError} />}
           <ul className="run-results-artifacts">
-            {data.artifacts.slice().sort(byProvenance).map(a => (
+            {data.artifacts.filter(a => !isImputedSplit(a.name)).sort(byProvenance).map(a => (
               <li key={a.name}>
                 {/* The object key is not shown: a long bucket path that
                     wraps over several lines and says nothing about which of
@@ -1860,7 +1887,9 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
                 <button
                   type="button"
                   className="run-results-artifact"
-                  onClick={() => download(a.name, a.key)}
+                  disabled={downloading === a.name}
+                  aria-busy={downloading === a.name}
+                  onClick={() => { void download(a.name) }}
                 >
                   <FiDownload className="run-results-artifact-icon" aria-hidden="true" />
                   <span className="run-results-artifact-label">
