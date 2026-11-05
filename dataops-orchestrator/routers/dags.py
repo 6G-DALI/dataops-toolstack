@@ -2,7 +2,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from typing import Any
 from pydantic import BaseModel
 import airflow_client as af
-from auth import require_dataops_operator, require_operator_or_monitor_token
+from auth import require_dataops_operator, require_operator_or_monitor_token, triggered_by
 
 router = APIRouter(prefix="/dags", tags=["DAGs"], dependencies=[Depends(require_dataops_operator)])
 # The trigger is the one route the s3-asset-monitor also calls (with its X-Monitor-Token), so it has its own router
@@ -43,7 +43,8 @@ async def pause_dag(dag_id: str, is_paused: bool = Query(...)):
 
 
 @trigger_router.post("/{dag_id}/trigger")
-async def trigger_dag(dag_id: str, conf: dict[str, Any] = Body(default_factory=dict)):
+async def trigger_dag(dag_id: str, conf: dict[str, Any] = Body(default_factory=dict),
+                      claims: dict = Depends(require_operator_or_monitor_token)):
     """
     Trigger a new DAG run. `conf` is passed straight through as dag_run.conf.
 
@@ -52,8 +53,12 @@ async def trigger_dag(dag_id: str, conf: dict[str, Any] = Body(default_factory=d
     builds the request body per-DAG from that DAG's own param schema
     (see TriggerModal.tsx), so this endpoint must not constrain it to a
     fixed field set or it will silently drop whatever it doesn't declare.
+
+    The one key it does set is `triggered_by`: the authenticated caller (an
+    operator's username, or 's3-asset-monitor' for the monitor's token). It
+    replaces any value in the request, so a caller cannot name someone else.
     """
-    return await af.trigger_dag(dag_id, conf)
+    return await af.trigger_dag(dag_id, {**conf, "triggered_by": triggered_by(claims)})
 
 
 @router.get("/{dag_id}/tasks")

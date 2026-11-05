@@ -50,10 +50,13 @@ def token(claims=None, issuer=ISSUER, expires_in=300):
 
 @pytest.fixture
 def api(monkeypatch):
+    triggered = []
+
     async def list_dags(limit=100):
         return {"dags": [], "total_entries": 0}
 
     async def trigger_dag(dag_id, conf):
+        triggered.append(conf)
         return {"dag_run_id": f"run-of-{dag_id}"}
 
     monkeypatch.setattr(af, "list_dags", list_dags)
@@ -65,6 +68,7 @@ def api(monkeypatch):
     monkeypatch.setattr(auth, "_jwks_client", lambda: jwks)
     c = TestClient(app, raise_server_exceptions=False)
     c.jwks = jwks
+    c.triggered = triggered
 
     def act_as(claims):
         """What the token says, as if Keycloak had signed it (None: no token)."""
@@ -241,3 +245,16 @@ def test_an_operator_can_still_trigger_without_the_header(api):
 def test_health_and_stats_stay_public(api):
     assert api.get("/health").status_code == 200
     assert stats.router.dependencies == []  # no operator check on /stats or /stats/portal
+
+
+# --- who a run is attributed to (conf.triggered_by) ----------------------------------------------------------------
+
+def test_a_run_started_by_an_operator_is_attributed_to_them_whatever_the_request_claims(api):
+    api.act_as(OPERATOR)
+    api.post("/dags/anything/trigger", json={"x": 1, "triggered_by": "someone-else"})
+    assert api.triggered[-1] == {"x": 1, "triggered_by": "ann"}
+
+
+def test_a_run_started_by_the_monitor_is_attributed_to_it(api):
+    _trigger(api)
+    assert api.triggered[-1] == {"catalogue_id": "c", "triggered_by": "s3-asset-monitor"}

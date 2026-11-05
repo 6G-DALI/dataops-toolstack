@@ -8,7 +8,7 @@ import airflow_client as af
 import datalake_client as dlc
 import edc_client as edc
 import piveau_access
-from auth import require_dataops_operator
+from auth import require_dataops_operator, triggered_by
 import piveau_dataset_client as pdc
 from config import CONTRIBUTED_DATASETS_CATALOGUE, DATASPACE_S3_ENDPOINT_URL, VALIDATION_DAG_ID
 from dataset_models import DatasetCreateRequest, DistributionMetrics
@@ -109,6 +109,7 @@ async def _register_distribution(
     metrics: str,
     expectations: str,
     turtle: str | None = None,
+    uploader: str = "unknown",
 ) -> dict:
     """
     Shared body of both step-2 endpoints: upload the file to the Data Lake,
@@ -219,6 +220,7 @@ async def _register_distribution(
         "dataset_id":   dataset_id,
         "asset_id":     asset_id,
         "expectations": exp_list,
+        "triggered_by": uploader,
     })
 
     return {
@@ -233,6 +235,45 @@ async def _register_distribution(
     }
 
 
+# Airflow cannot filter runs by conf, so the runs of a dataset are found by reading the most recent runs of
+# every DAG (the "~" wildcard) and keeping those whose conf.dataset_id matches. Bounded: older runs than
+# _RUN_SCAN_MAX are not looked at, and the answer says so ("complete": false).
+_RUN_SCAN_PAGE = 100
+_RUN_SCAN_MAX = 1000
+
+
+@router.get("/{dataset_id}/runs")
+async def list_dataset_runs(dataset_id: str, limit: int = Query(20, ge=1, le=100)):
+    """The DAG runs a dataset was involved in (conf.dataset_id), most recent first, across all DAGs."""
+    matched: list[dict] = []
+    offset = 0
+    complete = False
+    while offset < _RUN_SCAN_MAX and len(matched) < limit:
+        page = await af.list_dag_runs("~", limit=_RUN_SCAN_PAGE, offset=offset)
+        runs = page.get("dag_runs") or []
+        for r in runs:
+            conf = r.get("conf") or {}
+            if conf.get("dataset_id") == dataset_id:
+                matched.append({
+                    "dag_id":       r.get("dag_id"),
+                    "dag_run_id":   r.get("dag_run_id"),
+                    "state":        r.get("state"),
+                    "logical_date": r.get("logical_date"),
+                    "start_date":   r.get("start_date"),
+                    "end_date":     r.get("end_date"),
+                    "asset_id":     conf.get("asset_id"),
+                    "triggered_by": conf.get("triggered_by"),
+                })
+        offset += len(runs)
+        total = page.get("total_entries")
+        if not runs or (total is not None and offset >= total):
+            complete = True
+            break
+    # Stopping because `limit` matches were found is not a gap in what was asked for.
+    return {"dataset_id": dataset_id, "runs": matched[:limit], "scanned": offset,
+            "complete": complete or len(matched) >= limit}
+
+
 @router.post("/{dataset_id}/distributions")
 async def add_distribution(
     dataset_id: str,
@@ -240,6 +281,7 @@ async def add_distribution(
     catalogue_id: str = Form(...),
     metrics: str = Form("{}"),
     expectations: str = Form("[]"),
+    claims: dict = Depends(require_dataops_operator),
 ):
     """
     Step 2 of dataset submission: upload a file as a new distribution of an
@@ -251,7 +293,8 @@ async def add_distribution(
     registers a distribution the client described itself. Unchanged: this remains
     the stable API for programmatic clients.
     """
-    return await _register_distribution(dataset_id, file, catalogue_id, metrics, expectations)
+    return await _register_distribution(dataset_id, file, catalogue_id, metrics, expectations,
+                                        uploader=triggered_by(claims))
 
 
 @router.post("/{dataset_id}/distributions/rdf")
@@ -262,6 +305,7 @@ async def add_distribution_rdf(
     turtle: str = Form(...),
     metrics: str = Form("{}"),
     expectations: str = Form("[]"),
+    claims: dict = Depends(require_dataops_operator),
 ):
     """
     Step 2 of dataset submission, RDF-first variant: upload a file *together with
@@ -287,7 +331,8 @@ async def add_distribution_rdf(
     final graph.
     """
     return await _register_distribution(
-        dataset_id, file, catalogue_id, metrics, expectations, turtle=turtle
+        dataset_id, file, catalogue_id, metrics, expectations, turtle=turtle,
+        uploader=triggered_by(claims),
     )
 
 

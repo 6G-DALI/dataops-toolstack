@@ -202,6 +202,11 @@ def require_dataops_operator(request: Request, result=Depends(claims_or_error)) 
     return claims
 
 
+def triggered_by(claims: dict) -> str:
+    """Who a run is attributed to (conf.triggered_by): the caller's Keycloak username, or 's3-asset-monitor'."""
+    return str(claims.get("preferred_username") or claims.get("sub") or "unknown")
+
+
 def require_operator_or_monitor_token(dag_id: str, request: Request, result=Depends(claims_or_error),
                                       x_monitor_token: str | None = Header(default=None)) -> dict:
     """POST /dags/{dag_id}/trigger: an operator's token, or the s3-asset-monitor's X-Monitor-Token (the one it reads

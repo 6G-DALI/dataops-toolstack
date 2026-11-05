@@ -47,7 +47,8 @@ async def _handle_message(message: AbstractIncomingMessage) -> None:
             return
 
         try:
-            result = await af.trigger_dag(dag_id, conf)
+            # A sender may name itself in conf.triggered_by; otherwise the queue is the origin.
+            result = await af.trigger_dag(dag_id, {"triggered_by": "rabbitmq", **conf})
             log.info("[rabbitmq] triggered dag_id=%s run_id=%s", dag_id, result.get("dag_run_id"))
         except Exception:
             log.exception("[rabbitmq] failed to trigger dag_id=%s", dag_id)
