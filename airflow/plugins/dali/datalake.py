@@ -400,28 +400,32 @@ _ARTIFACT_NAMES = {
 }
 
 # The imputation runs over the handoff's regularized bundle, which is split into
-# train/test — so it produces those two, plus the stitched timeline that puts
-# them back into one series. Their keys are built rather than looked up, because
-# the method that produced them belongs in the name: `imputed_darts_linear.csv`
-# says which imputer's output this is, where `imputed.csv` would leave a reader
-# comparing two imputations of the same run unable to tell them apart.
-_IMPUTED_ARTIFACTS = {
-    "imputed_train_csv": "train",
-    "imputed_test_csv":  "test",
-    "imputed_final_csv": None,      # the full timeline, no split suffix
-}
+# train/test — so each run produces those two, plus the stitched timeline that
+# puts them back into one series. Their keys are built rather than looked up,
+# because the method that produced them belongs in the name:
+# `imputed_darts_linear.csv` says which imputer's output this is, where
+# `imputed.csv` would leave a reader comparing two imputations of the same run
+# unable to tell them apart.
+#
+# A run can perform several imputations (dali.processing.imputation_runs), so
+# every one's artifacts are named for it: `imputed_<lib>_<method>_<split>_csv`.
+# Runs stored before that used the bare `imputed_<split>_csv`, with the method
+# taken from the report; the pattern still accepts those so the same function
+# names the files of either.
+_IMPUTED_ARTIFACT = re.compile(r"^imputed_(?:(?P<slug>.+)_)?(?P<kind>train|test|final)_csv$")
 
 
 def _artifact_filename(name: str, path: str, method_slug: str) -> str:
     """The file name for one artifact inside the run's directory, method-stamped where it
     matters."""
-    if name in _IMPUTED_ARTIFACTS:
+    match = _IMPUTED_ARTIFACT.match(name)
+    if match:
         parts = ["imputed"]
-        if method_slug:
-            parts.append(method_slug)
-        kind = _IMPUTED_ARTIFACTS[name]
-        if kind:
-            parts.append(kind)
+        slug = match.group("slug") or method_slug
+        if slug:
+            parts.append(slug)
+        if match.group("kind") != "final":     # the full timeline has no split suffix
+            parts.append(match.group("kind"))
         return "_".join(parts) + ".csv"
     return _ARTIFACT_NAMES.get(name, name + os.path.splitext(path)[1])
 
@@ -440,6 +444,7 @@ def upload_artifacts(pipeline: dict, quality: dict | None = None) -> dict:
         runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/soft_cleaned.csv
         runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/report.json
         runs/<catalogue_id>/<dataset_id>/<asset_id>/<run_id>/imputed_<lib>_<method>[_train|_test].csv
+        (one set per imputation the run performed)
 
     The returned keys are what dataops-orchestrator reads a run's results back with; a key
     under "runs/" is read from the DataOps bucket.

@@ -26,6 +26,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import warnings
 from pathlib import Path
@@ -35,6 +36,11 @@ from airflow.decorators import task
 from airflow.sdk import get_current_context
 
 from dali.utils import sanitize
+
+# The Darts runner, vendored verbatim next to this package (see VENDORED.md). The
+# engine="darts" path of dataops.imputation_runner subprocesses it, and its default
+# location (dockers/tools/Darts_app) does not exist in the Airflow image.
+_DARTS_RUNNER = Path(__file__).resolve().parents[1] / "Darts_app" / "run_imputation.py"
 
 # Defaults mirroring WaveStitchPlus/config/dataops.yaml's `validation:` block,
 # used when a run passes no validation config of its own. Kept here rather than
@@ -63,20 +69,41 @@ DEFAULT_VALIDATION_CONFIG: dict[str, Any] = {
 # filling them, so a successful run showed no imputed values at all.
 #
 # `lib`/`method` name a built-in in dataops.imputation_runner, whose pandas
-# engine reproduces Darts' MissingValuesFiller bit-faithfully without importing
-# darts. "linear" specifically, not the runner's own "nearest" default: pandas
-# implements linear interpolation itself, while nearest/cubic/quadratic/slinear/
-# zero all delegate to SciPy, which the Airflow image does not install (see
-# airflow/base/requirements.txt — the heavy imputation extras belong to the
-# imputation apps). With scipy absent, "nearest" raises and impute_prepared_bundle
-# would report a failed imputation on every run.
+# engine reproduces Darts' MissingValuesFiller without importing darts (checked:
+# identical output on every interpolation method). Pandas implements linear
+# itself; nearest/cubic/quadratic/slinear/zero delegate to SciPy, which the image
+# installs (airflow/base/requirements.txt). An image built without it records
+# every such run as a failed imputation, so linear is the method to fall back on.
 #
 # Set `impute: false` to get the bundle without filling it.
+#
+# `runs` lists the imputations to perform over the one bundle, each
+# {"lib", "method", "engine"?}; every run writes its own files and gets its own
+# summary, and the first is the primary one the results view shows. Without
+# `runs`, a top-level `lib`/`method` pair is a single run, as it always was.
+# `engine` defaults to "pandas" (in-process, nothing to install); "darts"
+# subprocesses the vendored Darts runner and is chosen automatically for
+# darts/kalman, which the pandas engine cannot do. See imputation_runs() for the
+# combinations that work.
 DEFAULT_IMPUTATION_CONFIG: dict[str, Any] = {
     "build_bundle": True,
     "impute": True,
-    "lib": "darts",
-    "method": "linear",
+    "runs": [
+        {"lib": "darts", "method": "linear"},
+        {"lib": "darts", "method": "nearest"},
+    ],
+}
+
+
+# Timeline handling, passed to run_pipeline as timeline_config. Left empty the
+# pipeline drops rows that go backwards in time (disorder_policy "drop"); here
+# they are sorted into place instead, which is what this DAG did before the
+# pipeline gained the option. Duplicate timestamps still keep the last row.
+# Pass `timeline` in the DAG params to override, e.g.
+# {"sweep_aware": true} for parameter-sweep files whose backward jumps mark new
+# acquisition runs rather than misplaced rows.
+DEFAULT_TIMELINE_CONFIG: dict[str, Any] = {
+    "disorder_policy": "sort",
 }
 
 
@@ -250,7 +277,7 @@ def _build_final_dataset(prepared_dir: str, bundle_result: dict, *, lib: str, me
 
         prepared = Path(prepared_dir)
         stem = prepared.name.removesuffix("_regularized")
-        output_path = prepared.parent / f"{stem}_imputed_final.csv"
+        output_path = prepared.parent / f"{stem}_imputed_{lib}_{method}_final.csv"
         final = build_final_dataset(
             prepared,
             method=method,
@@ -270,8 +297,90 @@ def _build_final_dataset(prepared_dir: str, bundle_result: dict, *, lib: str, me
     return final
 
 
+def imputation_runs(imputation_config: dict) -> list[dict]:
+    """The imputations a run should perform, as [{lib, method, engine}, …].
+
+    `runs` wins when present: a list of {"lib", "method", "engine"?} objects or
+    "lib/method" strings. Otherwise a top-level `lib`/`method` pair is one run.
+    A (lib, method) pair appears once — each writes
+    `<lib>_<method>_<split>_imputed.csv` into the bundle's output directory, so a
+    second engine for the same pair would overwrite the first.
+
+    The engine is "pandas" unless asked otherwise, except darts/kalman, which
+    only the Darts runner can do.
+
+    Pairs that work: engine "pandas" with lib "darts" (auto, linear, nearest,
+    quadratic, cubic, slinear, zero — everything but linear and auto needs
+    SciPy) or lib "imputegap" (interpolation, mean, mean_by_series, min, zero);
+    engine "darts", lib "darts" only (those plus kalman). Anything else is
+    recorded as an error for that run and the other runs still happen.
+    """
+    raw = (imputation_config or {}).get("runs")
+    if not raw:
+        raw = [{"lib": imputation_config.get("lib"), "method": imputation_config.get("method")}]
+    runs: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw:
+        if isinstance(item, str):
+            lib, _, method = item.partition("/")
+            item = {"lib": lib, "method": method}
+        lib = item.get("lib") or "darts"
+        method = item.get("method") or "linear"
+        if (lib, method) in seen:
+            continue
+        seen.add((lib, method))
+        engine = item.get("engine") or ("darts" if (lib, method) == ("darts", "kalman") else "pandas")
+        runs.append({"lib": lib, "method": method, "engine": engine})
+    return runs
+
+
+def _impute_one(prepared_dir: str, bundle: dict, *, lib: str, method: str, engine: str) -> dict:
+    """One imputation over the bundle. Never raises: a failure is a summary with
+    status "error", so the runs after it still happen."""
+    base = {"lib": lib, "method": method, "engine": engine, "files": {}, "filled": 0}
+    try:
+        from dataops.imputation_runner import impute_bundle
+
+        extra = {"python_exe": sys.executable, "runner_path": _DARTS_RUNNER} if engine == "darts" else {}
+        summary = impute_bundle(prepared_dir, method=method, lib=lib, engine=engine, **extra)
+    except Exception as exc:  # noqa: BLE001 - recorded, never fails the run
+        print(f"[dataops] imputation {lib}/{method} ({engine}) failed: {exc.__class__.__name__}: {exc}")
+        return {**base, "status": "error", "bundle": bundle,
+                "reason": f"{exc.__class__.__name__}: {exc}",
+                "error": f"{exc.__class__.__name__}: {exc}"}
+
+    files = summary.get("files") or {}
+    filled = sum(f.get("filled", 0) for f in files.values())
+    missing = sum(f.get("nan_before", 0) for f in files.values())
+    final = _build_final_dataset(prepared_dir, summary, lib=lib, method=method)
+    summary = {**summary, "bundle": bundle, "filled": filled,
+               "missing_before": missing, "final": final}
+
+    if filled:
+        print(f"[dataops] imputed with {lib}/{method} ({engine}): {filled} cells filled "
+              f"across {len(files)} split(s)")
+        return {**summary, "status": "imputed",
+                "reason": f"{filled} missing values filled with {lib}/{method}"}
+
+    # Ran, found nothing. Almost always the sparse-grid skip: a series whose
+    # gaps dwarf its cadence would regularize into a frame that is mostly holes,
+    # so preprocess_csv keeps the observed rows instead — and observed rows have
+    # no holes to fill.
+    if bundle.get("regularized") is False:
+        reason = (
+            "the timeline was not regularized, so the bundle holds only observed "
+            f"rows and has no missing values to fill — a uniform grid at "
+            f"{bundle.get('base_dt')}s would have been more than "
+            f"{bundle.get('sparse_skip_pct')}% empty"
+        )
+    else:
+        reason = "the bundle held no missing values"
+    print(f"[dataops] nothing imputed with {lib}/{method}: {reason}")
+    return {**summary, "status": "nothing_to_fill", "reason": reason}
+
+
 def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict:
-    """Run imputation over the handoff's regularized bundle, in-process.
+    """Run the configured imputations over the handoff's regularized bundle, in-process.
 
     The pipeline deliberately stops at the handoff: it regularizes the timeline
     into a prepared-dir bundle and records which (app, method) an external
@@ -279,10 +388,14 @@ def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict:
     imputation" — minimal_dataops._build_handoff). This runs that step, so a DAG
     run ends with imputed values rather than an invoke_hint.
 
-    dataops.imputation_runner's "pandas" engine is used, not the Darts
-    subprocess: it reproduces Darts' MissingValuesFiller exactly for the
-    interpolation family, so the result is bit-faithful without putting darts in
-    the Airflow image.
+    Each run (see imputation_runs) goes through dataops.imputation_runner, by
+    default its "pandas" engine, which reproduces Darts' MissingValuesFiller for
+    the interpolation family without importing darts. Engine "darts" runs the
+    vendored Darts runner in a subprocess instead.
+
+    Returns the **primary** (first) run's summary — the shape the results view
+    already reads — plus `runs`, the summaries of all of them, and `runs_total` /
+    `runs_imputed`. One run failing does not stop the others.
 
     Always returns a summary carrying a `status` and a `reason`, including when
     nothing was imputed. Returning None for that case — which this used to do —
@@ -298,9 +411,10 @@ def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict:
       nothing_to_fill it ran and found no missing values (see `bundle`)
       imputed         values were filled
     """
-    lib    = imputation_config.get("lib") or "darts"
-    method = imputation_config.get("method") or "nearest"
-    base = {"lib": lib, "method": method, "engine": "pandas", "files": {}, "filled": 0}
+    runs = imputation_runs(imputation_config)
+    first = runs[0]
+    base = {"lib": first["lib"], "method": first["method"], "engine": first["engine"],
+            "files": {}, "filled": 0}
 
     if not imputation_config.get("impute", True):
         return {**base, "status": "disabled",
@@ -321,44 +435,9 @@ def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict:
                 "bundle_error": handoff.get("bundle_error")}
 
     bundle = _bundle_facts(prepared_dir)
-    try:
-        from dataops.imputation_runner import impute_bundle
-
-        summary = impute_bundle(prepared_dir, method=method, lib=lib, engine="pandas")
-    except Exception as exc:  # noqa: BLE001 - recorded, never fails the run
-        print(f"[dataops] imputation failed: {exc.__class__.__name__}: {exc}")
-        return {**base, "status": "error", "bundle": bundle,
-                "reason": f"{exc.__class__.__name__}: {exc}",
-                "error": f"{exc.__class__.__name__}: {exc}"}
-
-    files = summary.get("files") or {}
-    filled = sum(f.get("filled", 0) for f in files.values())
-    missing = sum(f.get("nan_before", 0) for f in files.values())
-    final = _build_final_dataset(prepared_dir, summary, lib=lib, method=method)
-    summary = {**summary, "bundle": bundle, "filled": filled,
-               "missing_before": missing, "final": final}
-
-    if filled:
-        print(f"[dataops] imputed with {lib}/{method}: {filled} cells filled across "
-              f"{len(files)} split(s)")
-        return {**summary, "status": "imputed",
-                "reason": f"{filled} missing values filled with {lib}/{method}"}
-
-    # Ran, found nothing. Almost always the sparse-grid skip: a series whose
-    # gaps dwarf its cadence would regularize into a frame that is mostly holes,
-    # so preprocess_csv keeps the observed rows instead — and observed rows have
-    # no holes to fill.
-    if bundle.get("regularized") is False:
-        reason = (
-            "the timeline was not regularized, so the bundle holds only observed "
-            f"rows and has no missing values to fill — a uniform grid at "
-            f"{bundle.get('base_dt')}s would have been more than "
-            f"{bundle.get('sparse_skip_pct')}% empty"
-        )
-    else:
-        reason = "the bundle held no missing values"
-    print(f"[dataops] nothing imputed: {reason}")
-    return {**summary, "status": "nothing_to_fill", "reason": reason}
+    summaries = [_impute_one(prepared_dir, bundle, **run) for run in runs]
+    return {**summaries[0], "runs": summaries, "runs_total": len(summaries),
+            "runs_imputed": sum(1 for r in summaries if r.get("status") == "imputed")}
 
 
 @task(multiple_outputs=True)
@@ -424,6 +503,7 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
 
     validation_config = params.get("validation") or DEFAULT_VALIDATION_CONFIG
     imputation_config = params.get("imputation") or DEFAULT_IMPUTATION_CONFIG
+    timeline_config   = params.get("timeline") or DEFAULT_TIMELINE_CONFIG
     timestamp_col     = params.get("timestamp_col") or None
     if not timestamp_col:
         timestamp_col = guess_timestamp_column(input_csv)
@@ -438,6 +518,7 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
             timestamp_col=timestamp_col,
             validation_config=validation_config,
             imputation_config=imputation_config,
+            timeline_config=timeline_config,
             soft_cleaned_csv=str(soft_cleaned_csv),
         )
     except Exception as exc:  # noqa: BLE001 - reported, not raised; see docstring
@@ -483,15 +564,19 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
     # The imputed splits are what a reader actually wants to see, so they are
     # uploaded alongside the frames. The bundle's other files stay on disk: they
     # are an intermediate the imputation consumed, not a result.
-    imputed_files = {
-        f"imputed_{kind}_csv": info["path"]
-        for kind, info in ((imputation or {}).get("files") or {}).items()
-        if info.get("path") and Path(info["path"]).exists()
-    }
-    # …and the stitched timeline, which is the one to read if you only read one.
-    final_path = ((imputation or {}).get("final") or {}).get("path")
-    if final_path and Path(final_path).exists():
-        imputed_files["imputed_final_csv"] = final_path
+    # Every run's artifacts are named for what produced them
+    # (imputed_darts_linear_train_csv, …), the first included. Runs made before
+    # this carry the bare names (imputed_train_csv, …); dataops-ui reads both.
+    imputed_files: dict[str, str] = {}
+    for run in (imputation or {}).get("runs") or ([imputation] if imputation else []):
+        stem = f"imputed_{run.get('lib')}_{run.get('method')}"
+        for kind, info in (run.get("files") or {}).items():
+            if info.get("path") and Path(info["path"]).exists():
+                imputed_files[f"{stem}_{kind}_csv"] = info["path"]
+        # …and the stitched timeline, which is the one to read if you only read one.
+        final_path = (run.get("final") or {}).get("path")
+        if final_path and Path(final_path).exists():
+            imputed_files[f"{stem}_final_csv"] = final_path
 
     produced = {
         name: str(path)
@@ -540,11 +625,12 @@ def report_pipeline_outcome(pipeline: dict, uploaded: dict) -> None:
         # status/reason rather than filled-or-error: "0 cells filled" is a
         # correct outcome for a series with nothing to fill, and reading it as a
         # failure is exactly the confusion this line exists to prevent.
-        print(f"[dataops] imputation {imputation.get('status')}: {imputation.get('reason')}")
-        if imputation.get("status") == "imputed":
-            print(f"[dataops]   {imputation.get('lib')}/{imputation.get('method')}: "
-                  f"{imputation.get('filled')} of {imputation.get('missing_before')} "
-                  f"missing values filled")
+        for run in imputation.get("runs") or [imputation]:
+            print(f"[dataops] imputation {run.get('lib')}/{run.get('method')} "
+                  f"({run.get('engine')}) {run.get('status')}: {run.get('reason')}")
+            if run.get("status") == "imputed":
+                print(f"[dataops]   {run.get('filled')} of {run.get('missing_before')} "
+                      f"missing values filled")
     for name, key in (uploaded or {}).items():
         print(f"[dataops] uploaded {name} -> {key}")
     if pipeline.get("error"):

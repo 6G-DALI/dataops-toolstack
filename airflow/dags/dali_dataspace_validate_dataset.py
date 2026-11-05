@@ -49,7 +49,9 @@ Trigger via dag_run.conf:
     ],
     "timestamp_col": "timestamp",                              # optional
     "validation":    {"mode": "auto"},                         # optional
-    "imputation":    {"method": "linear"}                      # optional
+    "imputation":    {"runs": [{"lib": "darts", "method": "linear"},
+                               {"lib": "darts", "method": "kalman"}]},  # optional
+    "timeline":      {"disorder_policy": "sort"}               # optional
 }
 
 `asset_id` is the distribution's dali:assetId — the EDC asset's own @id, the
@@ -86,8 +88,8 @@ or discard a step index outright). The guess is refused unless the named column
 actually holds timestamps, in which case detection is left in charge exactly as
 before. Set this param to override both.
 
-`validation` and `imputation` are passed straight through to run_pipeline as its
-validation_config / imputation_config. Omitted, they fall back to
+`validation`, `imputation` and `timeline` are passed straight through to run_pipeline
+as its validation_config / imputation_config / timeline_config. Omitted, they fall back to
 dali.processing's defaults, which mirror WaveStitchPlus/config/dataops.yaml
 (mode auto, no expected columns or numeric bounds, outlier_q 0.01) except that
 the imputation bundle *is* built and filled — see below.
@@ -106,12 +108,22 @@ matters in time_series mode especially: remediation there clips outliers but
 records gaps as "deferred_to_imputation" without filling them, so without this
 step a successful run produced nothing imputed at all.
 
-The default is darts/linear via the runner's dependency-free pandas engine,
-which reproduces Darts' MissingValuesFiller exactly. Linear rather than the
-runner's own "nearest" default because pandas implements linear itself while the
-other methods delegate to SciPy, which the Airflow image does not carry. Pass
-`{"imputation": {"impute": false}}` for the bundle without filling it, or
-`{"imputation": {"method": "cubic"}}` once scipy is installed.
+More than one imputation can be performed over the same bundle: `imputation.runs`
+is a list of {"lib", "method", "engine"?} objects (or "lib/method" strings), each
+writing its own output files and getting its own summary under
+report["imputation"]["runs"]. The first run is the primary one — report["imputation"]
+is its summary — and each run's artifacts are named for what produced them
+(imputed_darts_linear_train_csv, imputed_darts_nearest_final_csv, …). Runs stored
+before this used the bare names imputed_train_csv, …, which dataops-ui still reads.
+A run that fails is recorded and the others still happen. Without `runs`, a single
+`{"lib", "method"}` pair is one run. See dali.processing.imputation_runs for the
+(engine, lib, method) combinations that work.
+
+Engine "pandas" (the default) runs in-process and reproduces Darts'
+MissingValuesFiller for the interpolation family; engine "darts" runs the
+vendored Darts runner (plugins/Darts_app) in a subprocess and is picked
+automatically for darts/kalman. The default is darts/linear and darts/nearest.
+Pass `{"imputation": {"impute": false}}` for the bundle without filling it.
 
 What a run leaves behind, all in the DataOps bucket (DATAOPS_BUCKET, "6g-dali-dataops")
 under the run's own directory, so concurrent runs never collide and one prefix lists a run:
@@ -193,7 +205,8 @@ from dali.validation import (
         "expectations":  Param([], type="array",  description="List of GX expectation configs. Empty, a suite is built from piveau's column metadata."),
         "timestamp_col": Param(None, type=["null", "string"], description="Timestamp column. Drives the pipeline's time-series validation. Omitted, it is guessed from the column names, then from the data."),
         "validation":    Param({}, type="object", description="run_pipeline's validation_config: mode, expected_columns, numeric_bounds, missing_threshold, outlier_q, …"),
-        "imputation":    Param({}, type="object", description="Imputation: build_bundle, impute, lib, method, prepared_dir. Defaults to building the bundle and filling it with darts/linear."),
+        "imputation":    Param({}, type="object", description="Imputation: build_bundle, impute, prepared_dir, and runs — a list of {lib, method, engine?} to perform over the one bundle, each with its own output (or a single lib/method pair). Defaults to building the bundle and filling it with darts/linear and darts/nearest."),
+        "timeline":      Param({}, type="object", description="run_pipeline's timeline_config: collision_policy, disorder_policy, sweep_aware, key_columns, … Defaults to sorting out-of-order rows (disorder_policy=sort)."),
     },
 )
 def dali_dataspace_validate_dataset():
