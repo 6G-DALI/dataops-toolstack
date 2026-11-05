@@ -35,3 +35,15 @@ COPY requirements.txt /requirements.txt
 RUN PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" \
  && pip install --no-cache-dir -r /requirements.txt \
       --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+
+# --- OS runtime libraries -------------------------------------------------------
+# u8darts imports LightGBM at `from darts.models import ...`, and LightGBM loads
+# the OpenMP runtime, which the Airflow image does not ship: without it the Darts
+# imputation engine (and darts/kalman with it) dies with
+# `OSError: libgomp.so.1: cannot open shared object file`.
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libgomp1 \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+USER airflow
