@@ -115,7 +115,15 @@ report["imputation"]["runs"]. The first run is the primary one — report["imput
 is its summary — and each run's artifacts are named for what produced them
 (imputed_darts_linear_train_csv, imputed_darts_nearest_final_csv, …). Runs stored
 before this used the bare names imputed_train_csv, …, which dataops-ui still reads.
-A run that fails is recorded and the others still happen. Without `runs`, a single
+A run that fails is recorded and the others still happen.
+
+Each run is also scored: the bundle hides about 15% of the test split in short blocks
+and keeps the true values, so every run is judged on the same cells. The score is
+normalised RMSE (RMSE over the spread of that column's true values, averaged over
+columns; 0 is perfect, about 1 is no better than the column mean). It is recorded
+per run as `accuracy` and `rank`, and as `ranking` on report["imputation"]. It says
+how well a method fills short gaps and nothing about long ones, and the first run
+stays the primary one whatever the ranking says. Without `runs`, a single
 `{"lib", "method"}` pair is one run. See dali.processing.imputation_runs for the
 (engine, lib, method) combinations that work.
 
