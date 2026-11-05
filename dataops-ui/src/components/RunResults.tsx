@@ -83,9 +83,46 @@ const ARTIFACTS: Record<string, { label: string, note: string, derivedFrom?: str
 
 const ARTIFACT_ORDER = Object.keys(ARTIFACTS)
 
+/**
+ * Imputed artifacts are named for the imputer that made them —
+ * `imputed_darts_linear_train_csv` — where runs stored before that carry the bare
+ * `imputed_train_csv`. Either form matches here; group 1 is the imputer (absent on
+ * the bare form) and group 2 the split.
+ */
+const IMPUTED_ARTIFACT = /^imputed_(?:(.+)_)?(train|test|final)_csv$/
+
+/** `darts_linear` → `darts/linear`. The library is the first segment (neither
+ *  library's name has an underscore) and the method is the rest. */
+function imputerName(slug: string): string {
+  const cut = slug.indexOf('_')
+  return cut < 0 ? slug : `${slug.slice(0, cut)}/${slug.slice(cut + 1)}`
+}
+
+/** The entry in ARTIFACTS an artifact is described by: itself, or for a stamped
+ *  imputed frame the bare entry of the same split. */
+function provenanceKey(name: string): string {
+  const match = IMPUTED_ARTIFACT.exec(name)
+  return match ? `imputed_${match[2]}_csv` : name
+}
+
+/** What to say about an artifact — the table's entry, with the imputer named when
+ *  the artifact is one of several imputations of the same run. */
+function artifactInfo(name: string): { label: string, note: string, derivedFrom?: string } | undefined {
+  const known = ARTIFACTS[name]
+  if (known) return known
+  const match = IMPUTED_ARTIFACT.exec(name)
+  const base = match ? ARTIFACTS[`imputed_${match[2]}_csv`] : undefined
+  if (!match || !base) return undefined
+  return match[1] ? { ...base, label: `${base.label} (${imputerName(match[1])})` } : base
+}
+
 function byProvenance(a: RunArtifact, b: RunArtifact): number {
-  const ai = ARTIFACT_ORDER.indexOf(a.name)
-  const bi = ARTIFACT_ORDER.indexOf(b.name)
+  // One imputer's files stay together; within it they follow the table's order.
+  const ia = IMPUTED_ARTIFACT.exec(a.name)
+  const ib = IMPUTED_ARTIFACT.exec(b.name)
+  if (ia && ib && (ia[1] ?? '') !== (ib[1] ?? '')) return (ia[1] ?? '').localeCompare(ib[1] ?? '')
+  const ai = ARTIFACT_ORDER.indexOf(provenanceKey(a.name))
+  const bi = ARTIFACT_ORDER.indexOf(provenanceKey(b.name))
   if (ai === bi) return a.name.localeCompare(b.name)
   if (ai === -1) return 1
   if (bi === -1) return -1
@@ -96,9 +133,6 @@ function byProvenance(a: RunArtifact, b: RunArtifact): number {
 const RAW = 'input_csv'
 const SOFT = 'soft_cleaned_csv'
 const REMEDIATED = 'output_csv'
-const IMPUTED_TRAIN = 'imputed_train_csv'
-const IMPUTED_TEST = 'imputed_test_csv'
-const IMPUTED_FINAL = 'imputed_final_csv'
 
 /**
  * Columns the bundle adds for modelling, not measurements of anything.
@@ -250,7 +284,10 @@ function timeAxis(frame: Frame, preferred: string[]): TimeAxis | null {
 }
 
 type Frame = { header: string[], rows: string[][] }
-type StageId = 'raw' | 'soft' | 'remediated' | 'imputed_train' | 'imputed_test' | 'imputed_final'
+/** `raw`, `soft`, `remediated`, then an imputed frame's artifact name without `_csv` —
+ *  `imputed_final` on a run stored before the name carried the imputer,
+ *  `imputed_darts_linear_final` after. See stagesFor. */
+type StageId = string
 
 /**
  * Whether a stage's frame already covers the page boundary `bound` (in ms) —
@@ -391,17 +428,56 @@ async function collect(src: StageSource, start: number, from: number, until: num
  * and the x axis is the one timeline throughout — which is what makes flipping
  * between "remediated" and "imputed" show where the gaps were filled.
  */
-const STAGES: { id: StageId, label: string, artifact: string }[] = [
+type Stage = { id: StageId, label: string, artifact: string }
+
+const BASE_STAGES: Stage[] = [
   { id: 'raw', label: 'Raw', artifact: RAW },
   { id: 'soft', label: 'Soft-cleaned', artifact: SOFT },
   { id: 'remediated', label: 'Remediated', artifact: REMEDIATED },
-  { id: 'imputed_final', label: 'Imputed — full timeline', artifact: IMPUTED_FINAL },
-  { id: 'imputed_train', label: 'Imputed — train split', artifact: IMPUTED_TRAIN },
-  { id: 'imputed_test', label: 'Imputed — test split', artifact: IMPUTED_TEST },
 ]
 
-/** Every frame the Data tab fetches — all of them, since one chart plots any. */
-const FETCHED = STAGES
+/** The splits an imputation produces, in the order the picker lists them. */
+const IMPUTED_SPLITS = [
+  { split: 'final', label: 'full timeline' },
+  { split: 'train', label: 'train split' },
+  { split: 'test', label: 'test split' },
+] as const
+
+/**
+ * The stages a run actually has, in pipeline order: the three pipeline frames,
+ * then each imputation's full timeline and splits.
+ *
+ * A run can perform several imputations, and each one's artifacts are named for
+ * it, so the imputed stages are found by pattern rather than listed. Runs stored
+ * before that have the bare names; they match too, and come out with the labels
+ * and ids they always had. `order` is the imputers in the order the run performed
+ * them (the report lists them), so the primary one comes first; any it does not
+ * mention follow alphabetically.
+ *
+ * Every frame returned is fetched — one chart plots any of them.
+ */
+function stagesFor(names: Iterable<string>, order: string[] = []): Stage[] {
+  const present = new Set(names)
+  const byImputer = new Map<string, Record<string, string>>()
+  for (const name of present) {
+    const match = IMPUTED_ARTIFACT.exec(name)
+    if (!match) continue
+    const slug = match[1] ?? ''
+    byImputer.set(slug, { ...byImputer.get(slug), [match[2]]: name })
+  }
+  const rank = (slug: string) => {
+    const at = order.indexOf(slug)
+    return at === -1 ? order.length : at
+  }
+  const slugs = [...byImputer.keys()].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+  const imputed = slugs.flatMap(slug => IMPUTED_SPLITS.flatMap(({ split, label }) => {
+    const artifact = byImputer.get(slug)?.[split]
+    if (!artifact) return []
+    const title = slug ? `Imputed (${imputerName(slug)}) — ${label}` : `Imputed — ${label}`
+    return [{ id: artifact.replace(/_csv$/, ''), label: title, artifact }]
+  }))
+  return [...BASE_STAGES.filter(st => present.has(st.artifact)), ...imputed]
+}
 
 /**
  * The one frame fetched to completion, up front — every other wanted frame is
@@ -558,9 +634,18 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     return () => { cancelled = true }
   }, [data?.dataset_id, data?.asset_id, data?.catalogue_id])
 
+  // The imputers this run performed, in run order, as the artifact names stamp them.
+  const imputerOrder = useMemo(
+    () => (data?.report?.imputation?.runs ?? []).map(r => `${r.lib}_${r.method}`),
+    [data],
+  )
+  const stages = useMemo(
+    () => stagesFor(data ? data.artifacts.map(a => a.name) : [], imputerOrder),
+    [data, imputerOrder],
+  )
   const available = useMemo(
-    () => STAGES.filter(st => frames?.stages[st.id]),
-    [frames],
+    () => stages.filter(st => frames?.stages[st.id]),
+    [stages, frames],
   )
   // Falls back to the latest stage this run actually published, so selecting a
   // stage a run never produced shows that run's own last frame rather than
@@ -648,7 +733,7 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
   useEffect(() => {
     if (!data) return
     const names = new Set(data.artifacts.map(a => a.name))
-    const wanted = FETCHED.filter(st => names.has(st.artifact))
+    const wanted = stages.filter(st => names.has(st.artifact))
     const ref = pickRefStage(wanted)
     cursorsRef.current = {}
     loadingRef.current = new Set()
@@ -875,7 +960,7 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
   const otherStageIds = useMemo(() => {
     if (!data) return [] as StageId[]
     const names = new Set(data.artifacts.map(a => a.name))
-    const wanted = FETCHED.filter(st => names.has(st.artifact))
+    const wanted = stages.filter(st => names.has(st.artifact))
     const ref = pickRefStage(wanted)
     return wanted.filter(st => st.id !== ref?.id).map(st => st.id)
   }, [data])
@@ -895,7 +980,7 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
   useEffect(() => {
     if (!data || !win) return
     const names = new Set(data.artifacts.map(a => a.name))
-    const wanted = FETCHED.filter(st => names.has(st.artifact))
+    const wanted = stages.filter(st => names.has(st.artifact))
     const ref = pickRefStage(wanted)
     const refSrc = ref ? sourcesRef.current[ref.id] : null
     if (!ref || !refSrc) return
@@ -939,7 +1024,7 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
   useEffect(() => {
     if (!data || win !== null) return
     const names = new Set(data.artifacts.map(a => a.name))
-    const wanted = FETCHED.filter(st => names.has(st.artifact))
+    const wanted = stages.filter(st => names.has(st.artifact))
     const ref = pickRefStage(wanted)
     if (!ref) return
     const others = wanted.filter(st => st.id !== ref.id)
@@ -1450,7 +1535,7 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
                     {selected ? `The ${selected.label.toLowerCase()} frame, full resolution, one page at a time.` : ''}
                     {' '}
                     {isImputedStage
-                      ? selected?.id === 'imputed_final'
+                      ? selected?.id.endsWith('_final')
                         ? 'The stitched, gap-free timeline: both splits in one series ordered by time. It drops the is_gap flag, so imputed rows cannot be marked here — pick a split to see them.'
                         : `Marked points (${markerLabel.toLowerCase()}) are rows the regularizer synthesised and the imputer filled, per the frame's own is_gap flag; the rest are observations.`
                       : `Marked points (${markerLabel.toLowerCase()}) are cells that differ from the frame before this one, where there is one to compare against.`}
@@ -1589,15 +1674,15 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
                 >
                   <FiDownload className="run-results-artifact-icon" aria-hidden="true" />
                   <span className="run-results-artifact-label">
-                    {ARTIFACTS[a.name]?.label ?? a.name}
-                    {ARTIFACTS[a.name]?.derivedFrom && (
+                    {artifactInfo(a.name)?.label ?? a.name}
+                    {artifactInfo(a.name)?.derivedFrom && (
                       <span className="run-results-artifact-from">
-                        from {ARTIFACTS[a.name].derivedFrom}
+                        from {artifactInfo(a.name)?.derivedFrom}
                       </span>
                     )}
                   </span>
-                  {ARTIFACTS[a.name] && (
-                    <span className="run-results-artifact-note">{ARTIFACTS[a.name].note}</span>
+                  {artifactInfo(a.name) && (
+                    <span className="run-results-artifact-note">{artifactInfo(a.name)?.note}</span>
                   )}
                 </button>
               </li>

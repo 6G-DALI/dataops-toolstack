@@ -283,6 +283,38 @@ export function ImputationView({ imputation }: { imputation: ImputationReport })
         </p>
       )}
 
+      {/* Several imputations of one run, side by side: which were tried, with
+          what, and what each came to. The splits table below is the first one's. */}
+      {(imputation.runs?.length ?? 0) > 1 && (
+        <div className="table-responsive mt-3">
+          <table className="table table-sm align-middle mb-0">
+            <thead>
+              <tr>
+                <th scope="col">Imputation</th>
+                <th scope="col">Engine</th>
+                <th scope="col">Result</th>
+                <th scope="col" className="text-end">Filled</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(imputation.runs ?? []).map(run => (
+                <tr key={`${run.lib}/${run.method}`}>
+                  <td>{run.lib}/{run.method}</td>
+                  <td>{run.engine}</td>
+                  <td>
+                    {IMPUTATION_STATUS[run.status ?? '']?.label ?? run.status ?? 'Not reported'}
+                    {run.status === 'error' && run.reason && (
+                      <div className="text-muted small"><code>{run.reason}</code></div>
+                    )}
+                  </td>
+                  <td className="text-end"><Num value={run.filled} /> of <Num value={run.missing_before} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {files.length > 0 && (
         <div className="table-responsive mt-3">
           <table className="table table-sm align-middle mb-0">

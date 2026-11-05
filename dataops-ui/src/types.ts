@@ -619,6 +619,14 @@ export interface ImputationReport {
     nan_after?: number
     filled?: number
   }>
+  /**
+   * Every imputation the run performed, the primary one first — this report's own
+   * fields describe that first run. Absent on a run stored before a run could
+   * perform several, and then there is only the one.
+   */
+  runs?: ImputationReport[]
+  runs_total?: number
+  runs_imputed?: number
   /** The stitched, gap-free timeline — dataops.imputation_runner.build_final_dataset. */
   final?: {
     path?: string
