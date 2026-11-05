@@ -1,6 +1,7 @@
 import codecs
 import csv
 import json
+import posixpath
 import re
 import threading
 from collections import OrderedDict
@@ -12,7 +13,12 @@ from starlette.concurrency import run_in_threadpool
 import airflow_client as af
 import datalake_client as dlc
 from auth import require_dataops_operator
-from config import DATAOPS_BUCKET
+from config import (
+    DATAOPS_BUCKET,
+    DATAOPS_DOWNLOAD_ENDPOINT_URL,
+    DATALAKE_DOWNLOAD_ENDPOINT_URL,
+    DOWNLOAD_URL_TTL_SECONDS,
+)
 
 router = APIRouter(prefix="/dags/{dag_id}/runs", tags=["DAG Runs"], dependencies=[Depends(require_dataops_operator)])
 
@@ -176,6 +182,46 @@ async def list_run_artifacts(dag_id: str, run_id: str):
         "artifacts":    [{"name": n, "key": k} for n, k in sorted(artifacts.items())],
         "report":       report,
     }
+
+
+@router.get("/{run_id}/artifacts/{name}/download")
+async def get_run_artifact_download(dag_id: str, run_id: str, name: str):
+    """A link that downloads one artifact straight from the object store.
+
+    The file does not pass through the orchestrator: the browser opens the returned URL and the store answers it, so
+    there is no size limit to walk around and nothing is held in memory here or in the page. The URL carries its own
+    signature and stops working after `expires_in` seconds, so it needs no token — which is why it is only handed out
+    behind the same operator check as the rest of this router, and only for a name in this run's own artifact list.
+    """
+    run = await af.get_dag_run(dag_id, run_id)
+    catalogue_id = (run.get("conf") or {}).get("catalogue_id")
+
+    key = (await _artifact_map(dag_id, run_id)).get(name)
+    if not key:
+        raise HTTPException(status_code=404, detail=f"Run produced no artifact named '{name}'")
+    if any(part in ("", ".", "..") for part in key.split("/")):
+        raise HTTPException(status_code=400, detail="Not a usable object key")
+
+    locations = _locations(key, catalogue_id)
+    if not locations:
+        raise HTTPException(status_code=400, detail="Run has no catalogue_id in its conf")
+
+    # The store that holds the object decides which address the browser is sent to.
+    endpoints = {"dataops": DATAOPS_DOWNLOAD_ENDPOINT_URL, "dataspace": DATALAKE_DOWNLOAD_ENDPOINT_URL}
+    for bucket, location_key, store in locations:
+        if not await run_in_threadpool(dlc.object_exists, bucket, location_key, store):
+            continue
+        endpoint = endpoints.get(store, "")
+        if not endpoint:
+            raise HTTPException(status_code=503, detail=f"Downloads from the {store} store are not configured "
+                                                        "(DATAOPS_DOWNLOAD_ENDPOINT_URL / DATALAKE_DOWNLOAD_ENDPOINT_URL)")
+        filename = posixpath.basename(location_key)
+        url = await run_in_threadpool(
+            dlc.presign_get, bucket, location_key,
+            endpoint_url=endpoint, expires_in=DOWNLOAD_URL_TTL_SECONDS, filename=filename, store=store,
+        )
+        return {"url": url, "expires_in": DOWNLOAD_URL_TTL_SECONDS, "filename": filename}
+    raise HTTPException(status_code=404, detail=f"No object '{key}' for artifact '{name}'")
 
 
 @router.get("/{run_id}/artifacts/{name}")

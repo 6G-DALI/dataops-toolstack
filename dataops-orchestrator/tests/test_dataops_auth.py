@@ -24,7 +24,9 @@ MONITOR_TOKEN = "monitor-secret"
 VALIDATION_DAG = "dali_dataspace_validate_dataset"
 
 PROTECTED = [("GET", "/dags"), ("GET", "/dags/x"), ("GET", "/dags/x/runs"), ("GET", "/tasks"), ("GET", "/services"),
-             ("GET", "/datasets"), ("POST", "/dags/x/trigger")]
+             ("GET", "/datasets"), ("POST", "/dags/x/trigger"),
+             # a presigned link is a credential in itself, so handing one out is as guarded as reading the file
+             ("GET", "/dags/x/runs/r/artifacts/a/download")]
 
 _KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 

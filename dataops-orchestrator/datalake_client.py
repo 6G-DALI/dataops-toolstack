@@ -6,6 +6,7 @@ points at (see dali/datalake.py and dali_dataspace_validate_dataset).
 
 import boto3
 from botocore.client import Config
+from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
 from config import (
@@ -20,8 +21,11 @@ from config import (
 )
 
 
-def _client(store: str = "dataspace"):
-    """The S3 client for the Data Lake ("dataspace", the default) or the DataOps store ("dataops")."""
+def _client(store: str = "dataspace", endpoint_url: str | None = None):
+    """The S3 client for the Data Lake ("dataspace", the default) or the DataOps store ("dataops").
+
+    `endpoint_url` replaces the store's own address, for a client whose only job is to sign URLs a browser will open:
+    the signature covers the host, so it has to be the address the browser uses."""
     if store == "dataops":
         endpoint, access, secret, region = (
             DATAOPS_S3_ENDPOINT_URL, DATAOPS_S3_ACCESS_KEY, DATAOPS_S3_SECRET_KEY, DATAOPS_S3_REGION)
@@ -30,6 +34,7 @@ def _client(store: str = "dataspace"):
         endpoint, access, secret, region = (
             DATASPACE_S3_ENDPOINT_URL, DATASPACE_S3_ACCESS_KEY, DATASPACE_S3_SECRET_KEY, DATASPACE_S3_REGION)
         missing = "Data Lake S3 (DATASPACE_S3_*)"
+    endpoint = endpoint_url or endpoint
     if not endpoint or not access or not secret:
         raise HTTPException(status_code=503, detail=f"{missing} not configured")
     return boto3.client(
@@ -99,6 +104,31 @@ def open_stream(catalogue_id: str, key: str, store: str = "dataspace"):
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not read '{key}' from bucket '{catalogue_id}': {e}")
+
+
+def object_exists(bucket: str, key: str, store: str = "dataspace") -> bool:
+    """Whether `key` is in `bucket` of `store`: a HEAD, so nothing is read."""
+    client = _client(store)
+    try:
+        client.head_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise HTTPException(status_code=502, detail=f"Could not look for '{key}' in bucket '{bucket}': {e}")
+
+
+def presign_get(
+    bucket: str, key: str, *, endpoint_url: str, expires_in: int, filename: str | None = None, store: str = "dataspace",
+) -> str:
+    """A URL that downloads one object straight from the store, for `expires_in` seconds, with no token.
+
+    `endpoint_url` is the address the browser will use. The response asks the browser to save the file under
+    `filename` instead of showing it."""
+    params = {"Bucket": bucket, "Key": key}
+    if filename:
+        params["ResponseContentDisposition"] = f'attachment; filename="{filename.replace(chr(34), "")}"'
+    return _client(store, endpoint_url).generate_presigned_url("get_object", Params=params, ExpiresIn=expires_in)
 
 
 def get_object(

@@ -131,6 +131,12 @@ DATALAKE_PUBLIC_ENDPOINT_URL = os.getenv("DATALAKE_PUBLIC_ENDPOINT_URL", "") or 
 # for this endpoint, which must be reachable from the user's browser, and stay valid this many seconds.
 DATALAKE_DOWNLOAD_ENDPOINT_URL = os.getenv("DATALAKE_DOWNLOAD_ENDPOINT_URL", "") or DATALAKE_PUBLIC_ENDPOINT_URL
 DOWNLOAD_URL_TTL_SECONDS = int(os.getenv("DOWNLOAD_URL_TTL_SECONDS", "900"))
+# The same for a run's artifacts (routers/runs.py), which live in the DataOps store. When that store is the Data Lake
+# itself (no DATAOPS_S3_ENDPOINT_URL of its own, or the same one) the Data Lake's download address serves it too; a
+# separate store needs an address of its own that a browser can reach.
+DATAOPS_DOWNLOAD_ENDPOINT_URL = os.getenv("DATAOPS_DOWNLOAD_ENDPOINT_URL", "") or (
+    DATALAKE_DOWNLOAD_ENDPOINT_URL if DATAOPS_S3_ENDPOINT_URL == DATASPACE_S3_ENDPOINT_URL else DATAOPS_S3_ENDPOINT_URL
+)
 
 # --- Testbeds hosted by the facility connector -----------------------------------
 # A testbed without its own connector uploads to an upload bucket in the Data Lake; the facility (central)
