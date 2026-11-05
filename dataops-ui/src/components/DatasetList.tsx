@@ -1,14 +1,15 @@
 import { useEffect, useState, useMemo, Fragment } from 'react'
 import type { ReactNode } from 'react'
-import { deleteDataset, deleteDistribution, getCatalogues, getDatasets, getDistributions } from '../api/airflow'
+import { deleteDataset, deleteDistribution, getCatalogues, getDatasetRuns, getDatasets, getDistributions } from '../api/airflow'
 import AddDistributionModal from './AddDistributionModal'
 import ErrorMessage from './ErrorMessage'
 import LoadingSpinner from './LoadingSpinner'
 import ManageDistributionsModal from './ManageDistributionsModal'
 import Modal from './Modal'
 import Pagination from './Pagination'
+import StateBadge from './StateBadge'
 import { FiExternalLink, FiList, FiSearch, FiChevronRight, FiChevronDown } from 'react-icons/fi'
-import type { Catalogue, Dataset, Distribution, NavigateFn } from '../types'
+import type { Catalogue, Dataset, DatasetRunsResponse, Distribution, NavigateFn } from '../types'
 import { catalogueDatasetUrl } from '../config'
 
 interface TagRowProps {
@@ -27,14 +28,99 @@ function TagRow({ label, children }: TagRowProps) {
   )
 }
 
+function formatWhen(iso: string | null | undefined): string {
+  return iso ? new Date(iso).toLocaleString() : '—'
+}
+
+interface DatasetRunsProps {
+  ds: Dataset
+  distributions: Distribution[] | undefined
+  onNavigate: NavigateFn
+}
+
+/** The DAG runs this dataset was involved in, newest first; a row opens that run. */
+function DatasetRuns({ ds, distributions, onNavigate }: DatasetRunsProps) {
+  const [data, setData] = useState<DatasetRunsResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const datasetId = ds.dataset_id || ds.id
+
+  useEffect(() => {
+    let cancelled = false
+    setData(null)
+    setError(null)
+    getDatasetRuns(datasetId)
+      .then(res => { if (!cancelled) setData(res) })
+      .catch((err: Error) => { if (!cancelled) setError(err.message) })
+    return () => { cancelled = true }
+  }, [datasetId])
+
+  const distributionName = (assetId?: string | null) => {
+    if (!assetId) return '—'
+    const d = (distributions ?? []).find(x => x.asset_id === assetId || x.id === assetId)
+    return d?.asset_title || d?.name || assetId
+  }
+
+  return (
+    <div>
+      <div className="text-uppercase text-muted fw-semibold small mb-1" style={{ letterSpacing: '0.05em' }}>
+        DAG runs
+      </div>
+      {error ? (
+        <span className="text-danger small">Could not load runs: {error}</span>
+      ) : !data ? (
+        <span className="text-muted small">Loading runs…</span>
+      ) : data.runs.length === 0 ? (
+        <span className="text-muted small">
+          No runs found{data.complete ? '' : ` in the last ${data.scanned} runs`}.
+        </span>
+      ) : (
+        <>
+          <table className="table table-sm table-hover align-middle mb-0">
+            <thead>
+              <tr className="text-muted small">
+                <th>DAG</th>
+                <th>Distribution</th>
+                <th>Triggered by</th>
+                <th>Started</th>
+                <th>State</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.runs.map(run => (
+                <tr
+                  key={`${run.dag_id}/${run.dag_run_id}`}
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => onNavigate('tasks', { dagId: run.dag_id, runId: run.dag_run_id })}
+                >
+                  <td><code className="small">{run.dag_id}</code></td>
+                  <td>{distributionName(run.asset_id)}</td>
+                  <td>{run.triggered_by || '—'}</td>
+                  <td>{formatWhen(run.start_date ?? run.logical_date)}</td>
+                  <td><StateBadge state={run.state} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!data.complete && (
+            <div className="text-muted small mt-1">
+              Only the most recent {data.scanned} runs were searched; older runs may not be listed.
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 interface ExpandedRowProps {
   ds: Dataset
   distributions: Distribution[] | undefined
   loadingDistributions: boolean
   onDistributionDeleted: (assetId: string) => void
+  onNavigate: NavigateFn
 }
 
-function ExpandedRow({ ds, distributions, loadingDistributions, onDistributionDeleted }: ExpandedRowProps) {
+function ExpandedRow({ ds, distributions, loadingDistributions, onDistributionDeleted, onNavigate }: ExpandedRowProps) {
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -98,6 +184,7 @@ function ExpandedRow({ ds, distributions, loadingDistributions, onDistributionDe
           </tbody>
         </table>
       )}
+      <DatasetRuns ds={ds} distributions={distributions} onNavigate={onNavigate} />
       {(ds.producing_dags || []).length > 0 && (
         <TagRow label="Produced by">
           {(ds.producing_dags ?? []).map(d => (
@@ -325,6 +412,7 @@ export default function DatasetList({ onNavigate }: DatasetListProps) {
                 distributions={distributionsByDataset[ds.id]}
                 loadingDistributions={loadingDistIds.has(ds.id)}
                 onDistributionDeleted={distId => handleDistributionDeletedInline(ds.id, distId)}
+                onNavigate={onNavigate}
               />
             </td>
           </tr>

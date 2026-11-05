@@ -9,6 +9,7 @@ import type {
   DagDetails,
   DagRun,
   DagRunsResponse,
+  DatasetRunsResponse,
   DagsResponse,
   DagTasksResponse,
   DatasetCreateRequest,
@@ -185,6 +186,10 @@ export function getDatasets(catalogueId?: string): Promise<DatasetsResponse> {
 
 export function getCatalogues(): Promise<CataloguesResponse> {
   return request<CataloguesResponse>('/datasets/catalogues')
+}
+
+export function getDatasetRuns(datasetId: string): Promise<DatasetRunsResponse> {
+  return request<DatasetRunsResponse>(`/datasets/${encodeURIComponent(datasetId)}/runs`)
 }
 
 export function getDistributions(datasetId: string, catalogueId?: string): Promise<DistributionsResponse> {
@@ -369,6 +374,33 @@ export async function getRunArtifactText(
     // so windows can be concatenated without stitching a split row together.
     nextOffset: next !== null ? Number(next) : offset + new TextEncoder().encode(text).length,
   }
+}
+
+/** A whole CSV artifact thinned by the server to about `maxPoints` evenly spaced rows. */
+export interface ArtifactOverview {
+  header: string[]
+  rows: string[][]
+  /** Rows the file really has. */
+  total_rows: number
+  /** One kept row per this many file rows. */
+  stride: number
+  /** false: the file was longer than the server reads, so only its start is covered. */
+  complete: boolean
+}
+
+export async function getRunArtifactOverview(
+  dagId: string,
+  runId: string,
+  name: string,
+  maxPoints = 1000,
+): Promise<ArtifactOverview> {
+  const path = `/dags/${encodeURIComponent(dagId)}/runs/${encodeURIComponent(runId)}`
+    + `/artifacts/${encodeURIComponent(name)}/overview?max_points=${maxPoints}`
+  const response = await fetch(`${BASE_URL}${path}`, { headers: await authHeader() })
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`)
+  }
+  return response.json() as Promise<ArtifactOverview>
 }
 
 /**

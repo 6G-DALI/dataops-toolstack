@@ -58,11 +58,33 @@ export interface DagRun {
   dag_run_id: string
   dag_id?: string
   run_type?: string
+  /** Airflow 3 name; Airflow 2 sent execution_date instead. */
+  logical_date?: string | null
   execution_date?: string | null
   start_date?: string | null
   end_date?: string | null
   state?: string | null
   conf?: Record<string, unknown> | null
+}
+
+// One DAG run a dataset was involved in (GET /datasets/{id}/runs).
+export interface DatasetRun {
+  dag_id: string
+  dag_run_id: string
+  state?: string | null
+  logical_date?: string | null
+  start_date?: string | null
+  end_date?: string | null
+  asset_id?: string | null
+  triggered_by?: string | null
+}
+
+export interface DatasetRunsResponse {
+  dataset_id: string
+  runs: DatasetRun[]
+  scanned: number
+  /** false: only the most recent `scanned` runs were looked at, so older ones may be missing. */
+  complete: boolean
 }
 
 export interface DagRunsResponse {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { FiDownload, FiExternalLink } from 'react-icons/fi'
-import { getDagRun, getDatasets, getDistributions, getRunArtifactCsv, getRunArtifacts, getRunArtifactText } from '../api/airflow'
+import { getDagRun, getDatasets, getDistributions, getRunArtifactCsv, getRunArtifactOverview, getRunArtifacts, getRunArtifactText } from '../api/airflow'
 import type { RunArtifact, RunArtifacts, SeriesPoint } from '../types'
 import ErrorMessage from './ErrorMessage'
 import LoadingSpinner from './LoadingSpinner'
@@ -491,7 +491,49 @@ function pickRefStage<T extends { id: StageId }>(wanted: T[]): T | null {
   return byId('raw') ?? byId('soft') ?? byId('remediated') ?? wanted[0] ?? null
 }
 
-type Tab = 'tasks' | 'overview' | 'quality' | 'remediation' | 'data' | 'artifacts' | 'config'
+/**
+ * The column to plot: the reader's pick if this frame has it (or a name it answers to), else the first.
+ * The pick itself is never overwritten, so it comes back when a stage that carries it is shown again.
+ */
+function resolveColumn(columns: string[], picked: string, aliases: Record<string, string[]>): string {
+  if (columns.length === 0) return ''
+  if (columns.includes(picked)) return picked
+  for (const alias of aliases[picked] ?? []) {
+    if (columns.includes(alias)) return alias
+  }
+  return columns[0]
+}
+
+/** The padded y range of one column, across every frame that carries it under that exact name. */
+function yRangeOf(frames: Iterable<Frame | undefined>, columnName: string): [number, number] | undefined {
+  if (!columnName) return undefined
+  let lo = Infinity
+  let hi = -Infinity
+  for (const frame of frames) {
+    if (!frame?.header.includes(columnName)) continue
+    const idx = frame.header.indexOf(columnName)
+    for (const row of frame.rows) {
+      const raw = row[idx]
+      if (isBlank(raw)) continue
+      const v = Number(raw)
+      if (Number.isNaN(v)) continue
+      if (v < lo) lo = v
+      if (v > hi) hi = v
+    }
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return undefined
+  if (lo === hi) { lo -= 1; hi += 1 }
+  const pad = (hi - lo) * 0.08
+  return [lo - pad, hi + pad]
+}
+
+const formatTimeX = (x: number) => new Date(x).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
+const formatIndexX = (x: number) => `#${x}`
+
+/** A frame the server thinned for the overview, with what it says about the thinning. */
+interface OverviewFrame { frame: Frame, totalRows: number, stride: number, complete: boolean }
+
+type Tab = 'tasks' | 'overview' | 'quality' | 'remediation' | 'data' | 'detailed' | 'artifacts' | 'config'
 
 interface Props {
   dagId: string
@@ -793,14 +835,10 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
    * not come back on switching away again. The fallback is resolved for display
    * only, and the reader's choice returns as soon as a stage carrying it does.
    */
-  const plottedColumn = useMemo(() => {
-    if (columns.length === 0) return ''
-    if (columns.includes(column)) return column
-    for (const alias of columnAliases[column] ?? []) {
-      if (columns.includes(alias)) return alias
-    }
-    return columns[0]
-  }, [columns, column, columnAliases])
+  const plottedColumn = useMemo(
+    () => resolveColumn(columns, column, columnAliases),
+    [columns, column, columnAliases],
+  )
 
   // Only ever seeds the initial choice; never overwrites one the reader made.
   useEffect(() => {
@@ -822,25 +860,8 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
    * their own, and the caption says so.
    */
   const yDomainFor = useCallback((columnName: string): [number, number] | undefined => {
-    if (!frames || !columnName) return undefined
-    let lo = Infinity
-    let hi = -Infinity
-    for (const frame of Object.values(frames.stages)) {
-      if (!frame?.header.includes(columnName)) continue
-      const idx = frame.header.indexOf(columnName)
-      for (const row of frame.rows) {
-        const raw = row[idx]
-        if (isBlank(raw)) continue
-        const v = Number(raw)
-        if (Number.isNaN(v)) continue
-        if (v < lo) lo = v
-        if (v > hi) hi = v
-      }
-    }
-    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return undefined
-    if (lo === hi) { lo -= 1; hi += 1 }
-    const pad = (hi - lo) * 0.08
-    return [lo - pad, hi + pad]
+    if (!frames) return undefined
+    return yRangeOf(Object.values(frames.stages), columnName)
   }, [frames])
 
   const yDomain = useMemo(() => yDomainFor(plottedColumn), [yDomainFor, plottedColumn])
@@ -1159,6 +1180,102 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     }
   }, [plotFrame, baseline, plottedColumn, timeline, pageBounds])
 
+  // ── Data tab: the whole series, thinned ─────────────────────────────────────
+  // Independent of the paged frames above: the server reads each stage's CSV once and returns about
+  // MAX_PLOT_POINTS evenly spaced rows of it, fetched when the tab is first opened for that stage.
+  const [overviews, setOverviews] = useState<Partial<Record<StageId, OverviewFrame>>>({})
+  const [ovStage, setOvStage] = useState<StageId>('remediated')
+  const [ovError, setOvError] = useState<string | null>(null)
+
+  useEffect(() => { setOverviews({}); setOvError(null) }, [dagId, runId])
+
+  const ovStages = useMemo(() => {
+    const names = new Set((data?.artifacts ?? []).map(a => a.name))
+    return stages.filter(st => names.has(st.artifact))
+  }, [data, stages])
+  const ovSelected = ovStages.find(st => st.id === ovStage) ?? ovStages[ovStages.length - 1] ?? null
+  const ovSelectedId = ovSelected?.id
+  const ovArtifact = ovSelected?.artifact
+  const ovLoaded = ovSelectedId !== undefined && overviews[ovSelectedId] !== undefined
+
+  useEffect(() => {
+    if (tab !== 'data' || !ovSelectedId || !ovArtifact || ovLoaded) return
+    let cancelled = false
+    setOvError(null)
+    getRunArtifactOverview(dagId, runId, ovArtifact, MAX_PLOT_POINTS)
+      .then(res => {
+        if (cancelled) return
+        setOverviews(prev => ({
+          ...prev,
+          [ovSelectedId]: {
+            frame: { header: res.header, rows: res.rows },
+            totalRows: res.total_rows, stride: res.stride, complete: res.complete,
+          },
+        }))
+      })
+      .catch(e => { if (!cancelled) setOvError((e as Error).message) })
+    return () => { cancelled = true }
+  }, [tab, dagId, runId, ovSelectedId, ovArtifact, ovLoaded])
+
+  const ovFrame = ovSelectedId ? overviews[ovSelectedId]?.frame ?? null : null
+  const ovTimeline = useMemo(() => (ovFrame ? timeAxis(ovFrame, timeNames) : null), [ovFrame, timeNames])
+  const ovColumns = useMemo(() => {
+    if (!ovFrame) return []
+    const timeName = ovTimeline === null ? null : ovFrame.header[ovTimeline.idx]
+    return numericColumns(ovFrame.header, ovFrame.rows)
+      .filter(c => c !== timeName && !BUNDLE_FEATURE_COLUMNS.has(c))
+  }, [ovFrame, ovTimeline])
+  const ovColumn = useMemo(
+    () => resolveColumn(ovColumns, column, columnAliases),
+    [ovColumns, column, columnAliases],
+  )
+  const ovStride = ovSelectedId ? overviews[ovSelectedId]?.stride ?? 1 : 1
+
+  const ovPoints = useMemo<SeriesPoint[]>(() => {
+    if (!ovFrame || !ovColumn) return []
+    const col = ovFrame.header.indexOf(ovColumn)
+    if (col < 0) return []
+    // The imputed frames flag the rows the regularizer synthesised; no other stage can say what changed,
+    // because thinned frames share no row alignment to diff against.
+    const gapCol = ovFrame.header.indexOf(GAP_FLAG)
+    const out: SeriesPoint[] = []
+    for (let i = 0; i < ovFrame.rows.length; i++) {
+      const raw = ovFrame.rows[i][col]
+      if (isBlank(raw)) continue
+      const y = Number(raw)
+      if (Number.isNaN(y)) continue
+      const x = ovTimeline === null ? i * ovStride : ovTimeline.toMs(ovFrame.rows[i][ovTimeline.idx])
+      out.push({
+        x: Number.isNaN(x) ? i * ovStride : x,
+        y,
+        changed: gapCol >= 0 && Number(ovFrame.rows[i][gapCol]) !== 0,
+      })
+    }
+    return out
+  }, [ovFrame, ovColumn, ovTimeline, ovStride])
+
+  // One y scale per column name and one time range across the stages loaded so far, as on the Detailed
+  // Data tab, so flipping stage shows what changed rather than a rescaled line.
+  const ovYDomain = useMemo(
+    () => yRangeOf(Object.values(overviews).map(o => o?.frame), ovColumn),
+    [overviews, ovColumn],
+  )
+  const ovXDomain = useMemo<[number, number] | undefined>(() => {
+    let lo = Infinity
+    let hi = -Infinity
+    for (const o of Object.values(overviews)) {
+      const axis = o ? timeAxis(o.frame, timeNames) : null
+      if (!o || !axis) return undefined
+      for (const row of o.frame.rows) {
+        const t = axis.toMs(row[axis.idx])
+        if (Number.isNaN(t)) continue
+        if (t < lo) lo = t
+        if (t > hi) hi = t
+      }
+    }
+    return Number.isFinite(lo) && Number.isFinite(hi) && lo !== hi ? [lo, hi] : undefined
+  }, [overviews, timeNames])
+
   function download(name: string, key: string) {
     // Fetched rather than linked: the endpoint needs the bearer token, which a
     // plain href cannot carry.
@@ -1180,6 +1297,7 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     { id: 'quality', label: 'Quality' },
     { id: 'remediation', label: 'Issues & remediation' },
     { id: 'data', label: 'Data' },
+    { id: 'detailed', label: 'Detailed Data' },
     { id: 'artifacts', label: 'Artifacts' },
     { id: 'config', label: 'Configuration' },
   ]
@@ -1453,6 +1571,78 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
           the imputed three — behind one picker, on one timeline: flipping
           between remediated and imputed shows where the gaps were filled. */}
       {tab === 'data' && (
+        <section className="card">
+          <div className="card-body">
+            <div className="run-results-chart-header">
+              <h2 className="h6 mb-0">
+                {ovSelected ? `${ovSelected.label} — whole series` : 'Whole series'}
+              </h2>
+              {ovStages.length > 1 && (
+                <label className="run-results-column-picker">
+                  <span className="text-muted small">Stage</span>
+                  <select
+                    className="form-select form-select-sm"
+                    value={ovSelected?.id ?? ''}
+                    onChange={e => setOvStage(e.target.value as StageId)}
+                  >
+                    {ovStages.map(st => <option key={st.id} value={st.id}>{st.label}</option>)}
+                  </select>
+                </label>
+              )}
+              {ovColumns.length > 1 && (
+                <label className="run-results-column-picker">
+                  <span className="text-muted small">Column</span>
+                  <select
+                    className="form-select form-select-sm"
+                    value={ovColumn}
+                    onChange={e => setColumn(e.target.value)}
+                  >
+                    {ovColumns.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </label>
+              )}
+            </div>
+            {ovError && <ErrorMessage message={ovError} />}
+            {!ovError && !ovFrame && ovSelected && (
+              <div className="run-results-chart-loading"><LoadingSpinner /></div>
+            )}
+            {!ovSelected && (
+              <p className="text-muted small mb-0">This run published no data frame to plot.</p>
+            )}
+            {ovFrame && ovSelectedId && (
+              <>
+                <p className="text-muted small run-results-chart-caption">
+                  {`The ${ovSelected?.label.toLowerCase()} frame, thinned to evenly spaced rows so the whole run fits at once. `}
+                  {ovSelected?.id.startsWith('imputed_')
+                    && 'Marked points are rows the regularizer synthesised and the imputer filled. '}
+                  The Detailed Data tab shows every row, one page at a time.
+                </p>
+                <SeriesChart
+                  points={ovPoints}
+                  label={ovColumn}
+                  formatX={ovTimeline ? formatTimeX : formatIndexX}
+                  markerLabel={ovSelected?.id.startsWith('imputed_') ? 'Imputed' : undefined}
+                  yDomain={ovYDomain}
+                  xDomain={ovXDomain}
+                />
+                <p className="text-muted small mb-0 mt-2 run-results-chart-caption">
+                  {(() => {
+                    const o = overviews[ovSelectedId]
+                    if (!o) return null
+                    return o.stride > 1
+                      ? `Showing ${ovPoints.length.toLocaleString()} of ${o.totalRows.toLocaleString()} rows — one in every ${o.stride.toLocaleString()}, plus the last. `
+                      : `Showing all ${o.totalRows.toLocaleString()} rows. `
+                  })()}
+                  {overviews[ovSelectedId]?.complete === false
+                    && 'The frame is longer than the server reads, so only its start is covered. Download the artifact for the rest.'}
+                </p>
+              </>
+            )}
+          </div>
+        </section>
+      )}
+
+      {tab === 'detailed' && (
         <>
           {pageCount > 1 && (
             <div className="run-results-pager" role="group" aria-label="Timeline page">
