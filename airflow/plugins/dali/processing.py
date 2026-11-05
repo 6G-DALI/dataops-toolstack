@@ -334,6 +334,70 @@ def imputation_runs(imputation_config: dict) -> list[dict]:
     return runs
 
 
+def _score_run(prepared_dir: str, summary: dict) -> dict:
+    """How close one run's fills are to the truth hidden to score them.
+
+    The bundle blanks about 15% of the test split in short blocks and keeps the
+    true values in test_gt.csv, so every run is scored on the same cells.
+    dataops.imputation_runner.compare_clean_vs_imputed reports the error on them
+    per column; this adds the normalised figure that can be averaged and ranked.
+
+    nrmse is RMSE divided by the spread (standard deviation) of that column's
+    true values in test_gt.csv, then averaged over the columns with equal weight.
+    0 is a perfect fill; about 1 is no better than guessing the column's mean.
+    A column whose truth is constant has no spread to divide by and is left out.
+    Raw MAE and RMSE stay beside it in per-column units.
+
+    Never raises: a run that cannot be scored still counts as imputed.
+    """
+    scale = {"metric": "nrmse"}
+    try:
+        import numpy as np
+        import pandas as pd
+        from dataops.imputation_runner import compare_clean_vs_imputed
+
+        split = (compare_clean_vs_imputed(prepared_dir, summary).get("splits") or {}).get("test") or {}
+        accuracy = split.get("accuracy") or {}
+        if not accuracy.get("eval_cells"):
+            return {**scale, "nrmse": None, "eval_cells": 0,
+                    "reason": "the bundle holds no hidden cells to score against"}
+
+        truth = pd.read_csv(Path(prepared_dir) / "test_gt.csv")
+        per_column: dict[str, dict] = {}
+        for column, errors in (accuracy.get("per_column") or {}).items():
+            spread = float(np.nanstd(pd.to_numeric(truth[column], errors="coerce")))
+            per_column[column] = {
+                "eval_cells": errors["eval_cells"],
+                "MAE":        errors["MAE"],
+                "RMSE":       errors["RMSE"],
+                "nrmse":      errors["RMSE"] / spread if spread > 0 else None,
+            }
+        scored = [c["nrmse"] for c in per_column.values() if c["nrmse"] is not None]
+        return {**scale, "nrmse": float(np.mean(scored)) if scored else None,
+                "eval_cells": accuracy["eval_cells"], "per_column": per_column}
+    except Exception as exc:  # noqa: BLE001 - scoring is a bonus, never a failure
+        print(f"[dataops] could not score {summary.get('lib')}/{summary.get('method')}: "
+              f"{exc.__class__.__name__}: {exc}")
+        return {**scale, "nrmse": None, "error": f"{exc.__class__.__name__}: {exc}"}
+
+
+def _rank_runs(runs: list[dict]) -> list[dict]:
+    """Order the runs that could be scored by nrmse, best first, and stamp each
+    with its `rank`. Runs without a score (failed, nothing to score against) are
+    not ranked."""
+    scored = sorted(
+        (r for r in runs if (r.get("accuracy") or {}).get("nrmse") is not None),
+        key=lambda r: r["accuracy"]["nrmse"],
+    )
+    ranking = []
+    for rank, run in enumerate(scored, 1):
+        run["rank"] = rank
+        ranking.append({"lib": run["lib"], "method": run["method"], "rank": rank,
+                        "nrmse": run["accuracy"]["nrmse"],
+                        "eval_cells": run["accuracy"].get("eval_cells")})
+    return ranking
+
+
 def _impute_one(prepared_dir: str, bundle: dict, *, lib: str, method: str, engine: str) -> dict:
     """One imputation over the bundle. Never raises: a failure is a summary with
     status "error", so the runs after it still happen."""
@@ -355,10 +419,14 @@ def _impute_one(prepared_dir: str, bundle: dict, *, lib: str, method: str, engin
     final = _build_final_dataset(prepared_dir, summary, lib=lib, method=method)
     summary = {**summary, "bundle": bundle, "filled": filled,
                "missing_before": missing, "final": final}
+    summary["accuracy"] = _score_run(prepared_dir, summary)
+    nrmse = summary["accuracy"].get("nrmse")
 
     if filled:
         print(f"[dataops] imputed with {lib}/{method} ({engine}): {filled} cells filled "
-              f"across {len(files)} split(s)")
+              f"across {len(files)} split(s)"
+              + (f", nrmse {nrmse:.3f} on {summary['accuracy'].get('eval_cells')} hidden cells"
+                 if nrmse is not None else ""))
         return {**summary, "status": "imputed",
                 "reason": f"{filled} missing values filled with {lib}/{method}"}
 
@@ -394,8 +462,11 @@ def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict:
     vendored Darts runner in a subprocess instead.
 
     Returns the **primary** (first) run's summary — the shape the results view
-    already reads — plus `runs`, the summaries of all of them, and `runs_total` /
-    `runs_imputed`. One run failing does not stop the others.
+    already reads — plus `runs`, the summaries of all of them, `runs_total` /
+    `runs_imputed`, and `ranking`: the runs ordered by how close their fills came to
+    the values hidden to score them (see _score_run), best first. Each run carries
+    its own `accuracy` and `rank`. The first run stays the primary one whatever the
+    ranking says. One run failing does not stop the others.
 
     Always returns a summary carrying a `status` and a `reason`, including when
     nothing was imputed. Returning None for that case — which this used to do —
@@ -436,8 +507,10 @@ def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict:
 
     bundle = _bundle_facts(prepared_dir)
     summaries = [_impute_one(prepared_dir, bundle, **run) for run in runs]
+    ranking = _rank_runs(summaries)
     return {**summaries[0], "runs": summaries, "runs_total": len(summaries),
-            "runs_imputed": sum(1 for r in summaries if r.get("status") == "imputed")}
+            "runs_imputed": sum(1 for r in summaries if r.get("status") == "imputed"),
+            "ranking": ranking}
 
 
 @task(multiple_outputs=True)
