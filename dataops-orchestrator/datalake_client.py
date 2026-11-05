@@ -83,6 +83,24 @@ def delete_objects_by_prefix(catalogue_id: str, prefix: str) -> list[str]:
     return keys
 
 
+def open_stream(catalogue_id: str, key: str, store: str = "dataspace"):
+    """Open one object for a streaming read, returning (body, total_size).
+
+    The caller iterates `body.iter_chunks()` and must `body.close()` it, also when it stops early:
+    an unread remainder keeps the connection busy. 404 when the object is not there.
+    """
+    client = _client(store)
+    try:
+        obj = client.get_object(Bucket=catalogue_id, Key=key)
+        return obj["Body"], obj["ContentLength"]
+    except client.exceptions.NoSuchKey:
+        raise HTTPException(status_code=404, detail=f"No object '{key}' in bucket '{catalogue_id}'")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not read '{key}' from bucket '{catalogue_id}': {e}")
+
+
 def get_object(
     catalogue_id: str, key: str, max_bytes: int | None = None, offset: int = 0,
     store: str = "dataspace",

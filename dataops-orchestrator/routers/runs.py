@@ -1,5 +1,10 @@
+import codecs
+import csv
 import json
 import re
+import threading
+from collections import OrderedDict
+from typing import Iterable, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from starlette.concurrency import run_in_threadpool
@@ -257,3 +262,118 @@ async def get_run_artifact(
             "X-Artifact-Next-Offset": str(next_offset),
         },
     )
+
+
+# ── Overview of a whole frame ─────────────────────────────────────────────────
+#
+# The Data tab's overview plots a whole time series, however long. The frame is read once, here, and
+# thinned to at most `max_points` evenly spaced rows, so the browser gets a few hundred KB instead of the
+# file. The Detailed Data tab is the one that shows every row, a window at a time.
+
+_OVERVIEW_MAX_BYTES = 256 * 1024 * 1024   # reading stops here; the answer then says "complete": false
+_OVERVIEW_CACHE_SIZE = 32
+_overview_cache: "OrderedDict[tuple, dict]" = OrderedDict()
+_overview_lock = threading.Lock()
+
+
+def _csv_lines(chunks: Iterable[bytes], byte_cap: int, state: dict) -> Iterator[str]:
+    """Complete lines of a byte stream, newline kept, so csv.reader can join a quoted field that spans lines.
+    Stops at `byte_cap`, dropping the unfinished line (state["truncated"] is then True)."""
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    pending = ""
+    read = 0
+    for chunk in chunks:
+        read += len(chunk)
+        pending += decoder.decode(chunk)
+        cut = pending.rfind("\n")
+        if cut >= 0:
+            complete, pending = pending[:cut], pending[cut + 1:]
+            for line in complete.split("\n"):
+                yield line + "\n"
+        if read >= byte_cap:
+            state["truncated"] = True
+            return
+    pending += decoder.decode(b"", final=True)
+    if pending:
+        yield pending
+
+
+def decimate_csv(chunks: Iterable[bytes], max_points: int, byte_cap: int = _OVERVIEW_MAX_BYTES) -> dict:
+    """One pass over a CSV, keeping every `stride`-th row, the stride doubling whenever more than `max_points` are
+    held, so the result is between max_points/2 and max_points rows however long the file. The last row is
+    always kept, so the series reaches its end."""
+    state = {"truncated": False}
+    reader = csv.reader(_csv_lines(chunks, byte_cap, state))
+    header = next(reader, None) or []
+    kept: list[list[str]] = []
+    stride = 1
+    seen = 0
+    last = None
+    for row in reader:
+        if not row:
+            continue
+        if seen % stride == 0:
+            kept.append(row)
+            if len(kept) > max_points:
+                kept = kept[::2]
+                stride *= 2
+        last = row
+        seen += 1
+    if last is not None and (seen - 1) % stride != 0:
+        kept.append(last)
+    return {"header": header, "rows": kept, "total_rows": seen, "stride": stride,
+            "complete": not state["truncated"]}
+
+
+def _overview(catalogue_id: str | None, key: str, max_points: int) -> dict:
+    last = None
+    for bucket, location_key, store in _locations(key, catalogue_id):
+        try:
+            body, total = dlc.open_stream(bucket, location_key, store=store)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            last = exc
+            continue
+        try:
+            result = decimate_csv(body.iter_chunks(chunk_size=1024 * 1024), max_points)
+        finally:
+            body.close()
+        return {**result, "key": key, "bytes_total": total}
+    raise last
+
+
+@router.get("/{run_id}/artifacts/{name}/overview")
+async def get_run_artifact_overview(
+    dag_id: str, run_id: str, name: str,
+    max_points: int = Query(1000, ge=100, le=5000),
+):
+    """A whole CSV artifact thinned to about `max_points` evenly spaced rows (header included).
+
+    `total_rows` is how many rows the file has and `stride` how many of them were skipped between two kept
+    ones; "complete": false means the file was longer than the read cap and only its start was covered.
+    A run's artifacts do not change once written, so the answer is cached.
+    """
+    run = await af.get_dag_run(dag_id, run_id)
+    catalogue_id = (run.get("conf") or {}).get("catalogue_id")
+    artifacts = await _artifact_map(dag_id, run_id)
+    key = artifacts.get(name)
+    if not key:
+        raise HTTPException(status_code=404, detail=f"Run produced no artifact named '{name}'")
+    if not key.endswith(".csv"):
+        raise HTTPException(status_code=400, detail=f"'{name}' is not a CSV artifact")
+    if not _locations(key, catalogue_id):
+        raise HTTPException(status_code=400, detail="Run has no catalogue_id in its conf")
+
+    cache_key = (catalogue_id, key, max_points)
+    with _overview_lock:
+        hit = _overview_cache.get(cache_key)
+        if hit is not None:
+            _overview_cache.move_to_end(cache_key)
+    if hit is None:
+        hit = await run_in_threadpool(_overview, catalogue_id, key, max_points)
+        with _overview_lock:
+            _overview_cache[cache_key] = hit
+            while len(_overview_cache) > _OVERVIEW_CACHE_SIZE:
+                _overview_cache.popitem(last=False)
+    return hit
