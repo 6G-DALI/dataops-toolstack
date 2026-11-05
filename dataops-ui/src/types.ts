@@ -649,6 +649,21 @@ export interface ImputationReport {
   runs?: ImputationReport[]
   runs_total?: number
   runs_imputed?: number
+  /** How close this run's fills came to the values hidden to score them. */
+  accuracy?: {
+    metric?: string
+    /** RMSE over the spread of the truth, averaged over columns: 0 is perfect, ~1 is no better than the mean. */
+    nrmse?: number | null
+    /** Hidden cells scored. */
+    eval_cells?: number
+    per_column?: Record<string, { eval_cells?: number, MAE?: number, RMSE?: number, nrmse?: number | null }>
+    reason?: string
+    error?: string
+  }
+  /** 1 is the best-scoring run; absent when it could not be scored. */
+  rank?: number
+  /** The runs that could be scored, best first. */
+  ranking?: { lib: string, method: string, rank: number, nrmse: number, eval_cells?: number }[]
   /** The stitched, gap-free timeline — dataops.imputation_runner.build_final_dataset. */
   final?: {
     path?: string

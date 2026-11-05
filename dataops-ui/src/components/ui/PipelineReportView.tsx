@@ -294,6 +294,8 @@ export function ImputationView({ imputation }: { imputation: ImputationReport })
                 <th scope="col">Engine</th>
                 <th scope="col">Result</th>
                 <th scope="col" className="text-end">Filled</th>
+                <th scope="col" className="text-end" title="RMSE over the spread of the true values, averaged over columns, on cells hidden to score the run. 0 is perfect; about 1 is no better than the column mean.">NRMSE</th>
+                <th scope="col" className="text-end">Rank</th>
               </tr>
             </thead>
             <tbody>
@@ -308,10 +310,21 @@ export function ImputationView({ imputation }: { imputation: ImputationReport })
                     )}
                   </td>
                   <td className="text-end"><Num value={run.filled} /> of <Num value={run.missing_before} /></td>
+                  <td className="text-end">
+                    <Num value={run.accuracy?.nrmse} />
+                    {run.accuracy?.eval_cells ? (
+                      <div className="text-muted small"><Num value={run.accuracy.eval_cells} /> cells</div>
+                    ) : null}
+                  </td>
+                  <td className="text-end">{run.rank ? (run.rank === 1 ? `${run.rank} (best)` : run.rank) : <Num value={null} />}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          <p className="text-muted small mt-2 mb-0">
+            Scored on cells hidden from the imputers on purpose, in short blocks, so this ranks how well each
+            fills short gaps. The first run stays the primary one whatever the ranking says.
+          </p>
         </div>
       )}
 
