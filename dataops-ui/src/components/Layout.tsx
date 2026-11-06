@@ -4,6 +4,7 @@ import {
 } from 'react-icons/fi'
 import {
   AppShell,
+  BrandLogo,
   daliTools,
   portalAccountUrl,
   usernameOf,
@@ -154,7 +155,7 @@ interface LayoutProps {
 export default function Layout({ view, dagId, runId, taskId, onNavigate, children }: LayoutProps) {
   return (
     <AppShell<View>
-      brand={<>6G-<span className="dali-accent">DALI</span> DataOps</>}
+      brand={<BrandLogo product="DataOps" />}
       homeView="home"
       nav={NAV_ITEMS.filter(i => i.view === 'home' || (isOperationsView(i.view) ? isDataopsOperator() : canSeeTestbeds()))}
       activeView={topLevelView(view)}
