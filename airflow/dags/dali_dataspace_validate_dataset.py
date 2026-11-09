@@ -131,8 +131,13 @@ stays the primary one whatever the ranking says. Without `runs`, a single
 Engine "pandas" (the default) runs in-process and reproduces Darts'
 MissingValuesFiller for the interpolation family; engine "darts" runs the
 vendored Darts runner (plugins/Darts_app) in a subprocess and is picked
-automatically for darts/kalman. The default is darts/linear and darts/nearest.
+automatically for darts/kalman. The default is darts/linear, darts/nearest and darts/kalman, then the three WaveStitch+ methods
+below (wavestitchplus/v1, v2 and harpoon).
 Pass `{"imputation": {"impute": false}}` for the bundle without filling it.
+
+The bundle is built from the data as it came. preprocess_csv can also convert units by column name (ram_limit and
+ram_usage to MB, lat*/mean/min microseconds to milliseconds, cpu_usage percent to a fraction, renaming those columns
+with a `_mb` or `_ms` suffix); that is off here unless a run passes `{"imputation": {"convert_units": true}}`.
 
 Engine "wavestitch" runs lib "wavestitchplus" (methods v1, v2 and harpoon). WaveStitch+ is not in the Airflow image: it
 runs in a container next to Airflow, the WaveStitch+ service (wavestitch-service/, called through dali.wavestitch), which
@@ -229,7 +234,7 @@ from dali.validation import (
         "expectations":  Param([], type="array",  description="List of GX expectation configs. Empty, a suite is built from piveau's column metadata."),
         "timestamp_col": Param(None, type=["null", "string"], description="Timestamp column. Drives the pipeline's time-series validation. Omitted, it is guessed from the column names, then from the data."),
         "validation":    Param({}, type="object", description="run_pipeline's validation_config: mode, expected_columns, numeric_bounds, missing_threshold, outlier_q, …"),
-        "imputation":    Param({}, type="object", description="Imputation: build_bundle, impute, prepared_dir, and runs — a list of {lib, method, engine?} to perform over the one bundle, each with its own output (or a single lib/method pair). lib wavestitchplus (v1, v2, harpoon) runs on the WaveStitch+ service and also takes device, params and v1_params. Defaults to building the bundle and filling it with darts/linear and darts/nearest."),
+        "imputation":    Param({}, type="object", description="Imputation: build_bundle, impute, prepared_dir, and runs — a list of {lib, method, engine?} to perform over the one bundle, each with its own output (or a single lib/method pair). lib wavestitchplus (v1, v2, harpoon) runs on the WaveStitch+ service and also takes device, params and v1_params. convert_units (default false) converts the 6G-schema units by column name. Defaults to building the bundle and filling it with darts/linear, darts/nearest, darts/kalman and the three WaveStitch+ methods (v1, v2, harpoon)."),
         "timeline":      Param({}, type="object", description="run_pipeline's timeline_config: collision_policy, disorder_policy, sweep_aware, key_columns, … Defaults to sorting out-of-order rows (disorder_policy=sort)."),
     },
 )
