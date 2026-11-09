@@ -100,13 +100,16 @@ DEFAULT_IMPUTATION_CONFIG: dict[str, Any] = {
     "convert_units": False,
     # The two Darts fills run in seconds, and the first one is the run the results view shows. Kalman fits a model
     # on the observed points in the vendored Darts runner (a subprocess, engine "darts"). The three WaveStitch+
-    # methods run on the WaveStitch+ service (minutes to hours on CPU; without WAVESTITCH_URL each is recorded as a
-    # failed run and the others still happen). v1 comes first of them, because v2 and harpoon read its output.
+    # methods run on the WaveStitch+ service (without WAVESTITCH_URL each is recorded as a failed run and the others
+    # still happen). v1 comes first of them, because v2 and harpoon read its output, and runs in its fast mode (a
+    # few epochs, a few sampling steps): runs started by the s3-asset-monitor and the upload form send no imputation
+    # setting, so every new table gets these. The full v1 training takes minutes to hours on CPU: ask for it with
+    # {"lib": "wavestitchplus", "method": "v1"} in the run's `imputation`. v2 and harpoon work from v1's result.
     "runs": [
         {"lib": "darts", "method": "linear"},
         {"lib": "darts", "method": "nearest"},
         {"lib": "darts", "method": "kalman"},
-        {"lib": "wavestitchplus", "method": "v1"},
+        {"lib": "wavestitchplus", "method": "v1", "params": {"fast": True}},
         {"lib": "wavestitchplus", "method": "v2"},
         {"lib": "wavestitchplus", "method": "harpoon"},
     ],

@@ -264,6 +264,9 @@ def test_the_default_runs_are_the_darts_fills_and_kalman_then_the_three_wavestit
     from dali.processing import DEFAULT_IMPUTATION_CONFIG
 
     runs = imputation_runs(DEFAULT_IMPUTATION_CONFIG)
+    # v1 runs in its fast mode by default; the others take their own settings
+    assert [r["params"] for r in runs if r.get("params")] == [{"fast": True}]
+    assert next(r for r in runs if r["method"] == "v1")["params"] == {"fast": True}
     assert [(r["lib"], r["method"], r["engine"]) for r in runs] == [
         ("darts", "linear", "pandas"), ("darts", "nearest", "pandas"), ("darts", "kalman", "darts"),
         ("wavestitchplus", "v1", "wavestitch"), ("wavestitchplus", "v2", "wavestitch"),
