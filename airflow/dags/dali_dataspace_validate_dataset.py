@@ -50,7 +50,8 @@ Trigger via dag_run.conf:
     "timestamp_col": "timestamp",                              # optional
     "validation":    {"mode": "auto"},                         # optional
     "imputation":    {"runs": [{"lib": "darts", "method": "linear"},
-                               {"lib": "darts", "method": "kalman"}]},  # optional
+                               {"lib": "darts", "method": "kalman"},
+                               {"lib": "wavestitchplus", "method": "v1"}]},  # optional
     "timeline":      {"disorder_policy": "sort"}               # optional
 }
 
@@ -133,6 +134,21 @@ vendored Darts runner (plugins/Darts_app) in a subprocess and is picked
 automatically for darts/kalman. The default is darts/linear and darts/nearest.
 Pass `{"imputation": {"impute": false}}` for the bundle without filling it.
 
+Engine "wavestitch" runs lib "wavestitchplus" (methods v1, v2 and harpoon). WaveStitch+ is not in the Airflow image: it
+runs in a container next to Airflow, the WaveStitch+ service (wavestitch-service/, called through dali.wavestitch), which
+has torch and the WaveStitch+ runners. The regularized bundle reaches it over a volume both containers mount, and the
+filled splits come back the same way, so a wavestitchplus run is scored, stitched into a final dataset and uploaded like
+any other: imputed_wavestitchplus_<method>_*.csv. Each run may carry `device` ("cpu", "gpu", "auto"), `params` (that
+method's options, listed in wavestitch-service/app.py) and, for v2 and harpoon, `v1_params`:
+
+    {"lib": "wavestitchplus", "method": "v1", "device": "cpu", "params": {"fast": true}}
+
+v2 anchors v1's output and harpoon samples from the checkpoint v1 trained, so both need v1 on the same bundle: v1 is run
+before them when it is listed, and by the service when it is not. A run takes minutes to hours on CPU, and a bundle
+the service cannot see, an unset WAVESTITCH_URL or a failed job is recorded as a failed run while the others still happen.
+Environment: WAVESTITCH_URL, WAVESTITCH_TOKEN, WAVESTITCH_TIMEOUT_SECONDS, and DALI_WORK_ROOT, the shared volume under
+which the pipeline's scratch directory is made.
+
 What a run leaves behind, all in the DataOps bucket (DATAOPS_BUCKET, "6g-dali-dataops")
 under the run's own directory, so concurrent runs never collide and one prefix lists a run:
 
@@ -213,7 +229,7 @@ from dali.validation import (
         "expectations":  Param([], type="array",  description="List of GX expectation configs. Empty, a suite is built from piveau's column metadata."),
         "timestamp_col": Param(None, type=["null", "string"], description="Timestamp column. Drives the pipeline's time-series validation. Omitted, it is guessed from the column names, then from the data."),
         "validation":    Param({}, type="object", description="run_pipeline's validation_config: mode, expected_columns, numeric_bounds, missing_threshold, outlier_q, …"),
-        "imputation":    Param({}, type="object", description="Imputation: build_bundle, impute, prepared_dir, and runs — a list of {lib, method, engine?} to perform over the one bundle, each with its own output (or a single lib/method pair). Defaults to building the bundle and filling it with darts/linear and darts/nearest."),
+        "imputation":    Param({}, type="object", description="Imputation: build_bundle, impute, prepared_dir, and runs — a list of {lib, method, engine?} to perform over the one bundle, each with its own output (or a single lib/method pair). lib wavestitchplus (v1, v2, harpoon) runs on the WaveStitch+ service and also takes device, params and v1_params. Defaults to building the bundle and filling it with darts/linear and darts/nearest."),
         "timeline":      Param({}, type="object", description="run_pipeline's timeline_config: collision_policy, disorder_policy, sweep_aware, key_columns, … Defaults to sorting out-of-order rows (disorder_policy=sort)."),
     },
 )

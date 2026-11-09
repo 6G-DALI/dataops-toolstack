@@ -35,6 +35,7 @@ from typing import Any
 from airflow.decorators import task
 from airflow.sdk import get_current_context
 
+from dali import wavestitch
 from dali.utils import sanitize
 
 # The Darts runner, vendored verbatim next to this package (see VENDORED.md). The
@@ -307,13 +308,22 @@ def imputation_runs(imputation_config: dict) -> list[dict]:
     second engine for the same pair would overwrite the first.
 
     The engine is "pandas" unless asked otherwise, except darts/kalman, which
-    only the Darts runner can do.
+    only the Darts runner can do, and lib "wavestitchplus", which only the
+    WaveStitch+ service can run (engine "wavestitch").
 
     Pairs that work: engine "pandas" with lib "darts" (auto, linear, nearest,
     quadratic, cubic, slinear, zero — everything but linear and auto needs
     SciPy) or lib "imputegap" (interpolation, mean, mean_by_series, min, zero);
-    engine "darts", lib "darts" only (those plus kalman). Anything else is
-    recorded as an error for that run and the other runs still happen.
+    engine "darts", lib "darts" only (those plus kalman); engine "wavestitch",
+    lib "wavestitchplus" (v1, v2, harpoon; "full" and "anchored" are accepted for
+    v1 and v2). Anything else is recorded as an error for that run and the other
+    runs still happen.
+
+    A wavestitchplus run may carry `device` ("cpu", "gpu" or "auto"), `params`
+    (options of its runner) and, for v2 and harpoon, `v1_params` (for the v1 run
+    they need). v2 and harpoon read what v1 produced on the same bundle, so v1 is
+    moved to just before the first of them when it is listed after one. When it
+    is not listed at all the service runs it first.
     """
     raw = (imputation_config or {}).get("runs")
     if not raw:
@@ -326,11 +336,37 @@ def imputation_runs(imputation_config: dict) -> list[dict]:
             item = {"lib": lib, "method": method}
         lib = item.get("lib") or "darts"
         method = item.get("method") or "linear"
+        if lib == wavestitch.LIB:
+            method = wavestitch.normalize_method(method)
         if (lib, method) in seen:
             continue
         seen.add((lib, method))
-        engine = item.get("engine") or ("darts" if (lib, method) == ("darts", "kalman") else "pandas")
-        runs.append({"lib": lib, "method": method, "engine": engine})
+        if lib == wavestitch.LIB:
+            default_engine = wavestitch.ENGINE
+        else:
+            default_engine = "darts" if (lib, method) == ("darts", "kalman") else "pandas"
+        run = {"lib": lib, "method": method, "engine": item.get("engine") or default_engine}
+        for key in ("device", "params", "v1_params"):   # only the WaveStitch+ service takes these
+            if item.get(key) is not None:
+                run[key] = item[key]
+        runs.append(run)
+    return _v1_before_its_dependents(runs)
+
+
+def _v1_before_its_dependents(runs: list[dict]) -> list[dict]:
+    """WaveStitch+ v2 and harpoon read what v1 produced on the bundle, so v1 goes just before the first of them.
+
+    Nothing else moves: the first run stays the primary one unless v1 is moved in front of it.
+    """
+    def is_wsp(run: dict, methods: tuple[str, ...]) -> bool:
+        return run["lib"] == wavestitch.LIB and run["method"] in methods
+
+    v1 = next((i for i, r in enumerate(runs) if is_wsp(r, ("v1",))), None)
+    first_dependent = next((i for i, r in enumerate(runs) if is_wsp(r, wavestitch.NEEDS_V1)), None)
+    if v1 is None or first_dependent is None or v1 < first_dependent:
+        return runs
+    moved = runs.pop(v1)
+    runs.insert(first_dependent, moved)
     return runs
 
 
@@ -398,15 +434,24 @@ def _rank_runs(runs: list[dict]) -> list[dict]:
     return ranking
 
 
-def _impute_one(prepared_dir: str, bundle: dict, *, lib: str, method: str, engine: str) -> dict:
+def _impute_one(prepared_dir: str, bundle: dict, *, lib: str, method: str, engine: str,
+                device: str | None = None, params: dict | None = None, v1_params: dict | None = None) -> dict:
     """One imputation over the bundle. Never raises: a failure is a summary with
-    status "error", so the runs after it still happen."""
+    status "error", so the runs after it still happen.
+
+    `device`, `params` and `v1_params` are for the WaveStitch+ service (engine "wavestitch") only."""
     base = {"lib": lib, "method": method, "engine": engine, "files": {}, "filled": 0}
     try:
-        from dataops.imputation_runner import impute_bundle
+        if engine == wavestitch.ENGINE:
+            if lib != wavestitch.LIB:
+                raise ValueError(f"engine {engine!r} only applies to lib {wavestitch.LIB!r}")
+            summary = wavestitch.impute(prepared_dir, method=method, device=device, params=params,
+                                        v1_params=v1_params)
+        else:
+            from dataops.imputation_runner import impute_bundle
 
-        extra = {"python_exe": sys.executable, "runner_path": _DARTS_RUNNER} if engine == "darts" else {}
-        summary = impute_bundle(prepared_dir, method=method, lib=lib, engine=engine, **extra)
+            extra = {"python_exe": sys.executable, "runner_path": _DARTS_RUNNER} if engine == "darts" else {}
+            summary = impute_bundle(prepared_dir, method=method, lib=lib, engine=engine, **extra)
     except Exception as exc:  # noqa: BLE001 - recorded, never fails the run
         print(f"[dataops] imputation {lib}/{method} ({engine}) failed: {exc.__class__.__name__}: {exc}")
         return {**base, "status": "error", "bundle": bundle,
@@ -561,7 +606,7 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
     # A scratch directory per run: the pipeline writes several files derived
     # from the output's name, and a shared directory would let concurrent runs
     # over different distributions overwrite each other.
-    workdir = Path(tempfile.mkdtemp(prefix="dali-dataops-"))
+    workdir = _scratch_dir()
     # basename only — asset_title comes from a remote catalogue, and a path
     # separator in it would otherwise write outside the scratch directory.
     stem = Path(asset_title).stem or "dataset"
@@ -713,6 +758,20 @@ def report_pipeline_outcome(pipeline: dict, uploaded: dict) -> None:
 
 
 @task
+def _scratch_dir() -> Path:
+    """A fresh scratch directory for one run: under DALI_WORK_ROOT when that is set, else in the system temp.
+
+    DALI_WORK_ROOT is the volume the WaveStitch+ service shares with Airflow. The bundle the pipeline writes has to be
+    on it for the service to read, so everything a run writes goes there. Unset (no service in this stack), nothing
+    changes from the system temp directory.
+    """
+    root = os.environ.get("DALI_WORK_ROOT", "").strip()
+    if not root:
+        return Path(tempfile.mkdtemp(prefix="dali-dataops-"))
+    Path(root).mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="dali-dataops-", dir=root))
+
+
 def cleanup_workdir(workdir: str | None) -> None:
     """Remove the scratch directory once its artifacts are uploaded.
 

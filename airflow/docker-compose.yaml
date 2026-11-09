@@ -38,11 +38,19 @@ x-airflow-common:
     _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    # The WaveStitch+ imputation service (service `wavestitch` below) and the volume it shares with the workers: the
+    # pipeline writes each run's scratch directory, the regularized bundle included, under DALI_WORK_ROOT, and the
+    # service reads the bundle and writes the filled splits there.
+    DALI_WORK_ROOT: /opt/airflow/wsp-work
+    WAVESTITCH_URL: ${WAVESTITCH_URL:-http://wavestitch:8000}
+    WAVESTITCH_TOKEN: ${WAVESTITCH_TOKEN:-}
+    WAVESTITCH_TIMEOUT_SECONDS: ${WAVESTITCH_TIMEOUT_SECONDS:-14400}
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags:z
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs:z
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config:z
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins:z
+    - wsp-work:/opt/airflow/wsp-work
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -154,6 +162,8 @@ services:
         condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
+      wavestitch-init:
+        condition: service_completed_successfully
 
   airflow-triggerer:
     <<: *airflow-common
@@ -168,6 +178,37 @@ services:
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
+        condition: service_completed_successfully
+
+  # Prepares the volume the workers and the WaveStitch+ service share: owned by the Airflow user, group-writable.
+  wavestitch-init:
+    image: busybox:1.36
+    user: "0:0"
+    command: ["sh", "-c", "chown ${AIRFLOW_UID:-50000}:0 /wsp-work && chmod 2775 /wsp-work"]
+    volumes:
+      - wsp-work:/wsp-work
+    restart: "no"
+
+  # WaveStitch+ imputation (wavestitch-service/ in the dataops repository). The DAG's `wavestitchplus` imputation runs
+  # call it over HTTP; the bundle and the results travel over the wsp-work volume. Reachable from this network only.
+  # Build and push the image with wavestitch-service/build.sh --push. Jobs use every core they are given: CPU runs
+  # take minutes to hours, so size WAVESTITCH_CPUS and WAVESTITCH_MEMORY for the host.
+  wavestitch:
+    image: ${WAVESTITCH_IMAGE:-sparkworks/wavestitch:dev}
+    pull_policy: always   # :dev is a moving tag
+    user: "${AIRFLOW_UID:-50000}:0"
+    environment:
+      WSP_WORK_ROOT: /opt/airflow/wsp-work
+      WSP_TOKEN: ${WAVESTITCH_TOKEN:-}
+      WSP_STEP_TIMEOUT_SECONDS: ${WAVESTITCH_STEP_TIMEOUT_SECONDS:-21600}
+      OMP_NUM_THREADS: ${WAVESTITCH_CPUS:-4}
+    volumes:
+      - wsp-work:/opt/airflow/wsp-work
+    cpus: ${WAVESTITCH_CPUS:-4}
+    mem_limit: ${WAVESTITCH_MEMORY:-8g}
+    restart: always
+    depends_on:
+      wavestitch-init:
         condition: service_completed_successfully
 
   airflow-init:
@@ -453,6 +494,7 @@ services:
 
 volumes:
   postgres-db-volume:
+  wsp-work:
 networks:
   default:
   dali-edge:
