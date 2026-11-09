@@ -120,9 +120,9 @@ export interface ImputationForm {
 }
 
 /** What the DAG runs when the parameter is empty (DEFAULT_IMPUTATION_CONFIG). */
-export const DEFAULT_RUNS: ReadonlyArray<readonly [Lib, string]> = [
+export const DEFAULT_RUNS: ReadonlyArray<readonly [Lib, string, Record<string, string | boolean>?]> = [
   ['darts', 'linear'], ['darts', 'nearest'], ['darts', 'kalman'],
-  ['wavestitchplus', 'v1'], ['wavestitchplus', 'v2'], ['wavestitchplus', 'harpoon'],
+  ['wavestitchplus', 'v1', { fast: true }], ['wavestitchplus', 'v2'], ['wavestitchplus', 'harpoon'],
 ]
 
 let nextId = 1
@@ -133,7 +133,8 @@ export function newRun(lib: Lib, method: string): RunForm {
 }
 
 export function defaultForm(): ImputationForm {
-  return { impute: true, convertUnits: false, runs: DEFAULT_RUNS.map(([lib, method]) => newRun(lib, method)), extra: {} }
+  const runs = DEFAULT_RUNS.map(([lib, method, options]) => ({ ...newRun(lib, method), options: { ...options } }))
+  return { impute: true, convertUnits: false, runs, extra: {} }
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
