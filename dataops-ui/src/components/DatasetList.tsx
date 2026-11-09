@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, Fragment } from 'react'
 import type { ReactNode } from 'react'
+import { formatDateTime } from '@6g-dali/ui-shell'
 import { deleteDataset, deleteDistribution, getCatalogues, getDatasetRuns, getDatasets, getDistributions } from '../api/airflow'
 import AddDistributionModal from './AddDistributionModal'
 import ErrorMessage from './ErrorMessage'
@@ -26,10 +27,6 @@ function TagRow({ label, children }: TagRowProps) {
       {children}
     </div>
   )
-}
-
-function formatWhen(iso: string | null | undefined): string {
-  return iso ? new Date(iso).toLocaleString() : '—'
 }
 
 interface DatasetRunsProps {
@@ -95,7 +92,7 @@ function DatasetRuns({ ds, distributions, onNavigate }: DatasetRunsProps) {
                   <td><code className="small">{run.dag_id}</code></td>
                   <td>{distributionName(run.asset_id)}</td>
                   <td>{run.triggered_by || '—'}</td>
-                  <td>{formatWhen(run.start_date ?? run.logical_date)}</td>
+                  <td>{formatDateTime(run.start_date ?? run.logical_date)}</td>
                   <td><StateBadge state={run.state} /></td>
                 </tr>
               ))}
@@ -368,7 +365,7 @@ export default function DatasetList({ onNavigate }: DatasetListProps) {
           </td>
           <td className="small">{ds.extra?.publisher || '—'}</td>
           <td className="small">{ds.sns_project_name || '—'}</td>
-          <td className="small">{ds.updated_at ? new Date(ds.updated_at).toLocaleString() : '—'}</td>
+          <td className="small">{formatDateTime(ds.updated_at)}</td>
           <td className="d-flex flex-wrap gap-1 justify-content-end">
             {catalogueDatasetUrl(ds.dataset_id || ds.id) && (
               <a

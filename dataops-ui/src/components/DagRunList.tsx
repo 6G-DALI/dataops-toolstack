@@ -1,15 +1,11 @@
 import { useEffect, useState } from 'react'
+import { formatDateTime } from '@6g-dali/ui-shell'
 import { getDagRuns, getDatasets, getDistributions } from '../api/airflow'
 import ErrorMessage from './ErrorMessage'
 import LoadingSpinner from './LoadingSpinner'
 import StateBadge from './StateBadge'
 import Pagination from './Pagination'
 import type { DagRun, NavigateFn } from '../types'
-
-function formatDate(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleString()
-}
 
 function formatDuration(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000))
@@ -142,7 +138,7 @@ export default function DagRunList({ dagId, onNavigate }: DagRunListProps) {
                       )}
                       {showTrigger && <td>{confStr(run, 'triggered_by') ?? '—'}</td>}
                       <td>
-                        {formatDate(run.start_date ?? run.logical_date ?? run.execution_date)}
+                        {formatDateTime(run.start_date ?? run.logical_date ?? run.execution_date)}
                         <div className="text-muted small">{tookLabel(run)}</div>
                       </td>
                       <td><StateBadge state={run.state} /></td>

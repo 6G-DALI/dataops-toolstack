@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { formatDateTime } from '@6g-dali/ui-shell'
 import { FiDownload, FiExternalLink } from 'react-icons/fi'
 import { getDagRun, getDatasets, getDistributions, getRunArtifactCsv, getRunArtifactDownloadUrl, getRunArtifactOverview, getRunArtifacts, getRunArtifactText } from '../api/airflow'
 import type { RunArtifact, RunArtifacts, SeriesPoint } from '../types'
@@ -538,7 +539,8 @@ function yRangeOf(frames: Iterable<Frame | undefined>, columnName: string): [num
   return [lo - pad, hi + pad]
 }
 
-const formatTimeX = (x: number) => new Date(x).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
+// The axis is UTC, so the suffix is left off.
+const formatTimeX = (x: number) => formatDateTime(x, { zone: false })
 const formatIndexX = (x: number) => `#${x}`
 
 /** A frame the server thinned for the overview, with what it says about the thinning. */
@@ -1401,8 +1403,8 @@ export default function RunResults({ dagId, runId, tasks }: Props) {
     : isImputedStage || filledCells > 0 ? 'Imputed' : 'Adjusted'
 
   const formatX = series.isTime
-    ? (x: number) => new Date(x).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
-    : (x: number) => `#${x}`
+    ? formatTimeX
+    : formatIndexX
 
   return (
     <div className="run-results">

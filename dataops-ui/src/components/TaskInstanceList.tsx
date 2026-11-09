@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { formatDateTime, formatTime } from '@6g-dali/ui-shell'
 import { FiChevronDown, FiChevronRight } from 'react-icons/fi'
 import { getTaskInstances, getDagRun } from '../api/airflow'
 import LoadingSpinner from './LoadingSpinner'
@@ -34,23 +35,13 @@ const RESULTS_DAG_ID = 'dali_dataspace_validate_dataset'
 const POLL_INTERVAL_MS = 3000
 const TERMINAL_RUN_STATES = new Set(['success', 'failed'])
 
-/**
- * Time only. Every task of a run happens within minutes of the others, so the
- * date repeated on each of eleven cards is noise that costs a line of height
- * per card. The full value is kept as the cell's title for anyone who wants it.
- *
- * Only the start is shown: with the duration beside it the end is arithmetic,
- * and a third timestamp pushed the meta row towards wrapping again.
- */
-function formatTime(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleTimeString()
-}
-
-function formatDate(iso: string | null | undefined): string {
-  if (!iso) return ''
-  return new Date(iso).toLocaleString()
-}
+// The cards show the time only. Every task of a run happens within minutes of the
+// others, so the date repeated on each of eleven cards is noise that costs a line
+// of height per card. The full date and time is kept as the cell's title for anyone
+// who wants it.
+//
+// Only the start is shown: with the duration beside it the end is arithmetic,
+// and a third timestamp pushed the meta row towards wrapping again.
 
 export default function TaskInstanceList({ dagId, runId }: TaskInstanceListProps) {
   const [tasks, setTasks] = useState<TaskInstance[]>([])
@@ -152,7 +143,7 @@ export default function TaskInstanceList({ dagId, runId }: TaskInstanceListProps
                         <StateBadge state={task.state} />
                       </div>
                       <div className="timeline-card-meta">
-                        <span className="timeline-meta-item" title={formatDate(task.start_date)}>
+                        <span className="timeline-meta-item" title={task.start_date ? formatDateTime(task.start_date) : undefined}>
                           <span className="timeline-meta-label">Start</span>
                           {formatTime(task.start_date)}
                         </span>

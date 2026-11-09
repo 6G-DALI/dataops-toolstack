@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { formatDate } from '@6g-dali/ui-shell'
 import { FiEdit2, FiExternalLink, FiRefreshCw } from 'react-icons/fi'
 import { getTestbedDatasets } from '../api/airflow'
 import { catalogueDatasetUrl } from '../config'
@@ -72,7 +73,7 @@ export default function TestbedDatasets({ slug, onNavigate }: { slug: string; on
                     </td>
                     <td><LevelBadge level={d.access_level} /></td>
                     <td className="text-end">{d.distributions ?? '—'}</td>
-                    <td className="small text-muted text-nowrap">{(d.modified ?? '').slice(0, 10) || '—'}</td>
+                    <td className="small text-muted text-nowrap">{formatDate(d.modified)}</td>
                     <td className="text-end text-nowrap">
                       {link && (
                         <a href={link} target="_blank" rel="noreferrer" className="btn btn-sm btn-link py-0" title="Open in the catalogue">

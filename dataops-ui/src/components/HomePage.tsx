@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { formatDateTime, formatTime } from '@6g-dali/ui-shell'
 import { getStats } from '../api/airflow'
 import StateBadge from './StateBadge'
 import MetricCard from './ui/MetricCard'
@@ -11,16 +12,6 @@ import type { NavigateFn, Stats } from '../types'
 
 /** Dashboard summary refresh interval — §19.3 recommends 15–30 s. */
 const POLL_INTERVAL_MS = 30_000
-
-function fmtDateTime(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleString()
-}
-
-function fmtTime(date: Date | null): string {
-  if (!date) return '—'
-  return date.toLocaleTimeString()
-}
 
 /**
  * Loads the dashboard stats and keeps them fresh.
@@ -243,7 +234,7 @@ function OperationsDashboard({ onNavigate }: HomePageProps) {
                       <td className="fw-medium">{run.dag_id}</td>
                       <td><CopyableId value={run.dag_run_id} /></td>
                       <td><StateBadge state={run.state} /></td>
-                      <td className="small text-secondary">{fmtDateTime(run.start_date)}</td>
+                      <td className="small text-secondary">{formatDateTime(run.start_date)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -255,7 +246,7 @@ function OperationsDashboard({ onNavigate }: HomePageProps) {
 
       {/* §13.2: always show the data timestamp. */}
       <p className="data-timestamp">
-        Last updated {fmtTime(lastUpdated)} · refreshes every {POLL_INTERVAL_MS / 1000}s while this tab is visible
+        Last updated {formatTime(lastUpdated)} · refreshes every {POLL_INTERVAL_MS / 1000}s while this tab is visible
       </p>
     </div>
   )

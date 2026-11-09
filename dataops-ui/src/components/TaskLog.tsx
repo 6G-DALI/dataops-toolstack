@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { formatDateTime } from '@6g-dali/ui-shell'
 import { getTaskLogs } from '../api/airflow'
 import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
@@ -52,13 +53,9 @@ function parseLog(text: string): LogEntry[] {
   })
 }
 
+/** A log line's time, in UTC with milliseconds (the column is UTC, so the suffix is left off). */
 function formatTimestamp(ts: string | null): string | null {
-  if (!ts) return null
-  try {
-    return new Date(ts).toISOString().replace('T', ' ').replace('Z', '').slice(0, 23)
-  } catch {
-    return ts
-  }
+  return ts ? formatDateTime(ts, { zone: false, millis: true }) : null
 }
 
 const LEVEL_CLASS: Record<string, string> = {
