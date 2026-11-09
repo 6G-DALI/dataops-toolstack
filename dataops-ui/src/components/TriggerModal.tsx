@@ -1,11 +1,28 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { getCatalogues, getDatasets, getDistributions, getDagDetails } from '../api/airflow'
+import ImputationField from './ImputationField'
 import Modal from './Modal'
 import { FiDatabase, FiSettings } from 'react-icons/fi'
 import type { Catalogue, DagParam, Dataset, Distribution, TriggerConf } from '../types'
 
 const DATASET_FIELDS = new Set(['catalogue_id', 'dataset_id', 'asset_id'])
+
+/** Parameters whose default is a JSON object (`imputation`, `validation`, `timeline`) have to be sent as one. */
+function expectsObject(param: DagParam | undefined): boolean {
+  const v = param?.value
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** Why the text of an object parameter cannot be sent, or null when it can. */
+function objectError(text: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(text)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? null : 'Must be a JSON object, for example {}.'
+  } catch (e) {
+    return `Not valid JSON: ${e instanceof Error ? e.message : String(e)}`
+  }
+}
 
 function renderValue(val: unknown): string {
   if (val === null || val === undefined) return ''
@@ -51,6 +68,7 @@ export default function TriggerModal({ dagId, onConfirm, onCancel }: TriggerModa
   const [catalogueId, setCatalogueId] = useState<string | null>(null)
   const [datasetId, setDatasetId] = useState<string | null>(null)
   const [selected, setSelected] = useState<Distribution | null>(null)
+  const [imputationErrors, setImputationErrors] = useState<string[]>([])
 
   useEffect(() => {
     getCatalogues()
@@ -150,7 +168,16 @@ export default function TriggerModal({ dagId, onConfirm, onCancel }: TriggerModa
   const loading = loadingCatalogues || loadingDag
   const hasParams = params !== null
   const needsDataset = params !== null && Object.keys(params).some(k => DATASET_FIELDS.has(k))
-  const canTrigger = !loading && (!needsDataset || !!selected)
+  const objectErrors: Record<string, string> = {}
+  if (params !== null) {
+    for (const [key, param] of Object.entries(params)) {
+      if (!DATASET_FIELDS.has(key) && expectsObject(param)) {
+        const message = objectError(confValues[key] ?? '')
+        if (message) objectErrors[key] = message
+      }
+    }
+  }
+  const canTrigger = !loading && (!needsDataset || !!selected) && Object.keys(objectErrors).length === 0 && imputationErrors.length === 0
 
   const datasetParams: [string, DagParam][] = params !== null ? Object.entries(params).filter(([k]) => DATASET_FIELDS.has(k)) : []
   const otherParams: [string, DagParam][]   = params !== null ? Object.entries(params).filter(([k]) => !DATASET_FIELDS.has(k)) : []
@@ -257,13 +284,22 @@ export default function TriggerModal({ dagId, onConfirm, onCancel }: TriggerModa
               {otherParams.map(([key, param]) => (
                 <div key={key} className="mb-2">
                   <label className="form-label small font-monospace">{key}</label>
-                  <input
-                    type="text"
-                    className="form-control form-control-sm"
-                    value={confValues[key] ?? ''}
-                    onChange={e => setConfValues(prev => ({ ...prev, [key]: e.target.value }))}
-                  />
-                  {param?.description && <div className="form-text">{param.description}</div>}
+                  {key === 'imputation' ? (
+                    <ImputationField
+                      value={confValues[key] ?? ''}
+                      onChange={json => setConfValues(prev => ({ ...prev, [key]: json }))}
+                      onErrorsChange={setImputationErrors}
+                    />
+                  ) : (
+                    <input
+                      type="text"
+                      className={`form-control form-control-sm${objectErrors[key] ? ' is-invalid' : ''}`}
+                      value={confValues[key] ?? ''}
+                      onChange={e => setConfValues(prev => ({ ...prev, [key]: e.target.value }))}
+                    />
+                  )}
+                  {objectErrors[key] && <div className="invalid-feedback d-block">{objectErrors[key]}</div>}
+                  {param?.description && key !== 'imputation' && <div className="form-text">{param.description}</div>}
                 </div>
               ))}
             </>
