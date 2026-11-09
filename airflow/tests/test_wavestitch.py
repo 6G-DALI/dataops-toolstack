@@ -296,6 +296,15 @@ def test_the_wavestitch_engine_is_only_for_the_wavestitchplus_lib(stack):
 
 # ── the shared scratch directory ────────────────────────────────────────────────────────────────────────────────────
 
+def test_the_task_decorators_are_on_the_tasks_and_not_on_the_helper_between_them():
+    """@task on the wrong function turned cleanup_workdir into a plain function, which the DAG then called at
+    parse time with an XCom reference. The conftest stub of @task sets `.function`, so its presence tells."""
+    from dali import processing
+    for task in ("run_dataops_pipeline", "report_pipeline_outcome", "cleanup_workdir"):
+        assert hasattr(getattr(processing, task), "function"), f"{task} lost its @task decorator"
+    assert not hasattr(processing._scratch_dir, "function"), "_scratch_dir must be a plain helper, not a task"
+
+
 def test_scratch_directories_go_under_the_shared_root_when_it_is_set(stack):
     root, _ = stack
     scratch = _scratch_dir()
