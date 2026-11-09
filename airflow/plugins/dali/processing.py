@@ -757,7 +757,6 @@ def report_pipeline_outcome(pipeline: dict, uploaded: dict) -> None:
         print(f"[dataops]   - {err}")
 
 
-@task
 def _scratch_dir() -> Path:
     """A fresh scratch directory for one run: under DALI_WORK_ROOT when that is set, else in the system temp.
 
@@ -772,6 +771,7 @@ def _scratch_dir() -> Path:
     return Path(tempfile.mkdtemp(prefix="dali-dataops-", dir=root))
 
 
+@task
 def cleanup_workdir(workdir: str | None) -> None:
     """Remove the scratch directory once its artifacts are uploaded.
 
