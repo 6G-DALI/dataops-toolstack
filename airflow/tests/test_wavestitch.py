@@ -260,6 +260,17 @@ def test_the_other_engines_are_unchanged():
     assert imputation_runs({}) == [{"lib": "darts", "method": "linear", "engine": "pandas"}]
 
 
+def test_the_default_runs_are_the_darts_fills_and_kalman_then_the_three_wavestitch_methods_in_order():
+    from dali.processing import DEFAULT_IMPUTATION_CONFIG
+
+    runs = imputation_runs(DEFAULT_IMPUTATION_CONFIG)
+    assert [(r["lib"], r["method"], r["engine"]) for r in runs] == [
+        ("darts", "linear", "pandas"), ("darts", "nearest", "pandas"), ("darts", "kalman", "darts"),
+        ("wavestitchplus", "v1", "wavestitch"), ("wavestitchplus", "v2", "wavestitch"),
+        ("wavestitchplus", "harpoon", "wavestitch")]
+    assert runs[0]["method"] == "linear"          # the quick fill stays the primary run
+
+
 # ── a run, end to end through dali.processing ───────────────────────────────────────────────────────────────────────
 
 def test_a_run_through_the_pipeline_helper_is_imputed_and_carries_its_files(stack):
@@ -320,3 +331,51 @@ def test_scratch_directories_stay_in_the_system_temp_without_a_shared_root(monke
 def test_a_shared_root_that_does_not_exist_yet_is_created(monkeypatch, tmp_path):
     monkeypatch.setenv("DALI_WORK_ROOT", str(tmp_path / "new" / "root"))
     assert _scratch_dir().parent == tmp_path / "new" / "root"
+
+
+# ── unit conversion (convert_units) ─────────────────────────────────────────────────────────────────────────────────
+
+def test_units_are_not_converted_by_default_whatever_the_run_passes():
+    from dali.processing import DEFAULT_IMPUTATION_CONFIG, imputation_config_for
+
+    assert imputation_config_for({})["convert_units"] is False
+    assert imputation_config_for({"imputation": {}})["convert_units"] is False
+    # A run's own imputation replaces the defaults (it is not merged), so the default is applied to it:
+    assert imputation_config_for({"imputation": {"runs": ["darts/linear"]}})["convert_units"] is False
+    assert DEFAULT_IMPUTATION_CONFIG["convert_units"] is False
+
+
+def test_a_run_can_ask_for_the_conversions_and_the_callers_dict_is_left_alone():
+    from dali.processing import DEFAULT_IMPUTATION_CONFIG, imputation_config_for
+
+    mine = {"runs": ["darts/linear"], "convert_units": True}
+    assert imputation_config_for({"imputation": mine})["convert_units"] is True
+    asked = {"runs": ["darts/linear"]}
+    imputation_config_for({"imputation": asked})
+    assert asked == {"runs": ["darts/linear"]}                      # nothing added to the caller's dict
+    assert "convert_units" in DEFAULT_IMPUTATION_CONFIG
+
+
+@pytest.mark.parametrize("config, expected", [
+    ({"convert_units": False}, False),
+    ({"convert_units": True}, True),
+    ({}, True),                      # the pipeline's own default is unchanged: on
+])
+def test_the_pipeline_passes_the_flag_to_preprocess_csv(monkeypatch, tmp_path, config, expected):
+    pytest.importorskip("pandera")
+    import data_process_modules.transform as transform
+    import minimal_dataops
+
+    seen = {}
+
+    def fake_preprocess(**kwargs):
+        seen.update(kwargs)
+        return {"target_cols": ["a"]}
+
+    monkeypatch.setattr(transform, "preprocess_csv", fake_preprocess)
+    handoff = minimal_dataops._build_handoff(
+        {"mode": "time_series", "report": {"recommendations": {"ts_imputation": True}}},
+        output_csv=str(tmp_path / "x_remediated.csv"), ts_col="timestamp", imputation_cfg=config)
+
+    assert handoff["bundle_written"] is True
+    assert seen["convert_units"] is expected

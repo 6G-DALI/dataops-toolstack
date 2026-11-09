@@ -380,7 +380,10 @@ def _build_handoff(
                 # ram_usage_mb, latency μs→ms, cpu_usage %→fraction). A no-op on
                 # non-6G inputs, and matches the Airflow/container + training paths
                 # so the local raw→processed bundle carries the same columns.
-                convert_units=True,
+                # ``imputation.convert_units`` switches it; unset it stays on, as
+                # it always was. (The Airflow DAG sets it to False unless a run
+                # asks for it — see dali.processing.imputation_config_for.)
+                convert_units=bool(imputation_cfg.get("convert_units", True)),
                 # Per-campaign grids: a collection pause must not stretch one
                 # grid across it, and each campaign keeps its own cadence.
                 segment_regularization=bool(

@@ -86,14 +86,43 @@ DEFAULT_VALIDATION_CONFIG: dict[str, Any] = {
 # subprocesses the vendored Darts runner and is chosen automatically for
 # darts/kalman, which the pandas engine cannot do. See imputation_runs() for the
 # combinations that work.
+#
+# `convert_units` is whether the bundle is built with the 6G-schema unit
+# conversions of preprocess_csv: ram_limit → ram_limit_mb, ram_usage (bytes) →
+# ram_usage_mb, lat*/mean/min microseconds → <name>_ms, cpu_usage % → fraction,
+# each by column name (a dataset without those names is unchanged). This DAG leaves the
+# data as it came unless a run asks for it with `"convert_units": true`; the
+# pipeline's own default is on, which is why it is set here, for every run, by
+# imputation_config_for.
 DEFAULT_IMPUTATION_CONFIG: dict[str, Any] = {
     "build_bundle": True,
     "impute": True,
+    "convert_units": False,
+    # The two Darts fills run in seconds, and the first one is the run the results view shows. Kalman fits a model
+    # on the observed points in the vendored Darts runner (a subprocess, engine "darts"). The three WaveStitch+
+    # methods run on the WaveStitch+ service (minutes to hours on CPU; without WAVESTITCH_URL each is recorded as a
+    # failed run and the others still happen). v1 comes first of them, because v2 and harpoon read its output.
     "runs": [
         {"lib": "darts", "method": "linear"},
         {"lib": "darts", "method": "nearest"},
+        {"lib": "darts", "method": "kalman"},
+        {"lib": "wavestitchplus", "method": "v1"},
+        {"lib": "wavestitchplus", "method": "v2"},
+        {"lib": "wavestitchplus", "method": "harpoon"},
     ],
 }
+
+
+def imputation_config_for(params: dict) -> dict:
+    """The run's imputation config: its `imputation` param, or the defaults, with `convert_units` off unless asked.
+
+    A run that passes its own `imputation` replaces DEFAULT_IMPUTATION_CONFIG (it is not merged, because `runs` in the
+    defaults would then win over a `lib`/`method` pair), so the one default that must hold for every run is applied
+    here, to a copy: the caller's dict is not changed.
+    """
+    config = dict(params.get("imputation") or DEFAULT_IMPUTATION_CONFIG)
+    config.setdefault("convert_units", False)
+    return config
 
 
 # Timeline handling, passed to run_pipeline as timeline_config. Left empty the
@@ -620,7 +649,7 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
     print(f"[dataops] wrote {len(file_content)} bytes to {input_csv}")
 
     validation_config = params.get("validation") or DEFAULT_VALIDATION_CONFIG
-    imputation_config = params.get("imputation") or DEFAULT_IMPUTATION_CONFIG
+    imputation_config = imputation_config_for(params)
     timeline_config   = params.get("timeline") or DEFAULT_TIMELINE_CONFIG
     timestamp_col     = params.get("timestamp_col") or None
     if not timestamp_col:
