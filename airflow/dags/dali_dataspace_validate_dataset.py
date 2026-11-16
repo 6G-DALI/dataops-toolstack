@@ -97,8 +97,8 @@ dali:valueColumn (the measured value, "value" by default). The run reads them fr
 matched by `asset_id`. There are no params for them, so every run on a dataset unwraps it the same way, and
 airflow/scripts/set_series_layout.py is how a layout is written to the catalogue.
 
-The pipeline works on one column per time series. With the hierarchy cell_id,ue_id,metric_id the file is first unwrapped
-into those columns (see dali.unwrap; a cell-level row, ue_id "N/A", gives 1_DRB.UEThpDl and a UE row 3_4_DRB.UEBlerDl),
+The pipeline works on one column per time series. With the hierarchy cell_id,ue_id,metric_id the file is unwrapped, in the
+task unwrap_dataset that runs just before the pipeline, into those columns (see dali.unwrap; a cell-level row, ue_id "N/A", gives 1_DRB.UEThpDl and a UE row 3_4_DRB.UEBlerDl),
 the pipeline and the imputation run on that frame, and each run's stitched timeline is wrapped back into the original
 narrow layout (narrow_<lib>_<method>.csv). The ignored columns are held out of the unwrapping and appended to the narrow
 result unchanged. `timestamp_col` names the time column of the narrow file. The unwrapped frame is uploaded as
@@ -241,7 +241,7 @@ from airflow.models.param import Param
 
 from dali.dataspace import publish_quality_to_piveau
 from dali.datalake import download_dataset_edc, upload_artifacts, upload_results
-from dali.processing import cleanup_workdir, report_pipeline_outcome, run_dataops_pipeline
+from dali.processing import cleanup_workdir, report_pipeline_outcome, run_dataops_pipeline, unwrap_dataset
 from dali.validation import (
     merge_quality_report,
     report_outcome,
@@ -274,10 +274,18 @@ def dali_dataspace_validate_dataset():
         file_content=downloaded["content"], asset_title=downloaded["asset_title"]
     )
 
-    # The two quality regimes are independent and both take the format check —
-    # they run in parallel off the single EDC transfer, which is the point of
-    # merging them into one DAG.
+    # The quality checks, Great Expectations and pandera, run over the file as
+    # received, so what they report names the file's own columns. The DataOps
+    # pipeline cleans, fixes and imputes; a narrow dataset is unwrapped into one
+    # column per series only for it, in a task of its own just before it.
+    # The two halves are independent and both take the format check — they run
+    # in parallel off the single EDC transfer, and merge_quality_report joins them.
     gx_report = run_expectations(
+        file_content=downloaded["content"],
+        asset_title=downloaded["asset_title"],
+        format_check=format_check,
+    )
+    unwrapped = unwrap_dataset(
         file_content=downloaded["content"],
         asset_title=downloaded["asset_title"],
         format_check=format_check,
@@ -286,6 +294,7 @@ def dali_dataspace_validate_dataset():
         file_content=downloaded["content"],
         asset_title=downloaded["asset_title"],
         format_check=format_check,
+        unwrapped_input=unwrapped,
     )
 
     merged     = merge_quality_report(gx_report=gx_report, pipeline=pipeline)

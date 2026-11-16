@@ -139,6 +139,30 @@ class UnwrapState:
     stats: dict = field(default_factory=dict)
 
 
+    def to_dict(self) -> dict:
+        """The state as plain JSON types, so it can travel between Airflow tasks."""
+        return {
+            "fields": list(self.fields), "sep": self.sep, "timestamp_col": self.timestamp_col,
+            "value_col": self.value_col, "columns": list(self.columns),
+            "series": {name: dict(tokens) for name, tokens in self.series.items()},
+            "constants": dict(self.constants), "tz_offset": self.tz_offset,
+            "templates": [[list(fields), sep] for fields, sep in self.templates],
+            "stats": dict(self.stats),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "UnwrapState":
+        """The inverse of :meth:`to_dict`."""
+        return cls(
+            fields=list(data["fields"]), sep=data["sep"], timestamp_col=data["timestamp_col"],
+            value_col=data["value_col"], columns=list(data["columns"]),
+            series={name: dict(tokens) for name, tokens in data["series"].items()},
+            constants=dict(data.get("constants") or {}), tz_offset=data.get("tz_offset") or "",
+            templates=[(list(fields), sep) for fields, sep in data.get("templates") or []],
+            stats=dict(data.get("stats") or {}),
+        )
+
+
 def _offset_of(stamp: str) -> str:
     match = re.search(r"([+-]\d{2}:?\d{2}|Z)$", str(stamp).strip())
     if not match:

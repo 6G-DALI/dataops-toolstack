@@ -9,6 +9,7 @@ import great_expectations as gx
 from airflow.decorators import task
 from airflow.sdk import get_current_context
 
+from dali import rawchecks
 from dali.utils import (
     DEFAULT_EXPECTATIONS,
     dataframe_from_content,
@@ -81,6 +82,14 @@ def run_expectations(file_content: str, asset_title: str, format_check: dict) ->
 
     df = dataframe_from_content(file_content, asset_title)
 
+    # The checks run over the file as received, so every one of them, and every quality measurement published from
+    # it, names a column the submitter's file has. See dali.rawchecks.
+    from dali.processing import resolve_series_layout
+
+    raw_plan = rawchecks.plan(df, params, resolve_series_layout(params))
+    print(f"[dali] checking the file as received: mode {raw_plan.mode!r}, timestamp column {raw_plan.timestamp_col!r}"
+          + (f", series key {raw_plan.key_columns}" if raw_plan.key_columns else ""))
+
     context = gx.get_context(mode="ephemeral")
     datasource = context.data_sources.add_pandas("runtime_source")
     asset = datasource.add_dataframe_asset("dataset")
@@ -102,6 +111,19 @@ def run_expectations(file_content: str, asset_title: str, format_check: dict) ->
         kwargs = {k: v for k, v in exp.items() if k != "type"}
         suite.add_expectation(exp_class(exp_type)(**kwargs))
 
+    gx_data = df
+    if not expectations:
+        # The default suite also carries the checks the DataOps pipeline used to generate for itself: not-null per
+        # column, a quantile band per numeric column and the timestamp's own checks. A check the catalogue's list
+        # already makes of a column is not made twice.
+        seen = {(e.get("type"), e.get("column") or "") for e in resolved}
+        generated = [e for e in rawchecks.auto_expectations(df, raw_plan)
+                     if (getattr(e, "expectation_type", ""), getattr(e, "column", None) or "") not in seen]
+        for exp in generated:
+            suite.add_expectation(exp)
+        gx_data = rawchecks.gx_frame(df, raw_plan)
+        print(f"[dali] added {len(generated)} generated expectations over the file's own columns")
+
     validation_definition = context.validation_definitions.add(
         gx.ValidationDefinition(name="validation", data=batch_definition, suite=suite)
     )
@@ -109,7 +131,7 @@ def run_expectations(file_content: str, asset_title: str, format_check: dict) ->
     _old_stderr = sys.stderr
     sys.stderr = open(os.devnull, "w")
     try:
-        results = validation_definition.run(batch_parameters={"dataframe": df})
+        results = validation_definition.run(batch_parameters={"dataframe": gx_data})
     finally:
         sys.stderr.close()
         sys.stderr = _old_stderr
@@ -117,28 +139,39 @@ def run_expectations(file_content: str, asset_title: str, format_check: dict) ->
     gx_stats = results.statistics
     evaluated  = gx_stats.get("evaluated_expectations", 0) + 1
     successful = gx_stats.get("successful_expectations", 0) + 1  # format_check already passed
+    entries = [format_check] + [
+        {
+            "expectation_type": r.expectation_config.type,
+            "kwargs":           r.expectation_config.kwargs,
+            "success":          r.success,
+            "result":           sanitize({
+                k: v for k, v in r.result.items()
+                if not k.startswith("partial")
+            }),
+        }
+        for r in results.results
+    ]
+
+    # The pandera schema check, over the same file, is one more entry of the same report.
+    validation = rawchecks.pandera_check(df, raw_plan)
+    pandera_ok = validation["pandera_passed"]
+    if pandera_ok is not None:
+        entries.append(_pandera_entry(validation))
+        evaluated += 1
+        successful += 1 if pandera_ok else 0
+
     return {
         "input_key":  input_key,
         "run_time":   run_time,
-        "success":    bool(results.success),  # format_check passing doesn't affect this — it already did
+        "success":    bool(results.success) and pandera_ok is not False,
         "statistics": {
             "evaluated_expectations":    evaluated,
             "successful_expectations":   successful,
             "unsuccessful_expectations": evaluated - successful,
             "success_percent":           100.0 * successful / evaluated if evaluated else 0.0,
         },
-        "results": [format_check] + [
-            {
-                "expectation_type": r.expectation_config.type,
-                "kwargs":           r.expectation_config.kwargs,
-                "success":          r.success,
-                "result":           sanitize({
-                    k: v for k, v in r.result.items()
-                    if not k.startswith("partial")
-                }),
-            }
-            for r in results.results
-        ],
+        "validation": validation,
+        "results":    entries,
     }
 
 
@@ -366,19 +399,30 @@ def merge_quality_report(gx_report: dict, pipeline: dict) -> dict:
     # at the same point, to the same end, and their overlap has already been
     # folded above. Splitting the report along that seam would describe how this
     # DAG is wired rather than what was checked.
-    gx_evaluated = len(checks)
-    gx_passed    = sum(1 for entry in checks if entry["success"])
+    gx_checks    = [entry for entry in checks if entry.get("expectation_type") != PANDERA_EXPECTATION]
+    gx_evaluated = len(gx_checks)
+    gx_passed    = sum(1 for entry in gx_checks if entry["success"])
     sources: dict = {}
 
-    if pipeline_report:
-        validation = pipeline_report.get("validation") or {}
-        entry = _pandera_entry(validation)
-        results.append(entry)
+    # pandera runs over the file as received, in run_expectations, so its entry is already among the checks. The
+    # pipeline's own is used only when a pipeline that still ran one reports it (validation `run_pandera` True).
+    pandera_entry = next((entry for entry in checks if entry.get("expectation_type") == PANDERA_EXPECTATION), None)
+    if pandera_entry is not None:
         sources["pandera"] = {
-            "success": entry["success"],
-            "mode":    validation.get("mode"),
-            "errors":  len(validation.get("errors") or []),
+            "success": bool(pandera_entry.get("success")),
+            "mode":    (pandera_entry.get("kwargs") or {}).get("mode"),
+            "errors":  len((pandera_entry.get("result") or {}).get("errors") or []),
         }
+    elif pipeline_report:
+        validation = pipeline_report.get("validation") or {}
+        if validation.get("pandera_passed") is not None:
+            entry = _pandera_entry(validation)
+            results.append(entry)
+            sources["pandera"] = {
+                "success": entry["success"],
+                "mode":    validation.get("mode"),
+                "errors":  len(validation.get("errors") or []),
+            }
 
     sources["great_expectations"] = {
         "success":   gx_passed == gx_evaluated,
@@ -389,7 +433,7 @@ def merge_quality_report(gx_report: dict, pipeline: dict) -> dict:
     # Reported, never published — see PUBLISHED_STAGE. Kept out of the totals and
     # last in the ordering: it measures the remediated frame, so it belongs with
     # remediation rather than with the checks on the frame as received.
-    if pipeline_report.get("quality_after"):
+    if (pipeline_report.get("quality_after") or {}).get("gx_passed") is not None:
         sources["great_expectations_after_remediation"] = _stage_source(pipeline_report["quality_after"])
 
     evaluated = len(results)

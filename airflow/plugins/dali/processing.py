@@ -220,7 +220,11 @@ def guess_timestamp_column(input_csv: Path) -> str | None:
         # pipeline reads the file itself and will report a real parse failure.
         print(f"[dataops] could not sample the input to guess a timestamp column: {exc}")
         return None
+    return guess_timestamp_in_frame(sample)
 
+
+def guess_timestamp_in_frame(sample) -> str | None:
+    """:func:`guess_timestamp_column` over a frame already read, by the same rules."""
     normalised = [(_normalise(col), col) for col in sample.columns]
     by_name: dict[str, str] = {}
     for norm, col in normalised:
@@ -681,8 +685,48 @@ def _wrap_runs(imputation: dict, state, wide_columns: list[str], workdir: Path, 
     return wrapped
 
 
+@task
+def unwrap_dataset(file_content: str, asset_title: str, format_check: dict | None = None) -> dict:
+    """Unwrap a narrow dataset into one column per series, just before the DataOps pipeline.
+
+    The layout is the one the targeted distribution declares in the catalogue (resolve_series_layout). Only the
+    pipeline's input is transformed: the quality checks of the file as received (dali.validation.run_expectations)
+    take the original download, so what they report names the file's own columns.
+
+    Returns {"file_content", "timestamp_col", "wide_columns", "layout", "state"} for run_dataops_pipeline, with the
+    unwrapped CSV as file_content and the state as plain JSON; {"error"} when the hierarchy does not fit the data; and
+    {"unwrapped": False} when the dataset declares no layout, or failed its format check, so there is nothing to do.
+    """
+    if format_check is not None and not format_check.get("success"):
+        return {"unwrapped": False, "reason": "failed the format check"}
+
+    params = get_current_context()["params"]
+    layout = resolve_series_layout(params)
+    if not layout:
+        print("[dataops] no series layout declared for this distribution: the file is processed as it is")
+        return {"unwrapped": False, "reason": "no layout declared"}
+
+    print(f"[dataops] narrow dataset: hierarchy {layout['hierarchy']!r} from {layout['source']}, "
+          f"{len(layout['ignore_columns'])} ignored column(s), value column {layout['value_col']!r}")
+    stem = Path(asset_title).stem or "dataset"
+    with tempfile.TemporaryDirectory(prefix="dali-unwrap-") as tmp:
+        workdir = Path(tmp)
+        input_csv = workdir / f"{stem}.csv"
+        input_csv.write_text(file_content, encoding="utf-8")
+        timestamp_col = params.get("timestamp_col") or guess_timestamp_column(input_csv)
+        try:
+            wide_csv, state, timestamp_col, wide_columns = _unwrap_input(
+                input_csv, workdir, stem, layout, timestamp_col)
+        except Exception as exc:  # noqa: BLE001 - reported, and the pipeline skips; see run_dataops_pipeline
+            return {"unwrapped": False, "error": f"{exc.__class__.__name__}: {exc}"}
+        wide_content = Path(wide_csv).read_text(encoding="utf-8")
+    return {"unwrapped": True, "file_content": wide_content, "timestamp_col": timestamp_col,
+            "wide_columns": wide_columns, "layout": layout, "state": state.to_dict()}
+
+
 @task(multiple_outputs=True)
-def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict | None = None) -> dict:
+def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict | None = None,
+                         unwrapped_input: dict | None = None) -> dict:
     """Run the minimal DataOps pipeline over a downloaded distribution.
 
     The pipeline reads and writes files, so the content is first written to a
@@ -709,6 +753,15 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
     that already failed the format check has nothing here to clean or validate
     — the run is skipped and reported as such, rather than crashing on a
     garbage parse and turning a reportable data problem into a DAG failure.
+
+    `unwrapped_input` is dali.processing.unwrap_dataset's result. When it is given, the run uses it as it is: its
+    wide CSV is what the pipeline reads, its state wraps the results back, and an unwrap that failed there skips the
+    run here. When it is None the layout is resolved and the file unwrapped in this task, as before.
+
+    The quality checks of the file as received, Great Expectations and pandera, are not run here: they are
+    dali.validation.run_expectations' job, over the file's own columns, and merge_quality_report joins them to this
+    run's report. Here they are switched off (validation `run_gx` and `run_pandera` False), so nothing in this task's
+    report names a column that the unwrapping generated.
 
     Returns the artifact paths plus the pipeline's own report, for
     dali.datalake.upload_artifacts.
@@ -742,7 +795,7 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
     input_csv.write_text(file_content, encoding="utf-8")
     print(f"[dataops] wrote {len(file_content)} bytes to {input_csv}")
 
-    validation_config = params.get("validation") or DEFAULT_VALIDATION_CONFIG
+    validation_config = {**(params.get("validation") or DEFAULT_VALIDATION_CONFIG), "run_gx": False, "run_pandera": False}
     imputation_config = imputation_config_for(params)
     timeline_config   = params.get("timeline") or DEFAULT_TIMELINE_CONFIG
     timestamp_col     = params.get("timestamp_col") or None
@@ -750,22 +803,39 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
         timestamp_col = guess_timestamp_column(input_csv)
 
     # A narrow dataset (one row per timestamp, entity and metric) is unwrapped into one column per series for the
-    # pipeline, and the imputed timelines are wrapped back at the end. See dali.unwrap.
+    # pipeline, and the imputed timelines are wrapped back at the end. See dali.unwrap. The DAG does the unwrapping in
+    # its own task, unwrap_dataset, just before this one; without that input it is done here.
     unwrapped = None
     pipeline_csv = input_csv
-    layout = resolve_series_layout(params)
-    if layout:
+    if unwrapped_input is None:
+        layout = resolve_series_layout(params)
+        if layout:
+            print(f"[dataops] narrow dataset: hierarchy {layout['hierarchy']!r} from {layout['source']}, "
+                  f"{len(layout['ignore_columns'])} ignored column(s), value column {layout['value_col']!r}")
+            try:
+                pipeline_csv, state, timestamp_col, wide_columns = _unwrap_input(
+                    input_csv, workdir, stem, layout, timestamp_col)
+                unwrapped = (state, wide_columns)
+            except Exception as exc:  # noqa: BLE001 - a bad hierarchy is reported like a skipped run, not a crash
+                reason = f"{exc.__class__.__name__}: {exc}"
+                print(f"[dataops] skipping pipeline - the hierarchy could not be applied: {reason}")
+                return {"workdir": str(workdir), "artifacts": {"input_csv": str(input_csv)}, "report": None,
+                        "error": f"skipped: hierarchy not applied ({reason})"}
+    elif unwrapped_input.get("error"):
+        reason = unwrapped_input["error"]
+        print(f"[dataops] skipping pipeline - the hierarchy could not be applied: {reason}")
+        return {"workdir": str(workdir), "artifacts": {"input_csv": str(input_csv)}, "report": None,
+                "error": f"skipped: hierarchy not applied ({reason})"}
+    elif unwrapped_input.get("state"):
+        layout = unwrapped_input["layout"]
+        state = narrow.UnwrapState.from_dict(unwrapped_input["state"])
+        pipeline_csv = workdir / f"{stem}_unwrapped.csv"
+        pipeline_csv.write_text(unwrapped_input["file_content"], encoding="utf-8")
+        timestamp_col = unwrapped_input.get("timestamp_col") or timestamp_col
+        unwrapped = (state, list(unwrapped_input.get("wide_columns") or []))
         print(f"[dataops] narrow dataset: hierarchy {layout['hierarchy']!r} from {layout['source']}, "
-              f"{len(layout['ignore_columns'])} ignored column(s), value column {layout['value_col']!r}")
-        try:
-            pipeline_csv, state, timestamp_col, wide_columns = _unwrap_input(
-                input_csv, workdir, stem, layout, timestamp_col)
-            unwrapped = (state, wide_columns)
-        except Exception as exc:  # noqa: BLE001 - a bad hierarchy is reported like a skipped run, not a crash
-            reason = f"{exc.__class__.__name__}: {exc}"
-            print(f"[dataops] skipping pipeline - the hierarchy could not be applied: {reason}")
-            return {"workdir": str(workdir), "artifacts": {"input_csv": str(input_csv)}, "report": None,
-                    "error": f"skipped: hierarchy not applied ({reason})"}
+              f"{len(layout['ignore_columns'])} ignored column(s), value column {layout['value_col']!r}; "
+              f"unwrapped by the DAG into {state.stats.get('series')} series")
     print(f"[dataops] mode={validation_config.get('mode')!r} timestamp_col={timestamp_col!r}")
 
     pipeline_error = None

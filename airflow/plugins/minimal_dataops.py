@@ -64,7 +64,7 @@ def _quality_issue_summary(quality_report: dict) -> dict:
             "ts_gaps": int(issues.get("ts_gaps", {}).get("num_gaps", 0)),
             "missing": _issue_count(issues.get("missing", {})),
             "outliers": _issue_count(issues.get("outliers", [])),
-            "failed_columns": 0 if quality_report.get("gx_passed") else 1,
+            "failed_columns": 1 if quality_report.get("gx_passed") is False else 0,
         }
     return {
         "ts_gaps": 0,
@@ -221,7 +221,7 @@ def _quality_action_plan(quality_report: dict) -> list[dict]:
                 "module": "data_process_modules.profiling:detect_primary_key",
             })
 
-    if not quality_report.get("gx_passed", True):
+    if quality_report.get("gx_passed") is False:
         gx_detail = quality_report.get("gx", {})
         actions.append({
             "issue": "gx_expectation_failures",
@@ -264,6 +264,7 @@ def _run_quality_checks(
                 gx_context_root=validation_config.get("gx_context_root"),
                 key_columns=key_columns,
                 sweep_aware=sweep_aware,
+                run_gx=bool(validation_config.get("run_gx", True)),
             )
         elif mode == "tabular":
             report = tabular_checks.run(
@@ -277,6 +278,7 @@ def _run_quality_checks(
                 outlier_q=float(validation_config.get("outlier_q", 0.01)),
                 outlier_mostly=float(validation_config.get("outlier_mostly", 0.95)),
                 gx_context_root=validation_config.get("gx_context_root"),
+                run_gx=bool(validation_config.get("run_gx", True)),
             )
         else:
             report = {
@@ -826,7 +828,9 @@ def run_pipeline(
         "errors": [],
     }
     validation_error: Exception | None = None
-    if validation_mode == "none":
+    # run_pandera False: the schema is checked on the frame as received by the caller (dali.validation.run_expectations),
+    # and pandera_passed stays None, neither passed nor failed.
+    if validation_mode == "none" or not bool(validation_cfg.get("run_pandera", True)):
         validation["pandera_passed"] = None
     elif validation_mode == "time_series":
         if not ts_col:
