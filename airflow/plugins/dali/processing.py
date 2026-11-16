@@ -645,44 +645,69 @@ def _unwrap_input(input_csv: Path, workdir: Path, stem: str, layout: dict, times
     return wide_csv, state, timestamp_col, list(wide.columns)
 
 
-def _wrap_runs(imputation: dict, state, wide_columns: list[str], workdir: Path, stem: str,
-               prepared_dir: str | None) -> dict[str, str]:
-    """Wrap every imputation run's stitched timeline back into the narrow layout; returns {artifact name: path}.
+_WRAPPED_FRAME = re.compile(r"^(soft_cleaned_csv|output_csv|imputed_.+_(?:train|test|final)_csv)$")
 
-    The pipeline snake_cases column names (dataops.cleaning) and turns the time column into epoch seconds, so the
-    columns are mapped back through the same renaming it applied. The ignored columns are restored with their one value. Never
-    raises: a run that cannot be wrapped is reported and the others still are.
+
+def _wrap_artifacts(produced: dict[str, str], state, wide_columns: list[str], report: dict, prepared_dir: str | None,
+                    workdir: Path) -> tuple[dict[str, str], dict[str, int], dict[str, str]]:
+    """Store a narrow dataset's results in the narrow layout: every frame the pipeline produced, wrapped back.
+
+    `produced` maps artifact names to paths. The frames the pipeline works on are wide, one column per series: the
+    soft-cleaned and remediated frames, and each imputation's splits and full timeline. Each is wrapped back under its
+    own name, so the artifacts a run leaves are all in the layout of the file that came in, and none holds a column
+    that the unwrapping generated. The wide input (`unwrapped`) is not kept.
+
+    The pipeline snake_cases column names (dataops.cleaning) and writes the imputed time as epoch seconds, so the
+    columns are mapped back through the same renaming it applied, and the time column is read in its own form. The
+    ignored columns are restored with their one value. Never raises: a frame that cannot be wrapped is left out, never
+    stored wide, and the reason is returned.
+
+    Returns (the new `produced`, {artifact: narrow rows}, {artifact: why it was left out}).
     """
     import pandas as pd
-    from dataops.cleaning import build_column_mapping
+    from dataops.cleaning import build_column_mapping, snake_case
 
     inverse = {cleaned: original for original, cleaned in build_column_mapping(wide_columns).items()}
-    wrapped: dict[str, str] = {}
-    for run in (imputation or {}).get("runs") or ([imputation] if imputation else []):
-        final = (run.get("final") or {}).get("path")
-        if not final or not Path(final).exists():
-            continue
-        label = f"{run.get('lib')}_{run.get('method')}"
+    meta = {}
+    if prepared_dir:
         try:
-            frame = pd.read_csv(final)
-            meta = json.loads((Path(prepared_dir) / "meta.json").read_text(encoding="utf-8")) if prepared_dir else {}
-            time_col = meta.get("time_col") or next(
-                (c for c in ("timestamp", "time") if c in frame.columns), frame.columns[0])
+            meta = json.loads((Path(prepared_dir) / "meta.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            meta = {}
+    pipeline_time = (report.get("validation") or {}).get("timestamp_column") or snake_case(state.timestamp_col)
+
+    out: dict[str, str] = {}
+    rows: dict[str, int] = {}
+    left_out: dict[str, str] = {}
+    for name, path in produced.items():
+        if name == "unwrapped":
+            continue                                    # the wide input is an intermediate, never an artifact
+        if not _WRAPPED_FRAME.match(name):
+            out[name] = path
+            continue
+        try:
+            frame = pd.read_csv(path)
+            imputed = name.startswith("imputed_")
+            time_col = (meta.get("time_col") if imputed else None) or pipeline_time
+            if time_col not in frame.columns:
+                time_col = next((c for c in ("timestamp", "time") if c in frame.columns), frame.columns[0])
             if pd.api.types.is_numeric_dtype(frame[time_col]):
-                frame[time_col] = frame[time_col] * float(meta.get("time_unit_seconds") or 1.0)
+                frame[time_col] = frame[time_col] * float(meta.get("time_unit_seconds") or 1.0 if imputed else 1.0)
                 unit = "epoch"
             else:
+                frame[time_col] = pd.to_datetime(frame[time_col])
                 unit = "datetime"
             narrow_df = narrow.wrap(frame, state, time_col=time_col, rename=inverse, time_unit=unit)
-            path = workdir / f"{stem}_imputed_{label}_final_narrow.csv"
-            narrow_df.to_csv(path, index=False)
-            wrapped[f"narrow_{label}"] = str(path)
-            run["narrow"] = {"path": str(path), "rows": int(len(narrow_df))}
-            print(f"[dataops] wrapped {label}: {len(narrow_df)} narrow rows -> {path}")
+            target = Path(workdir) / f"{Path(path).stem}_narrow.csv"
+            narrow_df.to_csv(target, index=False)
+            out[name] = str(target)
+            rows[name] = int(len(narrow_df))
+            print(f"[dataops] wrapped {name}: {len(narrow_df)} narrow rows -> {target}")
         except Exception as exc:  # noqa: BLE001 - recorded, never fails the run
-            run["narrow"] = {"error": f"{exc.__class__.__name__}: {exc}"}
-            print(f"[dataops] could not wrap {label} back to the narrow layout: {exc.__class__.__name__}: {exc}")
-    return wrapped
+            left_out[name] = f"{exc.__class__.__name__}: {exc}"
+            print(f"[dataops] could not wrap {name} back to the narrow layout, so it is not stored: "
+                  f"{exc.__class__.__name__}: {exc}")
+    return out, rows, left_out
 
 
 @task
@@ -880,25 +905,6 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
     # here rather than inside run_pipeline because minimal_dataops is vendored
     # verbatim from WaveStitchPlus (plugins/VENDORED.md) and must not diverge.
     imputation = impute_prepared_bundle(report, imputation_config)
-    narrow_files: dict[str, str] = {}
-    if unwrapped:
-        state, wide_columns = unwrapped
-        prepared_dir = ((report.get("handoff") or {}).get("prepared_dir"))
-        narrow_files = _wrap_runs(imputation, state, wide_columns, workdir, stem, prepared_dir)
-        report["unwrap"] = {"hierarchy": layout["hierarchy"], "source": layout["source"],
-                            "ignore_columns": list(state.constants),
-                            "timestamp_col": timestamp_col, "value_col": state.value_col,
-                            "tz_offset": state.tz_offset, **state.stats}
-    if imputation or unwrapped:
-        if imputation:
-            report["imputation"] = imputation
-        # Written back to the file, not just to the dict: the report artifact is
-        # uploaded from disk, and it is what the results view reads. Leaving the
-        # summary in memory only would upload a report that never mentions the
-        # imputation this run performed.
-        report_json.write_text(
-            json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8"
-        )
 
     # The imputed splits are what a reader actually wants to see, so they are
     # uploaded alongside the frames. The bundle's other files stay on disk: they
@@ -908,14 +914,14 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
     # this carry the bare names (imputed_train_csv, …); dataops-ui reads both.
     imputed_files: dict[str, str] = {}
     for run in (imputation or {}).get("runs") or ([imputation] if imputation else []):
-        stem = f"imputed_{run.get('lib')}_{run.get('method')}"
+        run_stem = f"imputed_{run.get('lib')}_{run.get('method')}"
         for kind, info in (run.get("files") or {}).items():
             if info.get("path") and Path(info["path"]).exists():
-                imputed_files[f"{stem}_{kind}_csv"] = info["path"]
+                imputed_files[f"{run_stem}_{kind}_csv"] = info["path"]
         # …and the stitched timeline, which is the one to read if you only read one.
         final_path = (run.get("final") or {}).get("path")
         if final_path and Path(final_path).exists():
-            imputed_files[f"{stem}_final_csv"] = final_path
+            imputed_files[f"{run_stem}_final_csv"] = final_path
 
     produced = {
         name: str(path)
@@ -928,9 +934,30 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
         if path.exists()
     }
     produced.update(imputed_files)
-    produced.update(narrow_files)
-    if unwrapped and pipeline_csv.exists():
-        produced["unwrapped"] = str(pipeline_csv)
+
+    # A narrow dataset is stored narrow: the pipeline worked on one column per series, but every frame it produced is
+    # wrapped back into the layout of the file that came in before anything is uploaded (see _wrap_artifacts).
+    if unwrapped:
+        state, wide_columns = unwrapped
+        prepared_dir = ((report.get("handoff") or {}).get("prepared_dir"))
+        produced, wrapped_rows, not_wrapped = _wrap_artifacts(
+            produced, state, wide_columns, report, prepared_dir, workdir)
+        report["unwrap"] = {"hierarchy": layout["hierarchy"], "separator": state.sep, "source": layout["source"],
+                            "ignore_columns": list(state.constants),
+                            "timestamp_col": timestamp_col, "value_col": state.value_col,
+                            "tz_offset": state.tz_offset, **state.stats,
+                            "wrapped_artifacts": wrapped_rows, "not_wrapped": not_wrapped}
+    if imputation or unwrapped:
+        if imputation:
+            report["imputation"] = imputation
+        # Written back to the file, not just to the dict: the report artifact is
+        # uploaded from disk, and it is what the results view reads. Leaving the
+        # summary in memory only would upload a report that never mentions the
+        # imputation this run performed.
+        report_json.write_text(
+            json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8"
+        )
+
     for name, path in produced.items():
         print(f"[dataops] {name}: {path} ({os.path.getsize(path)} bytes)")
 

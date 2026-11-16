@@ -305,7 +305,10 @@ class TestPipelineWithAnUnwrappedInput:
         assert seen["kw"]["validation_config"]["run_gx"] is False
         assert seen["kw"]["validation_config"]["run_pandera"] is False
         assert out["report"]["unwrap"]["hierarchy"] == LAYOUT["hierarchy"]
-        assert "unwrapped" in out["artifacts"] and "input_csv" in out["artifacts"]
+        # the results are stored narrow: the wide frame the pipeline read is not an artifact, and every frame the
+        # pipeline wrote comes back in the layout of the file that came in
+        assert "unwrapped" not in out["artifacts"] and "input_csv" in out["artifacts"]
+        assert out["report"]["unwrap"]["not_wrapped"] == {} or "output_csv" in out["report"]["unwrap"]["not_wrapped"]
 
     def test_an_unwrap_that_failed_skips_the_run(self, pipeline):
         processing, seen = pipeline

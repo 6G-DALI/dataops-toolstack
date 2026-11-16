@@ -165,16 +165,24 @@ class TestWrap:
             wrap(wide.rename(columns=lambda c: c if c == "timestamp" else "x" + c), state)
 
 
-class TestWrapRuns:
-    """dali.processing._wrap_runs: the pipeline snake_cases names and writes epoch seconds."""
+class TestWrapArtifacts:
+    """dali.processing._wrap_artifacts: every frame the pipeline made is stored narrow, under its own name."""
 
-    def test_a_runs_final_timeline_is_wrapped_back(self, narrow, tmp_path: Path):
-        from dali.processing import _wrap_runs
+    def _frames(self, narrow, tmp_path: Path):
+        """The wide frames of a run, as the pipeline writes them: snake_cased names, a datetime or epoch time."""
         from dataops.cleaning import build_column_mapping
 
         wide, state = unwrap(narrow, HIERARCHY, IGNORE)
         mapping = build_column_mapping(list(wide.columns))
         times = pd.to_datetime(wide["timestamp"])
+        series = {mapping[c]: wide[c] for c in wide.columns[1:]}
+
+        soft = pd.DataFrame({"timestamp": times, **series})
+        soft_csv = tmp_path / "ds_soft_cleaned.csv"
+        soft.to_csv(soft_csv, index=False)
+        remediated_csv = tmp_path / "ds_remediated.csv"
+        soft.to_csv(remediated_csv, index=False)
+
         final = pd.DataFrame({
             "timestamp": (times - pd.Timestamp("1970-01-01")).dt.total_seconds(),
             "split": "train",
@@ -185,27 +193,62 @@ class TestWrapRuns:
         prepared = tmp_path / "bundle"
         prepared.mkdir()
         (prepared / "meta.json").write_text(json.dumps({"time_col": "timestamp", "time_unit_seconds": 1.0}))
-        imputation = {"lib": "darts", "method": "linear", "final": {"path": str(final_csv)}}
+        wide_input = tmp_path / "ds_unwrapped.csv"
+        wide.to_csv(wide_input, index=False)
+        produced = {
+            "input_csv": str(tmp_path / "ds.csv"), "soft_cleaned_csv": str(soft_csv), "output_csv": str(remediated_csv),
+            "imputed_darts_linear_final_csv": str(final_csv), "report_json": str(tmp_path / "ds_report.json"),
+            "unwrapped": str(wide_input),
+        }
+        return wide, state, produced, str(prepared)
 
-        out = _wrap_runs(imputation, state, list(wide.columns), tmp_path, "ds", str(prepared))
+    def test_every_frame_is_wrapped_and_the_wide_input_is_not_kept(self, narrow, tmp_path: Path):
+        from dali.processing import _wrap_artifacts
 
-        assert list(out) == ["narrow_darts_linear"]
-        result = pd.read_csv(out["narrow_darts_linear"], dtype=str, keep_default_na=False)
-        assert list(result.columns) == list(narrow.columns)
-        assert len(result) == 5 * 4                                  # 5 series filled over 4 timestamps
-        assert set(result["gNB_id"]) == {"1193046"} and set(result["source"]) == {"Digital_Twin"}
-        assert result["timestamp"].iloc[0] == "2026-05-28T11:36:54.462892+02:00"
-        assert imputation["narrow"]["rows"] == 20
+        wide, state, produced, prepared = self._frames(narrow, tmp_path)
+        out, rows, left_out = _wrap_artifacts(produced, state, list(wide.columns), {}, prepared, tmp_path)
 
-    def test_a_run_that_cannot_be_wrapped_is_recorded_not_raised(self, narrow, tmp_path: Path):
-        from dali.processing import _wrap_runs
+        assert "unwrapped" not in out and left_out == {}
+        assert set(out) == {"input_csv", "soft_cleaned_csv", "output_csv", "imputed_darts_linear_final_csv",
+                            "report_json"}
+        assert out["input_csv"] == produced["input_csv"] and out["report_json"] == produced["report_json"]
+        for name in ("soft_cleaned_csv", "output_csv", "imputed_darts_linear_final_csv"):
+            result = pd.read_csv(out[name], dtype=str, keep_default_na=False)
+            assert list(result.columns) == list(narrow.columns), name       # the layout of the file that came in
+            assert set(result["gNB_id"]) == {"1193046"} and set(result["source"]) == {"Digital_Twin"}
+            assert result["timestamp"].iloc[0] == "2026-05-28T11:36:54.462892+02:00"
+            assert rows[name] == len(result)
+        # only the observed cells of the soft-cleaned frame; the imputed one is filled throughout
+        assert rows["soft_cleaned_csv"] == len(narrow) and rows["imputed_darts_linear_final_csv"] == 5 * 4
 
-        wide, state = unwrap(narrow, HIERARCHY, IGNORE)
-        bad = tmp_path / "final.csv"
+    def test_no_generated_series_name_is_left_in_any_stored_frame(self, narrow, tmp_path: Path):
+        from dali.processing import _wrap_artifacts
+
+        wide, state, produced, prepared = self._frames(narrow, tmp_path)
+        out, _, _ = _wrap_artifacts(produced, state, list(wide.columns), {}, prepared, tmp_path)
+        generated = [c for c in wide.columns if c != "timestamp"]
+        for name in ("soft_cleaned_csv", "output_csv", "imputed_darts_linear_final_csv"):
+            header = pd.read_csv(out[name], nrows=0).columns
+            assert not set(header) & set(generated), name
+
+    def test_a_frame_that_cannot_be_wrapped_is_left_out_not_stored_wide(self, narrow, tmp_path: Path):
+        from dali.processing import _wrap_artifacts
+
+        wide, state, produced, prepared = self._frames(narrow, tmp_path)
+        bad = tmp_path / "bad.csv"
         bad.write_text("a,b\n1,2\n")
-        imputation = {"lib": "darts", "method": "linear", "final": {"path": str(bad)}}
-        assert _wrap_runs(imputation, state, list(wide.columns), tmp_path, "ds", None) == {}
-        assert "error" in imputation["narrow"]
+        produced["output_csv"] = str(bad)
+        out, rows, left_out = _wrap_artifacts(produced, state, list(wide.columns), {}, prepared, tmp_path)
+        assert "output_csv" not in out and "output_csv" in left_out
+        assert "soft_cleaned_csv" in out                                    # the others still are
+
+    def test_the_reports_time_column_name_is_used(self, narrow, tmp_path: Path):
+        from dali.processing import _wrap_artifacts
+
+        wide, state, produced, prepared = self._frames(narrow, tmp_path)
+        out, _, left_out = _wrap_artifacts(
+            produced, state, list(wide.columns), {"validation": {"timestamp_column": "timestamp"}}, prepared, tmp_path)
+        assert left_out == {} and "soft_cleaned_csv" in out
 
 
 class TestSeriesLayoutFromCatalogue:

@@ -98,11 +98,13 @@ matched by `asset_id`. There are no params for them, so every run on a dataset u
 airflow/scripts/set_series_layout.py is how a layout is written to the catalogue.
 
 The pipeline works on one column per time series. With the hierarchy cell_id,ue_id,metric_id the file is unwrapped, in the
-task unwrap_dataset that runs just before the pipeline, into those columns (see dali.unwrap; a cell-level row, ue_id "N/A", gives 1_DRB.UEThpDl and a UE row 3_4_DRB.UEBlerDl),
-the pipeline and the imputation run on that frame, and each run's stitched timeline is wrapped back into the original
-narrow layout (narrow_<lib>_<method>.csv). The ignored columns are held out of the unwrapping and appended to the narrow
-result unchanged. `timestamp_col` names the time column of the narrow file. The unwrapped frame is uploaded as
-unwrapped.csv, and report["unwrap"] records what was done.
+task unwrap_dataset that runs just before the pipeline, into those columns (see dali.unwrap; a cell-level row, ue_id "N/A", gives
+1_DRB.UEThpDl and a UE row 3_4_DRB.UEBlerDl), and the pipeline and the imputation run on that frame. A narrow dataset is
+stored narrow: before anything is uploaded every frame the pipeline produced (soft_cleaned, remediated, and each imputation's
+splits and full timeline) is wrapped back into the layout of the file that came in, under the same artifact name, so no
+stored file has a column that the unwrapping generated, and the wide frame itself is not kept. A frame that cannot be wrapped
+is left out, and report["unwrap"]["not_wrapped"] says why. The ignored columns are held out of the unwrapping and put back,
+with their one value. `timestamp_col` names the time column of the narrow file. report["unwrap"] records what was done.
 
 `validation`, `imputation` and `timeline` are passed straight through to run_pipeline
 as its validation_config / imputation_config / timeline_config. Omitted, they fall back to
