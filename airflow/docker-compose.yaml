@@ -45,6 +45,10 @@ x-airflow-common:
     WAVESTITCH_URL: ${WAVESTITCH_URL:-http://wavestitch:8000}
     WAVESTITCH_TOKEN: ${WAVESTITCH_TOKEN:-}
     WAVESTITCH_TIMEOUT_SECONDS: ${WAVESTITCH_TIMEOUT_SECONDS:-14400}
+    # The PyPOTS imputation service (service `pypots` below) uses the same volume.
+    PYPOTS_URL: ${PYPOTS_URL:-http://pypots:8000}
+    PYPOTS_TOKEN: ${PYPOTS_TOKEN:-}
+    PYPOTS_TIMEOUT_SECONDS: ${PYPOTS_TIMEOUT_SECONDS:-14400}
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags:z
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs:z
@@ -206,6 +210,28 @@ services:
       - wsp-work:/opt/airflow/wsp-work
     cpus: ${WAVESTITCH_CPUS:-4}
     mem_limit: ${WAVESTITCH_MEMORY:-8g}
+    restart: always
+    depends_on:
+      wavestitch-init:
+        condition: service_completed_successfully
+
+  # PyPOTS imputation (pypots-service/ in the dataops repository): the neural methods SAITS, Transformer, TimesNet and
+  # the rest of PyPOTS. The DAG's `pypots` imputation runs call it over HTTP, and the bundle and the results travel over
+  # the wsp-work volume, as for WaveStitch+. Reachable from this network only. Build and push the image with
+  # pypots-service/build.sh --push. Training is on the CPU and takes minutes to hours: size PYPOTS_CPUS and PYPOTS_MEMORY.
+  pypots:
+    image: ${PYPOTS_IMAGE:-sparkworks/pypots:dev}
+    pull_policy: always   # :dev is a moving tag
+    user: "${AIRFLOW_UID:-50000}:0"
+    environment:
+      PYPOTS_WORK_ROOT: /opt/airflow/wsp-work
+      PYPOTS_TOKEN: ${PYPOTS_TOKEN:-}
+      PYPOTS_STEP_TIMEOUT_SECONDS: ${PYPOTS_STEP_TIMEOUT_SECONDS:-21600}
+      OMP_NUM_THREADS: ${PYPOTS_CPUS:-4}
+    volumes:
+      - wsp-work:/opt/airflow/wsp-work
+    cpus: ${PYPOTS_CPUS:-4}
+    mem_limit: ${PYPOTS_MEMORY:-8g}
     restart: always
     depends_on:
       wavestitch-init:

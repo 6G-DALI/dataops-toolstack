@@ -96,6 +96,68 @@ def _variable_measured_of(node: dict) -> list[str]:
     return [c for c in (_scalar(v) for v in vm) if c]
 
 
+def _dali_values_of(node: dict, local: str) -> list[str]:
+    """The values of a dali: property on a node, whether piveau returns it as the full IRI or as dali:<name>."""
+    raw = node.get(f"{DALI_NS}{local}")
+    if raw is None:
+        raw = node.get(f"dali:{local}")
+    if raw is None:
+        return []
+    if isinstance(raw, (str, dict)):
+        raw = [raw]
+    return [v for v in (_scalar(item) for item in raw) if v]
+
+
+def series_layout_of(node: dict) -> dict | None:
+    """How a narrow distribution is unwrapped into one column per series, as its catalogue metadata declares it.
+
+    Three properties on the dcat:Distribution (6G-DALI Metadata Application Profile, section 5.6):
+      dali:seriesHierarchy  the id columns that identify one series, in order, comma-separated, the last the
+                            metric: "cell_id,ue_id,metric_id". Several values when cell-level and UE-level rows
+                            are identified by different columns. The older template form ({cell_id}_{metric_id})
+                            is accepted; see dali.unwrap
+      dali:seriesSeparator  what joins the parts of a series name (default "_")
+      dali:ignoredColumn    one per column of the narrow file that holds a single value (source, gNB_id); repeatable
+      dali:valueColumn      the column holding the measured value (default "value" when only the hierarchy is set)
+    Returns {"hierarchy": [value, …], "separator", "ignore_columns", "value_col"}, or None when the distribution
+    declares no hierarchy.
+    """
+    hierarchy = [v.strip() for v in _dali_values_of(node, "seriesHierarchy") if v.strip()]
+    if not hierarchy:
+        return None
+    value_col = next(iter(_dali_values_of(node, "valueColumn")), "") or "value"
+    separator = next(iter(_dali_values_of(node, "seriesSeparator")), "") or "_"
+    return {"hierarchy": hierarchy, "separator": separator, "ignore_columns": _dali_values_of(node, "ignoredColumn"),
+            "value_col": value_col}
+
+
+def fetch_series_layout(dataset_id: str, catalogue_id: str = "", asset_id: str = "") -> dict | None:
+    """The series layout declared on the targeted distribution in piveau, or None (none declared, or not readable).
+
+    Read the way publish_quality_to_piveau reads: with PIVEAU_API_KEY when set, and the catalogue when given, so a
+    private catalogue is readable. Only the distribution matching asset_id (see dist_keys) is considered; without an
+    asset_id, only a dataset with exactly one distribution is. Never raises: a catalogue that cannot be read means the
+    file is processed as it is.
+    """
+    url = f"{PIVEAU_DATASETS_URL}/{dataset_id}" + (f"?catalogue={catalogue_id}" if catalogue_id else "")
+    headers = {"Accept": "application/ld+json"}
+    api_key = os.environ.get("PIVEAU_API_KEY", "").strip()
+    if api_key:
+        headers["X-API-Key"] = api_key
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=15) as resp:
+            graph = json.loads(resp.read()).get("@graph", [])
+    except Exception as exc:  # noqa: BLE001 - best effort, see docstring
+        print(f"[dali] could not read the series layout from piveau: {exc}")
+        return None
+    dists = [n for n in graph if any("Distribution" in t for t in node_types(n))]
+    if asset_id:
+        dists = [n for n in dists if asset_id in dist_keys(n)]
+    elif len(dists) != 1:
+        return None
+    return series_layout_of(dists[0]) if dists else None
+
+
 def fetch_columns_from_piveau(dataset_id: str, asset_id: str = "") -> list[str]:
     """Fetch schema:variableMeasured column names from piveau for a dataset.
 

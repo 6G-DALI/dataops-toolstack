@@ -89,6 +89,21 @@ or discard a step index outright). The guess is refused unless the named column
 actually holds timestamps, in which case detection is left in charge exactly as
 before. Set this param to override both.
 
+`hierarchy`, `ignore_columns` and `value_col` are for narrow files. A distribution can declare them itself, in its
+catalogue metadata (dali:seriesHierarchy, dali:seriesSeparator, one dali:ignoredColumn per entry, dali:valueColumn: Metadata Application
+Profile section 5.6): when the run passes no `hierarchy`, the targeted distribution is read from piveau and, if it
+declares one, the run unwraps with it. The params below override the catalogue.
+
+They are for narrow files: one row per (timestamp, entity, metric), the
+entity spread over id columns. The pipeline works on one column per time series, so with a `hierarchy` such as
+"{gNB_id}_{cell_id}_{ue_id}_{metric_id}" the file is first unwrapped into those columns (see dali.unwrap; a
+cell-level row, ue_id "N/A", gives 1193046_1_DRB.UEThpDl and a UE row 1193046_3_4_DRB.UEBlerDl), the pipeline and
+the imputation run on that frame, and each run's stitched timeline is wrapped back into the original narrow layout
+(narrow_<lib>_<method>.csv). `ignore_columns` lists columns of the narrow file that hold one value (source, gNB_id): they are
+held out of the unwrapping and appended to the narrow result unchanged. `timestamp_col` and `value_col` name the
+time and value columns of the narrow file. The unwrapped frame is uploaded as unwrapped.csv, and report["unwrap"]
+records what was done.
+
 `validation`, `imputation` and `timeline` are passed straight through to run_pipeline
 as its validation_config / imputation_config / timeline_config. Omitted, they fall back to
 dali.processing's defaults, which mirror WaveStitchPlus/config/dataops.yaml
@@ -154,6 +169,20 @@ before them when it is listed, and by the service when it is not. A run takes mi
 the service cannot see, an unset WAVESTITCH_URL or a failed job is recorded as a failed run while the others still happen.
 Environment: WAVESTITCH_URL, WAVESTITCH_TOKEN, WAVESTITCH_TIMEOUT_SECONDS, and DALI_WORK_ROOT, the shared volume under
 which the pipeline's scratch directory is made.
+
+Engine "pypots" runs lib "pypots": the PyPOTS neural methods saits, transformer, timesnet, brits, mrnn, gpvae, csdi and
+usgan. They are not in the default runs, because each trains a network on the bundle (CPU, minutes to hours). Like
+WaveStitch+ they run in a container next to Airflow, the PyPOTS service (pypots-service/, called through dali.pypots),
+and share the same volume. A run takes `params` with epochs (200), batch_size (32), window (100, the series is tiled
+into windows of that many steps) and stride (0, no overlap); there is no `device`. The output is scored, stitched and
+uploaded like any other: imputed_pypots_<method>_*.csv.
+
+    {"lib": "pypots", "method": "saits", "params": {"epochs": 50}}
+    {"lib": "pypots", "method": "timesnet", "params": {"epochs": 30}}
+    {"lib": "pypots", "method": "transformer", "params": {"epochs": 30}}
+
+Environment: PYPOTS_URL, PYPOTS_TOKEN, PYPOTS_TIMEOUT_SECONDS. An unset PYPOTS_URL or a failed job is recorded as a
+failed run while the others still happen.
 
 What a run leaves behind, all in the DataOps bucket (DATAOPS_BUCKET, "6g-dali-dataops")
 under the run's own directory, so concurrent runs never collide and one prefix lists a run:
@@ -234,6 +263,10 @@ from dali.validation import (
         "asset_id":      Param("", type="string", description="Distribution's dali:assetId — the EDC asset @id to negotiate and transfer, and the dcat:Distribution node quality results are published to. Required."),
         "expectations":  Param([], type="array",  description="List of GX expectation configs. Empty, a suite is built from piveau's column metadata."),
         "timestamp_col": Param(None, type=["null", "string"], description="Timestamp column. Drives the pipeline's time-series validation. Omitted, it is guessed from the column names, then from the data."),
+        "hierarchy":     Param(None, type=["null", "string"], description="Narrow (long) datasets only: the id columns that identify one series, in order, comma-separated, the last one the metric, e.g. cell_id,ue_id,metric_id (a template such as {cell_id}_{ue_id}_{metric_id} is accepted too). Each distinct combination becomes one time-series column for the pipeline; the last field is the metric. Several hierarchies (cell-level and UE-level rows) can be given as templates, comma-separated: each row takes the one with the most fields it has values for. Absent levels (N/A) are left out of the name. The imputed result is wrapped back into the narrow layout. Empty: the distribution's own dali:seriesHierarchy is used when it has one, else the file is processed as it is."),
+        "separator":     Param("_", type="string", description="With hierarchy: what joins the parts of a series name."),
+        "ignore_columns": Param([], type="array", description="With hierarchy: columns of the narrow file that hold a single value in the whole dataset (e.g. source, gNB_id). They are left out of the series and the processing and put back, with that value, in the narrow result. A column that varies is refused."),
+        "value_col":     Param("value", type="string", description="With hierarchy: the column holding the measured value of the narrow file."),
         "validation":    Param({}, type="object", description="run_pipeline's validation_config: mode, expected_columns, numeric_bounds, missing_threshold, outlier_q, …"),
         "imputation":    Param({}, type="object", description="Imputation: build_bundle, impute, prepared_dir, and runs — a list of {lib, method, engine?} to perform over the one bundle, each with its own output (or a single lib/method pair). lib wavestitchplus (v1, v2, harpoon) runs on the WaveStitch+ service and also takes device, params and v1_params. convert_units (default false) converts the 6G-schema units by column name. Defaults to building the bundle and filling it with darts/linear, darts/nearest, darts/kalman and the three WaveStitch+ methods (v1 in fast mode, v2, harpoon)."),
         "timeline":      Param({}, type="object", description="run_pipeline's timeline_config: collision_policy, disorder_policy, sweep_aware, key_columns, … Defaults to sorting out-of-order rows (disorder_policy=sort)."),

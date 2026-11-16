@@ -35,8 +35,8 @@ from typing import Any
 from airflow.decorators import task
 from airflow.sdk import get_current_context
 
-from dali import wavestitch
-from dali.utils import sanitize
+from dali import pypots, unwrap as narrow, wavestitch
+from dali.utils import fetch_series_layout, sanitize
 
 # The Darts runner, vendored verbatim next to this package (see VENDORED.md). The
 # engine="darts" path of dataops.imputation_runner subprocesses it, and its default
@@ -340,15 +340,18 @@ def imputation_runs(imputation_config: dict) -> list[dict]:
     second engine for the same pair would overwrite the first.
 
     The engine is "pandas" unless asked otherwise, except darts/kalman, which
-    only the Darts runner can do, and lib "wavestitchplus", which only the
-    WaveStitch+ service can run (engine "wavestitch").
+    only the Darts runner can do, lib "wavestitchplus", which only the
+    WaveStitch+ service can run (engine "wavestitch"), and lib "pypots", which
+    only the PyPOTS service can run (engine "pypots").
 
     Pairs that work: engine "pandas" with lib "darts" (auto, linear, nearest,
     quadratic, cubic, slinear, zero — everything but linear and auto needs
     SciPy) or lib "imputegap" (interpolation, mean, mean_by_series, min, zero);
     engine "darts", lib "darts" only (those plus kalman); engine "wavestitch",
     lib "wavestitchplus" (v1, v2, harpoon; "full" and "anchored" are accepted for
-    v1 and v2). Anything else is recorded as an error for that run and the other
+    v1 and v2); engine "pypots", lib "pypots" (saits, transformer, timesnet, brits,
+    mrnn, gpvae, csdi, usgan; `params` are epochs, batch_size, window, stride).
+    Anything else is recorded as an error for that run and the other
     runs still happen.
 
     A wavestitchplus run may carry `device` ("cpu", "gpu" or "auto"), `params`
@@ -375,10 +378,12 @@ def imputation_runs(imputation_config: dict) -> list[dict]:
         seen.add((lib, method))
         if lib == wavestitch.LIB:
             default_engine = wavestitch.ENGINE
+        elif lib == pypots.LIB:
+            default_engine = pypots.ENGINE
         else:
             default_engine = "darts" if (lib, method) == ("darts", "kalman") else "pandas"
         run = {"lib": lib, "method": method, "engine": item.get("engine") or default_engine}
-        for key in ("device", "params", "v1_params"):   # only the WaveStitch+ service takes these
+        for key in ("device", "params", "v1_params"):   # only the WaveStitch+ and PyPOTS services take these
             if item.get(key) is not None:
                 run[key] = item[key]
         runs.append(run)
@@ -471,7 +476,8 @@ def _impute_one(prepared_dir: str, bundle: dict, *, lib: str, method: str, engin
     """One imputation over the bundle. Never raises: a failure is a summary with
     status "error", so the runs after it still happen.
 
-    `device`, `params` and `v1_params` are for the WaveStitch+ service (engine "wavestitch") only."""
+    `device`, `params` and `v1_params` are for the WaveStitch+ service (engine "wavestitch"); the PyPOTS service
+    (engine "pypots") takes `params` only."""
     base = {"lib": lib, "method": method, "engine": engine, "files": {}, "filled": 0}
     try:
         if engine == wavestitch.ENGINE:
@@ -479,6 +485,10 @@ def _impute_one(prepared_dir: str, bundle: dict, *, lib: str, method: str, engin
                 raise ValueError(f"engine {engine!r} only applies to lib {wavestitch.LIB!r}")
             summary = wavestitch.impute(prepared_dir, method=method, device=device, params=params,
                                         v1_params=v1_params)
+        elif engine == pypots.ENGINE:
+            if lib != pypots.LIB:
+                raise ValueError(f"engine {engine!r} only applies to lib {pypots.LIB!r}")
+            summary = pypots.impute(prepared_dir, method=method, params=params)
         else:
             from dataops.imputation_runner import impute_bundle
 
@@ -590,6 +600,91 @@ def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict:
             "ranking": ranking}
 
 
+def resolve_series_layout(params: dict) -> dict | None:
+    """The narrow-dataset layout for this run: {"hierarchy", "ignore_columns", "value_col", "source"}, or None.
+
+    The run's own `hierarchy` param wins (with its `ignore_columns` and `value_col`). Without one, the targeted
+    distribution's catalogue metadata is read (dali:seriesHierarchy, dali:seriesSeparator, dali:ignoredColumn, dali:valueColumn, see
+    dali.utils.series_layout_of), so a dataset carries its own layout and every run on it unwraps the same way.
+    """
+    hierarchy = (params.get("hierarchy") or "").strip()
+    if hierarchy:
+        return {"hierarchy": hierarchy, "separator": params.get("separator") or "_",
+                "ignore_columns": list(params.get("ignore_columns") or []),
+                "value_col": params.get("value_col") or "value", "source": "params"}
+    if not params.get("dataset_id"):
+        return None
+    found = fetch_series_layout(params["dataset_id"], params.get("catalogue_id") or "", params.get("asset_id") or "")
+    return {**found, "source": "piveau"} if found else None
+
+
+def _unwrap_input(input_csv: Path, workdir: Path, stem: str, layout: dict, timestamp_col: str | None):
+    """Turn a narrow input into one column per series, when the run names a `hierarchy`.
+
+    Returns (path of the wide CSV, UnwrapState, timestamp column). The wide file is what the pipeline reads; the
+    narrow file stays the run's `input_csv`, so the raw -> remediated lineage still starts from what arrived.
+    Raises dali.unwrap.UnwrapError when the hierarchy does not fit the data.
+    """
+    import pandas as pd
+
+    narrow_df = pd.read_csv(input_csv, dtype=str, keep_default_na=False)
+    timestamp_col = timestamp_col or guess_timestamp_column(input_csv) or "timestamp"
+    wide, state = narrow.unwrap(
+        narrow_df,
+        layout["hierarchy"],
+        layout["ignore_columns"],
+        timestamp_col=timestamp_col,
+        value_col=layout["value_col"],
+        separator=layout.get("separator") or "_",
+    )
+    wide_csv = workdir / f"{stem}_unwrapped.csv"
+    wide.to_csv(wide_csv, index=False)
+    print(f"[dataops] unwrapped {state.stats['narrow_rows']} rows into {state.stats['series']} series over "
+          f"{state.stats['timestamps']} timestamps (fill {state.stats['fill_rate']:.1%}); "
+          f"ignored columns {state.stats['ignored_columns']} held back")
+    return wide_csv, state, timestamp_col, list(wide.columns)
+
+
+def _wrap_runs(imputation: dict, state, wide_columns: list[str], workdir: Path, stem: str,
+               prepared_dir: str | None) -> dict[str, str]:
+    """Wrap every imputation run's stitched timeline back into the narrow layout; returns {artifact name: path}.
+
+    The pipeline snake_cases column names (dataops.cleaning) and turns the time column into epoch seconds, so the
+    columns are mapped back through the same renaming it applied. The ignored columns are restored with their one value. Never
+    raises: a run that cannot be wrapped is reported and the others still are.
+    """
+    import pandas as pd
+    from dataops.cleaning import build_column_mapping
+
+    inverse = {cleaned: original for original, cleaned in build_column_mapping(wide_columns).items()}
+    wrapped: dict[str, str] = {}
+    for run in (imputation or {}).get("runs") or ([imputation] if imputation else []):
+        final = (run.get("final") or {}).get("path")
+        if not final or not Path(final).exists():
+            continue
+        label = f"{run.get('lib')}_{run.get('method')}"
+        try:
+            frame = pd.read_csv(final)
+            meta = json.loads((Path(prepared_dir) / "meta.json").read_text(encoding="utf-8")) if prepared_dir else {}
+            time_col = meta.get("time_col") or next(
+                (c for c in ("timestamp", "time") if c in frame.columns), frame.columns[0])
+            if pd.api.types.is_numeric_dtype(frame[time_col]):
+                frame[time_col] = frame[time_col] * float(meta.get("time_unit_seconds") or 1.0)
+                unit = "epoch"
+            else:
+                unit = "datetime"
+            narrow_df = narrow.wrap(frame, state, time_col=time_col, rename=inverse, time_unit=unit)
+            path = workdir / f"{stem}_imputed_{label}_final_narrow.csv"
+            narrow_df.to_csv(path, index=False)
+            wrapped[f"narrow_{label}"] = str(path)
+            run["narrow"] = {"path": str(path), "rows": int(len(narrow_df))}
+            print(f"[dataops] wrapped {label}: {len(narrow_df)} narrow rows -> {path}")
+        except Exception as exc:  # noqa: BLE001 - recorded, never fails the run
+            run["narrow"] = {"error": f"{exc.__class__.__name__}: {exc}"}
+            print(f"[dataops] could not wrap {label} back to the narrow layout: {exc.__class__.__name__}: {exc}")
+    return wrapped
+
+
 @task(multiple_outputs=True)
 def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict | None = None) -> dict:
     """Run the minimal DataOps pipeline over a downloaded distribution.
@@ -657,12 +752,30 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
     timestamp_col     = params.get("timestamp_col") or None
     if not timestamp_col:
         timestamp_col = guess_timestamp_column(input_csv)
+
+    # A narrow dataset (one row per timestamp, entity and metric) is unwrapped into one column per series for the
+    # pipeline, and the imputed timelines are wrapped back at the end. See dali.unwrap.
+    unwrapped = None
+    pipeline_csv = input_csv
+    layout = resolve_series_layout(params)
+    if layout:
+        print(f"[dataops] narrow dataset: hierarchy {layout['hierarchy']!r} from {layout['source']}, "
+              f"{len(layout['ignore_columns'])} ignored column(s), value column {layout['value_col']!r}")
+        try:
+            pipeline_csv, state, timestamp_col, wide_columns = _unwrap_input(
+                input_csv, workdir, stem, layout, timestamp_col)
+            unwrapped = (state, wide_columns)
+        except Exception as exc:  # noqa: BLE001 - a bad hierarchy is reported like a skipped run, not a crash
+            reason = f"{exc.__class__.__name__}: {exc}"
+            print(f"[dataops] skipping pipeline - the hierarchy could not be applied: {reason}")
+            return {"workdir": str(workdir), "artifacts": {"input_csv": str(input_csv)}, "report": None,
+                    "error": f"skipped: hierarchy not applied ({reason})"}
     print(f"[dataops] mode={validation_config.get('mode')!r} timestamp_col={timestamp_col!r}")
 
     pipeline_error = None
     try:
         run_pipeline(
-            str(input_csv),
+            str(pipeline_csv),
             str(output_csv),
             str(report_json),
             timestamp_col=timestamp_col,
@@ -701,8 +814,18 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
     # here rather than inside run_pipeline because minimal_dataops is vendored
     # verbatim from WaveStitchPlus (plugins/VENDORED.md) and must not diverge.
     imputation = impute_prepared_bundle(report, imputation_config)
-    if imputation:
-        report["imputation"] = imputation
+    narrow_files: dict[str, str] = {}
+    if unwrapped:
+        state, wide_columns = unwrapped
+        prepared_dir = ((report.get("handoff") or {}).get("prepared_dir"))
+        narrow_files = _wrap_runs(imputation, state, wide_columns, workdir, stem, prepared_dir)
+        report["unwrap"] = {"hierarchy": layout["hierarchy"], "source": layout["source"],
+                            "ignore_columns": list(state.constants),
+                            "timestamp_col": timestamp_col, "value_col": state.value_col,
+                            "tz_offset": state.tz_offset, **state.stats}
+    if imputation or unwrapped:
+        if imputation:
+            report["imputation"] = imputation
         # Written back to the file, not just to the dict: the report artifact is
         # uploaded from disk, and it is what the results view reads. Leaving the
         # summary in memory only would upload a report that never mentions the
@@ -739,6 +862,9 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
         if path.exists()
     }
     produced.update(imputed_files)
+    produced.update(narrow_files)
+    if unwrapped and pipeline_csv.exists():
+        produced["unwrapped"] = str(pipeline_csv)
     for name, path in produced.items():
         print(f"[dataops] {name}: {path} ({os.path.getsize(path)} bytes)")
 
