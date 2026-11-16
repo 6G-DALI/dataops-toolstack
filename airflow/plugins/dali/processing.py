@@ -601,17 +601,13 @@ def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict:
 
 
 def resolve_series_layout(params: dict) -> dict | None:
-    """The narrow-dataset layout for this run: {"hierarchy", "ignore_columns", "value_col", "source"}, or None.
+    """The narrow-dataset layout for this run: {"hierarchy", "separator", "ignore_columns", "value_col", "source"}, or None.
 
-    The run's own `hierarchy` param wins (with its `ignore_columns` and `value_col`). Without one, the targeted
-    distribution's catalogue metadata is read (dali:seriesHierarchy, dali:seriesSeparator, dali:ignoredColumn, dali:valueColumn, see
-    dali.utils.series_layout_of), so a dataset carries its own layout and every run on it unwraps the same way.
+    It comes only from the targeted distribution's catalogue metadata (dali:seriesHierarchy, dali:seriesSeparator,
+    dali:ignoredColumn, dali:valueColumn, see dali.utils.series_layout_of), so a dataset carries its own layout and
+    every run on it unwraps the same way. The run's params never name one: a stray `hierarchy` in the run's conf is
+    ignored. None when the distribution declares no hierarchy, or the catalogue cannot be read.
     """
-    hierarchy = (params.get("hierarchy") or "").strip()
-    if hierarchy:
-        return {"hierarchy": hierarchy, "separator": params.get("separator") or "_",
-                "ignore_columns": list(params.get("ignore_columns") or []),
-                "value_col": params.get("value_col") or "value", "source": "params"}
     if not params.get("dataset_id"):
         return None
     found = fetch_series_layout(params["dataset_id"], params.get("catalogue_id") or "", params.get("asset_id") or "")

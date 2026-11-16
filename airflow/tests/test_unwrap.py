@@ -279,16 +279,16 @@ class TestSeriesLayoutFromCatalogue:
         monkeypatch.setattr(utils.urllib.request, "urlopen", boom)
         assert utils.fetch_series_layout("ds1") is None
 
-    def test_params_win_over_the_catalogue(self, monkeypatch):
+    def test_only_the_catalogue_names_the_layout(self, monkeypatch):
         from dali import processing
 
         monkeypatch.setattr(processing, "fetch_series_layout",
                             lambda *a: {"hierarchy": "{x}_{y}", "ignore_columns": [], "value_col": "value"})
-        own = processing.resolve_series_layout({"hierarchy": HIERARCHY, "ignore_columns": ["a"], "dataset_id": "d"})
-        assert own == {"hierarchy": HIERARCHY, "separator": "_", "ignore_columns": ["a"], "value_col": "value",
-                       "source": "params"}
         declared = processing.resolve_series_layout({"dataset_id": "d", "catalogue_id": "c", "asset_id": "a"})
         assert declared["hierarchy"] == "{x}_{y}" and declared["source"] == "piveau"
+        # a hierarchy in the run's conf is not read
+        stray = processing.resolve_series_layout({"dataset_id": "d", "hierarchy": HIERARCHY, "ignore_columns": ["a"]})
+        assert stray["hierarchy"] == "{x}_{y}" and stray["ignore_columns"] == []
 
     def test_nothing_declared_nothing_unwrapped(self, monkeypatch):
         from dali import processing
@@ -417,11 +417,13 @@ class TestOrderedFieldList:
         assert "3.4.DRB.UEBlerDl" in wide.columns and "1.DRB.UEThpDl" in wide.columns
         pd.testing.assert_frame_equal(_canon(wrap(wide, state)), _canon(narrow))
 
-    def test_the_separator_from_the_catalogue_reaches_the_run(self):
+    def test_the_separator_from_the_catalogue_reaches_the_run(self, monkeypatch):
         from dali import processing
 
-        layout = processing.resolve_series_layout({"hierarchy": FIELDS, "separator": "."})
-        assert layout["separator"] == "." and layout["source"] == "params"
+        monkeypatch.setattr(processing, "fetch_series_layout",
+                            lambda *a: {"hierarchy": FIELDS, "separator": ".", "ignore_columns": [], "value_col": "value"})
+        layout = processing.resolve_series_layout({"dataset_id": "d"})
+        assert layout["separator"] == "." and layout["source"] == "piveau"
 
     def test_the_script_writes_the_separator_only_when_given(self):
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
