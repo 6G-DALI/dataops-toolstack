@@ -732,15 +732,26 @@ def _unwrap_input(input_csv: Path, workdir: Path, stem: str, layout: dict, times
     import pandas as pd
 
     narrow_df = pd.read_csv(input_csv, dtype=str, keep_default_na=False)
-    timestamp_col = timestamp_col or guess_timestamp_column(input_csv) or "timestamp"
-    wide, state = narrow.unwrap(
-        narrow_df,
-        layout["hierarchy"],
-        layout["ignore_columns"],
-        timestamp_col=timestamp_col,
-        value_col=layout["value_col"],
-        separator=layout.get("separator") or "_",
-    )
+    timestamp_col = layout.get("timestamp_col") or timestamp_col or guess_timestamp_column(input_csv) or "timestamp"
+    if layout.get("measure_cols"):
+        # a wide panel: one row per entity and time, a column per measure (see dali.unwrap.unwrap_panel)
+        wide, state = narrow.unwrap_panel(
+            narrow_df,
+            layout["hierarchy"],
+            layout["measure_cols"],
+            timestamp_col=timestamp_col,
+            separator=layout.get("separator") or "_",
+            carry=layout.get("carry_columns") or (),
+        )
+    else:
+        wide, state = narrow.unwrap(
+            narrow_df,
+            layout["hierarchy"],
+            layout["ignore_columns"],
+            timestamp_col=timestamp_col,
+            value_col=layout["value_col"],
+            separator=layout.get("separator") or "_",
+        )
     wide_csv = workdir / f"{stem}_unwrapped.csv"
     wide.to_csv(wide_csv, index=False)
     print(f"[dataops] unwrapped {state.stats['narrow_rows']} rows into {state.stats['series']} series over "
@@ -780,6 +791,11 @@ def _wrap_artifacts(produced: dict[str, str], state, wide_columns: list[str], re
             meta = {}
     pipeline_time = (report.get("validation") or {}).get("timestamp_column") or snake_case(state.timestamp_col)
 
+    original = None
+    if state.panel:
+        # a wide panel is stored in its own layout, and the rows that were in the file get their other columns back
+        original = pd.read_csv(produced["input_csv"], dtype=str, keep_default_na=False)
+
     out: dict[str, str] = {}
     rows: dict[str, int] = {}
     left_out: dict[str, str] = {}
@@ -801,7 +817,10 @@ def _wrap_artifacts(produced: dict[str, str], state, wide_columns: list[str], re
             else:
                 frame[time_col] = pd.to_datetime(frame[time_col])
                 unit = "datetime"
-            narrow_df = narrow.wrap(frame, state, time_col=time_col, rename=inverse, time_unit=unit)
+            if original is not None:
+                narrow_df = narrow.wrap_panel(frame, state, original, time_col=time_col, rename=inverse, time_unit=unit)
+            else:
+                narrow_df = narrow.wrap(frame, state, time_col=time_col, rename=inverse, time_unit=unit)
             target = Path(workdir) / f"{Path(path).stem}_narrow.csv"
             narrow_df.to_csv(target, index=False)
             out[name] = str(target)
@@ -831,7 +850,7 @@ def _unwrap_row_counts(report: dict, state, wrapped_rows: dict[str, int], imputa
     narrow_in = stats.get("narrow_rows")
     series = stats.get("series")
     cells_total = (series or 0) * (stats.get("timestamps") or 0)
-    narrow_columns = len(state.columns)
+    narrow_columns = len((state.panel or {}).get("columns") or state.columns)
 
     def column_count(value) -> int | None:
         return len(value) if isinstance(value, list) else value if isinstance(value, int) else None
@@ -892,7 +911,7 @@ def unwrap_dataset(file_content: str, asset_title: str, format_check: dict | Non
         workdir = Path(tmp)
         input_csv = workdir / f"{stem}.csv"
         input_csv.write_text(file_content, encoding="utf-8")
-        timestamp_col = params.get("timestamp_col") or guess_timestamp_column(input_csv)
+        timestamp_col = layout.get("timestamp_col") or params.get("timestamp_col") or guess_timestamp_column(input_csv)
         try:
             wide_csv, state, timestamp_col, wide_columns = _unwrap_input(
                 input_csv, workdir, stem, layout, timestamp_col)
@@ -1101,6 +1120,7 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
                             "timestamp_col": timestamp_col, "value_col": state.value_col,
                             "tz_offset": state.tz_offset, **state.stats,
                             "wrapped_artifacts": wrapped_rows, "not_wrapped": not_wrapped,
+                            "layout": "panel" if state.panel else "narrow",
                             "levels": state.levels(),
                             "rows": _unwrap_row_counts(report, state, wrapped_rows, imputation)}
     if imputation or unwrapped:

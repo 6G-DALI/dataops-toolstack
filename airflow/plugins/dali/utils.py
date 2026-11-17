@@ -119,8 +119,13 @@ def series_layout_of(node: dict) -> dict | None:
       dali:seriesSeparator  what joins the parts of a series name (default "_")
       dali:ignoredColumn    one per column of the narrow file that holds a single value (source, gNB_id); repeatable
       dali:valueColumn      the column holding the measured value (default "value" when only the hierarchy is set)
-    Returns {"hierarchy": [value, …], "separator", "ignore_columns", "value_col"}, or None when the distribution
-    declares no hierarchy.
+    A *wide panel* (several entities on their own clocks, one column per measure) adds:
+      dali:measureColumn    one per column that is measured (barometer, pm10, latitude, ...); repeatable. The
+                            hierarchy then ends in a metric field that is not a column of the file ("entity_id,metric_id")
+      dali:timestampColumn  the column that holds the time of the measurement (measured_at); also usable on a narrow file
+      dali:carryColumn      one per other column whose nearest known value is given to rows imputation adds (name)
+    Returns {"hierarchy": [value, …], "separator", "ignore_columns", "value_col", "measure_cols", "timestamp_col",
+    "carry_columns"}, or None when the distribution declares no hierarchy.
     """
     hierarchy = [v.strip() for v in _dali_values_of(node, "seriesHierarchy") if v.strip()]
     if not hierarchy:
@@ -128,7 +133,9 @@ def series_layout_of(node: dict) -> dict | None:
     value_col = next(iter(_dali_values_of(node, "valueColumn")), "") or "value"
     separator = next(iter(_dali_values_of(node, "seriesSeparator")), "") or "_"
     return {"hierarchy": hierarchy, "separator": separator, "ignore_columns": _dali_values_of(node, "ignoredColumn"),
-            "value_col": value_col}
+            "value_col": value_col, "measure_cols": _dali_values_of(node, "measureColumn"),
+            "timestamp_col": next(iter(_dali_values_of(node, "timestampColumn")), "") or None,
+            "carry_columns": _dali_values_of(node, "carryColumn")}
 
 
 def fetch_series_layout(dataset_id: str, catalogue_id: str = "", asset_id: str = "") -> dict | None:

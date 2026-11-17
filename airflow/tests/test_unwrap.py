@@ -267,7 +267,7 @@ class TestSeriesLayoutFromCatalogue:
         from dali.utils import series_layout_of
 
         assert series_layout_of(self.NODE) == {
-            "hierarchy": [FIELDS], "separator": "_", "ignore_columns": ["source", "gNB_id"], "value_col": "value"}
+            "hierarchy": [FIELDS], "separator": "_", "ignore_columns": ["source", "gNB_id"], "value_col": "value", "measure_cols": [], "timestamp_col": None, "carry_columns": []}
 
     def test_read_from_prefixed_keys_and_a_single_ignored_value(self):
         from dali.utils import series_layout_of
@@ -275,7 +275,7 @@ class TestSeriesLayoutFromCatalogue:
         node = {"@type": "dcat:Distribution", "dali:seriesHierarchy": {"@value": "{a}_{b}"},
                 "dali:ignoredColumn": "x", "dali:valueColumn": "reading"}
         assert series_layout_of(node) == {
-            "hierarchy": ["{a}_{b}"], "separator": "_", "ignore_columns": ["x"], "value_col": "reading"}
+            "hierarchy": ["{a}_{b}"], "separator": "_", "ignore_columns": ["x"], "value_col": "reading", "measure_cols": [], "timestamp_col": None, "carry_columns": []}
 
     def test_no_hierarchy_means_no_layout(self):
         from dali.utils import series_layout_of
@@ -361,7 +361,7 @@ class TestSetSeriesLayoutScript:
         change = apply_layout(graph, "a1", FIELDS, IGNORE, "value")
         assert change["before"] == {}
         assert series_layout_of(graph["@graph"][1]) == {
-            "hierarchy": [FIELDS], "separator": "_", "ignore_columns": IGNORE, "value_col": "value"}
+            "hierarchy": [FIELDS], "separator": "_", "ignore_columns": IGNORE, "value_col": "value", "measure_cols": [], "timestamp_col": None, "carry_columns": []}
         assert series_layout_of(graph["@graph"][2]) is None                 # the other distribution is untouched
         assert graph["@graph"][2]["https://dali-project.eu/ns#ignoredColumn"] == ["old"]
         assert not any(k.startswith("https://dali-project.eu/ns#") for k in graph["@graph"][0])   # nor the dataset
@@ -487,3 +487,126 @@ def test_levels_list_the_choices_for_picking_one_series(narrow):
     assert ["1", "N/A", "DRB.UEThpDl"] in levels["series"]
     assert len(levels["series"]) == state.stats["series"]
     json.dumps(levels)                                              # plain JSON, it goes in the report
+
+
+# ── Wide panels: several entities on their own clocks, one column per measure ────────────────────────────────────────
+
+PANEL = """id,entity_id,name,temp,hum,lat,loc,measured_at,inserted_at
+1,st:1,Alpha,20.5,50.0,37.0,POINT (22.0 37.0),2026-09-10 20:00:00.000 +0300,2026-09-10 22:00:00.000 +0300
+2,st:2,Beta,21.5,55.0,38.0,POINT (23.0 38.0),2026-09-10 20:00:30.000 +0300,2026-09-10 22:00:00.000 +0300
+3,st:1,Alpha,21.5,,37.1,POINT (22.1 37.1),2026-09-10 21:00:00.000 +0300,2026-09-10 22:00:00.000 +0300
+4,st:2,Beta 2,22.5,56.0,38.1,POINT (23.1 38.1),2026-09-10 22:00:30.000 +0300,2026-09-10 23:00:00.000 +0300
+"""
+MEASURES = ["temp", "hum", "lat"]
+
+
+@pytest.fixture
+def panel() -> pd.DataFrame:
+    return pd.read_csv(io.StringIO(PANEL), dtype=str, keep_default_na=False)
+
+
+def _unwrap_panel(panel):
+    from dali.unwrap import unwrap_panel
+
+    return unwrap_panel(panel, "entity_id,metric_id", MEASURES, timestamp_col="measured_at", carry=["name"])
+
+
+class TestPanel:
+    def test_one_series_per_entity_and_measure_on_the_union_of_the_clocks(self, panel):
+        wide, state = _unwrap_panel(panel)
+        assert list(wide.columns) == ["measured_at"] + [f"st:{e}_{m}" for e in (1, 2) for m in sorted(MEASURES)]
+        assert len(wide) == 4                                              # four distinct times
+        assert state.stats["series"] == 6 and state.stats["layout"] == "panel"
+        assert state.stats["narrow_rows"] == 4 and state.stats["melted_rows"] == 11    # one empty `hum` is no observation
+        assert wide.loc[0, "st:1_temp"] == 20.5 and pd.isna(wide.loc[0, "st:2_temp"])
+
+    def test_the_choices_are_the_entities_and_the_measures(self, panel):
+        _, state = _unwrap_panel(panel)
+        levels = state.levels()
+        assert levels["fields"] == ["entity_id", "metric_id"]
+        assert levels["values"] == [["st:1", "st:2"], ["hum", "lat", "temp"]]
+
+    def test_a_round_trip_returns_the_file_as_it_came(self, panel):
+        from dali.unwrap import wrap_panel
+
+        wide, state = _unwrap_panel(panel)
+        back = wrap_panel(wide, state, panel)
+        assert list(back.columns) == list(panel.columns)
+        assert len(back) == len(panel)
+        key = ["entity_id", "measured_at"]
+        merged = panel.merge(back, on=key, suffixes=("_o", "_b"))
+        assert len(merged) == 4
+        for column in ("id", "name", "loc", "inserted_at"):
+            assert (merged[f"{column}_o"] == merged[f"{column}_b"]).all(), column
+        for column in MEASURES:                                            # numbers come back as numbers; empty stays empty
+            original = pd.to_numeric(merged[f"{column}_o"].replace("", None))
+            pd.testing.assert_series_equal(original, pd.to_numeric(merged[f"{column}_b"]), check_names=False)
+
+    def test_an_imputed_row_has_its_clock_style_its_name_and_empty_row_columns(self, panel):
+        from dali.unwrap import wrap_panel
+
+        wide, state = _unwrap_panel(panel)
+        filled = wide.copy()
+        series = [c for c in filled.columns if c != "measured_at"]
+        filled[series] = filled[series].ffill().bfill()
+        full = wrap_panel(filled, state, panel)
+        assert len(full) == 8                                              # 2 entities x 4 times
+        added = full[~full.set_index(["entity_id", "measured_at"]).index.isin(
+            panel.set_index(["entity_id", "measured_at"]).index)]
+        assert len(added) == 4
+        assert added["measured_at"].str.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \+0300$").all()
+        assert (added["id"] == "").all() and (added["inserted_at"] == "").all() and (added["loc"] == "").all()
+        assert set(added["name"][added["entity_id"] == "st:1"]) == {"Alpha"}
+        beta = added[added["entity_id"] == "st:2"]
+        assert list(beta["name"]) == ["Beta", "Beta"]                      # the entity's previous name, else the next one
+        assert (added[["temp", "hum", "lat"]].astype(float).notna()).all().all()
+
+    def test_the_state_travels_as_json(self, panel):
+        from dali.unwrap import UnwrapState, wrap_panel
+
+        wide, state = _unwrap_panel(panel)
+        again = UnwrapState.from_dict(json.loads(json.dumps(state.to_dict())))
+        assert again.panel == state.panel
+        assert len(wrap_panel(wide, again, panel)) == 4
+
+    @pytest.mark.parametrize("hierarchy, measures, message", [
+        ("entity_id,name", MEASURES, "is a column of the file"),
+        ("entity_id,metric_id", ["temp", "nope"], "no column"),
+        ("entity_id,metric_id", [], "measure columns"),
+        ("entity_id,metric_id", ["temp", "entity_id"], "both a measure"),
+    ])
+    def test_rejects(self, panel, hierarchy, measures, message):
+        from dali.unwrap import unwrap_panel
+
+        with pytest.raises(UnwrapError, match=message):
+            unwrap_panel(panel, hierarchy, measures, timestamp_col="measured_at")
+
+    def test_a_carried_column_must_be_an_extra_column(self, panel):
+        from dali.unwrap import unwrap_panel
+
+        with pytest.raises(UnwrapError, match="carried"):
+            unwrap_panel(panel, "entity_id,metric_id", MEASURES, timestamp_col="measured_at", carry=["temp"])
+
+    def test_the_layout_properties_are_read_from_the_catalogue(self):
+        from dali.utils import series_layout_of
+
+        node = {"dali:seriesHierarchy": "entity_id,metric_id", "dali:measureColumn": ["temp", {"@value": "hum"}],
+                "dali:timestampColumn": "measured_at", "dali:carryColumn": "name"}
+        layout = series_layout_of(node)
+        assert layout["measure_cols"] == ["temp", "hum"] and layout["timestamp_col"] == "measured_at"
+        assert layout["carry_columns"] == ["name"]
+
+    def test_every_frame_is_stored_in_the_panels_layout(self, panel, tmp_path: Path):
+        from dali.processing import _wrap_artifacts
+
+        wide, state = _unwrap_panel(panel)
+        raw = tmp_path / "raw.csv"
+        raw.write_text(PANEL, encoding="utf-8")
+        remediated = tmp_path / "output.csv"
+        wide.to_csv(remediated, index=False)
+        produced = {"input_csv": str(raw), "output_csv": str(remediated)}
+        out, rows, left_out = _wrap_artifacts(produced, state, list(wide.columns), {}, None, tmp_path)
+        assert left_out == {} and rows == {"output_csv": 4}
+        stored = pd.read_csv(out["output_csv"], dtype=str, keep_default_na=False)
+        assert list(stored.columns) == list(panel.columns)
+        assert out["input_csv"] == str(raw)                                # what arrived is not rewritten

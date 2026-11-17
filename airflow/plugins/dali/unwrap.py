@@ -137,6 +137,7 @@ class UnwrapState:
     tz_offset: str = ""                                 # "+02:00", or "" when the input carried none
     templates: list[tuple[list[str], str]] = field(default_factory=list)
     stats: dict = field(default_factory=dict)
+    panel: dict | None = None                           # a wide panel's layout (see PanelState), else None
 
 
     def levels(self) -> dict:
@@ -166,7 +167,7 @@ class UnwrapState:
             "series": {name: dict(tokens) for name, tokens in self.series.items()},
             "constants": dict(self.constants), "tz_offset": self.tz_offset,
             "templates": [[list(fields), sep] for fields, sep in self.templates],
-            "stats": dict(self.stats),
+            "stats": dict(self.stats), "panel": dict(self.panel) if self.panel else None,
         }
 
     @classmethod
@@ -178,7 +179,7 @@ class UnwrapState:
             series={name: dict(tokens) for name, tokens in data["series"].items()},
             constants=dict(data.get("constants") or {}), tz_offset=data.get("tz_offset") or "",
             templates=[(list(fields), sep) for fields, sep in data.get("templates") or []],
-            stats=dict(data.get("stats") or {}),
+            stats=dict(data.get("stats") or {}), panel=dict(data["panel"]) if data.get("panel") else None,
         )
 
 
@@ -395,3 +396,191 @@ def wrap(
         else:
             out[column] = long["_name"].map(lambda n, c=column: state.series[n][c]).to_numpy()
     return out[[c for c in state.columns]]
+
+
+
+# ── Wide panels ───────────────────────────────────────────────────────────────────────────────────────────────────
+#
+# Some datasets are not narrow but already carry one column per measure, with several entities interleaved on their own
+# clocks (a weather station per entity_id, rows of barometer, humidity, pm10, ...). The catalogue declares such a file
+# with the same properties as a narrow one plus its measure columns: the hierarchy ends in a metric field that is not
+# a column of the file ("entity_id,metric_id"), and `measure_cols` names the columns that are measured. Every entity
+# and measure then becomes one series, `<entity>_<measure>`, exactly as a narrow dataset's (entity, metric) does.
+#
+# The adapter melts the panel into a narrow frame (entity, metric, timestamp, value) and hands it to `unwrap`; on the
+# way back `narrow_to_panel` pivots the narrow frame to the panel's own columns. The other columns (an index, a name, the
+# time the row was stored) belong to a row, not to a series: they are set aside, and every row that was in the file
+# gets its own back. A row an imputation adds has them empty, except the `carry` columns, which take the entity's
+# nearest known value (a station's name).
+
+_PG_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})? ?[+-]\d{2}:?\d{2}$")
+_SPACE_BEFORE_OFFSET = re.compile(r"\s+([+-]\d{2}:?\d{2})$")
+
+
+@dataclass
+class PanelState:
+    """What `narrow_to_panel` needs to put a panel back."""
+
+    columns: list[str]                  # the file's columns, in order
+    entity_fields: list[str]
+    metric_field: str                   # the hierarchy's last field: not a column of the file
+    measure_cols: list[str]
+    timestamp_col: str
+    extras: list[str]                   # every other column
+    carry: list[str]                    # the extras whose nearest known value is given to an added row
+    tz_offset: str
+    ts_style: str                       # "pg": 2026-09-10 20:07:46.000 +0300, or "iso"
+    rows: int                           # rows of the file
+
+    def to_dict(self) -> dict:
+        return {k: (list(v) if isinstance(v, list) else v) for k, v in self.__dict__.items()}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PanelState":
+        return cls(**data)
+
+
+def _stamps_utc(values: pd.Series) -> pd.Series:
+    """Timestamps in any of the usual spellings (ISO, or `2026-09-10 20:07:46.000 +0300`) as naive UTC datetimes."""
+    cleaned = values.astype(str).str.strip().str.replace(_SPACE_BEFORE_OFFSET, r"\1", regex=True)
+    return pd.to_datetime(cleaned, format="mixed", utc=True, errors="coerce").dt.tz_localize(None)
+
+
+def _offset_delta(offset: str) -> pd.Timedelta:
+    if not offset:
+        return pd.Timedelta(0)
+    sign = -1 if offset.startswith("-") else 1
+    return sign * pd.Timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))
+
+
+def _render_stamps(naive_utc: pd.Series, offset: str, style: str) -> pd.Series:
+    """Naive UTC datetimes as text in `offset`, in the "pg" style of the source file or as ISO."""
+    local = naive_utc + _offset_delta(offset)
+    if style == "pg":
+        millis = (local.dt.microsecond // 1000).astype(str).str.zfill(3)
+        return local.dt.strftime("%Y-%m-%d %H:%M:%S.") + millis + " " + offset.replace(":", "")
+    return local.dt.strftime(_TIMESTAMP_FORMAT) + offset
+
+
+def panel_to_narrow(
+    panel: pd.DataFrame, hierarchy: str | list[str], measure_cols: Iterable[str], *,
+    timestamp_col: str, separator: str = "_", carry: Iterable[str] = (),
+) -> tuple[pd.DataFrame, PanelState]:
+    """Melt a wide panel into the narrow frame `unwrap` takes. `panel` is read as text (dtype=str, keep_default_na=False).
+
+    `hierarchy` is the entity columns then a metric field that is not a column of the file ("entity_id,metric_id").
+    Empty cells are not observations and give no row. Raises UnwrapError for a column that is missing, a metric field
+    that is a real column, or a timestamp that cannot be read.
+    """
+    templates = parse_hierarchies(hierarchy, separator)
+    if len(templates) != 1:
+        raise UnwrapError("a panel has one hierarchy: the entity columns, then the metric field")
+    fields = templates[0][0]
+    entity_fields, metric_field = fields[:-1], fields[-1]
+    measure = list(dict.fromkeys(str(c).strip() for c in measure_cols if str(c).strip()))
+    if not measure:
+        raise UnwrapError("a panel needs its measure columns")
+    if metric_field in panel.columns:
+        raise UnwrapError(f"the metric field {metric_field!r} is a column of the file: a panel's metric is its measure "
+                          "columns, so name a field the file does not have")
+    missing = [c for c in [*entity_fields, *measure, timestamp_col] if c not in panel.columns]
+    if missing:
+        raise UnwrapError(f"the dataset has no column {missing} (it has {list(panel.columns)})")
+    structural = [c for c in measure if c in (*entity_fields, timestamp_col)]
+    if structural:
+        raise UnwrapError(f"{structural} cannot be both a measure and the entity or the timestamp")
+    extras = [c for c in panel.columns if c not in (*entity_fields, *measure, timestamp_col)]
+    carried = list(dict.fromkeys(str(c).strip() for c in carry if str(c).strip()))
+    unknown = [c for c in carried if c not in extras]
+    if unknown:
+        raise UnwrapError(f"carried column(s) {unknown} are not extra columns of the file (they are {extras})")
+    if panel.empty:
+        raise UnwrapError("the dataset has no rows")
+
+    stamps = panel[timestamp_col].astype(str)
+    sample = next((s for s in stamps if s.strip()), "")
+    offset = _offset_of(sample)
+    utc = _stamps_utc(stamps)
+    bad = int(utc.isna().sum())
+    if bad:
+        raise UnwrapError(f"{bad} rows have a {timestamp_col!r} that is not a timestamp, "
+                          f"e.g. {stamps[utc.isna()].iloc[0]!r}")
+    style = "pg" if _PG_STAMP.match(sample.strip()) else "iso"
+
+    base = panel[entity_fields].astype(str).copy()
+    base[timestamp_col] = _render_stamps(utc, offset, "iso")
+    long = base.join(panel[measure].astype(str)).melt(
+        id_vars=[*entity_fields, timestamp_col], value_vars=measure, var_name=metric_field, value_name="value")
+    long = long[~long["value"].str.strip().str.lower().isin({"", "nan", "none", "null"})]
+    narrow_df = long[[*entity_fields, metric_field, timestamp_col, "value"]].reset_index(drop=True)
+    state = PanelState(
+        columns=list(panel.columns), entity_fields=entity_fields, metric_field=metric_field, measure_cols=measure,
+        timestamp_col=timestamp_col, extras=extras, carry=carried, tz_offset=offset, ts_style=style,
+        rows=int(len(panel)))
+    return narrow_df, state
+
+
+def unwrap_panel(
+    panel: pd.DataFrame, hierarchy: str | list[str], measure_cols: Iterable[str], *,
+    timestamp_col: str, separator: str = "_", carry: Iterable[str] = (),
+) -> tuple[pd.DataFrame, UnwrapState]:
+    """`unwrap` for a wide panel: one column per entity and measure. The state remembers the panel for `wrap_panel`."""
+    narrow_df, pstate = panel_to_narrow(
+        panel, hierarchy, measure_cols, timestamp_col=timestamp_col, separator=separator, carry=carry)
+    wide, state = unwrap(narrow_df, hierarchy, (), timestamp_col=timestamp_col, value_col="value", separator=separator)
+    state.panel = pstate.to_dict()
+    state.stats.update({"layout": "panel", "narrow_rows": pstate.rows, "melted_rows": int(len(narrow_df)),
+                        "ignored_columns": [], "measure_columns": list(pstate.measure_cols),
+                        "extra_columns": list(pstate.extras)})
+    return wide, state
+
+
+def narrow_to_panel(narrow_df: pd.DataFrame, state: UnwrapState, original: pd.DataFrame) -> pd.DataFrame:
+    """The inverse of `panel_to_narrow`, from what `wrap` returned: the panel's own columns, one row per entity and time.
+
+    `original` is the file as it came in (read as text): a row that was in it gets its other columns back, and its
+    timestamp as it was written. A row that is new has its timestamp written in the same style and its other columns
+    empty, except the carried ones.
+    """
+    if not state.panel:
+        raise UnwrapError("the dataset was not unwrapped as a panel")
+    ps = PanelState.from_dict(state.panel)
+    keys = [*ps.entity_fields, ps.timestamp_col]
+    frame = narrow_df.copy()
+    frame[state.value_col] = pd.to_numeric(frame[state.value_col], errors="coerce")
+    # pivot, not pivot_table(dropna=False): that would add a row for every entity at every time
+    wide = frame.drop_duplicates([*keys, ps.metric_field], keep="last").pivot(
+        index=keys, columns=ps.metric_field, values=state.value_col).reset_index()
+    wide.columns.name = None
+    for column in ps.measure_cols:
+        if column not in wide.columns:
+            wide[column] = float("nan")
+    for column in ps.entity_fields:
+        wide[column] = wide[column].astype(str)
+    wide["_t"] = _stamps_utc(wide[ps.timestamp_col])
+
+    base = original.astype(str).copy()
+    base["_t"] = _stamps_utc(base[ps.timestamp_col])
+    base = base.drop_duplicates([*ps.entity_fields, "_t"], keep="last")
+    base = base[[*ps.entity_fields, "_t", ps.timestamp_col, *ps.extras]].rename(
+        columns={ps.timestamp_col: "_original_stamp"})
+    merged = wide.drop(columns=[ps.timestamp_col]).merge(base, on=[*ps.entity_fields, "_t"], how="left")
+    new = merged["_original_stamp"].isna()
+
+    merged[ps.timestamp_col] = merged["_original_stamp"]
+    merged.loc[new, ps.timestamp_col] = _render_stamps(merged.loc[new, "_t"], ps.tz_offset, ps.ts_style)
+    merged = merged.sort_values([*ps.entity_fields, "_t"], kind="stable")
+    new = merged["_original_stamp"].isna()
+    for column in ps.extras:
+        merged[column] = merged[column].fillna("")
+    for column in ps.carry:
+        known = merged[column].where(~new & (merged[column] != ""))
+        filled = known.groupby([merged[f] for f in ps.entity_fields]).transform(lambda s: s.ffill().bfill())
+        merged.loc[new, column] = filled[new].fillna("")
+    merged = merged.sort_values(["_t", *ps.entity_fields], kind="stable")
+    return merged[ps.columns].reset_index(drop=True)
+
+
+def wrap_panel(wide: pd.DataFrame, state: UnwrapState, original: pd.DataFrame, **wrap_kwargs) -> pd.DataFrame:
+    """`wrap`, then back to the panel's layout. `wrap_kwargs` are `wrap`'s (time_col, rename, time_unit)."""
+    return narrow_to_panel(wrap(wide, state, **wrap_kwargs), state, original)

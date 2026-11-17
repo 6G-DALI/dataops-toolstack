@@ -106,6 +106,13 @@ stored file has a column that the unwrapping generated, and the wide frame itsel
 is left out, and report["unwrap"]["not_wrapped"] says why. The ignored columns are held out of the unwrapping and put back,
 with their one value. `timestamp_col` names the time column of the narrow file. report["unwrap"] records what was done.
 
+A wide panel, one row per entity and time with a column per measure (several stations on their own clocks), is declared the
+same way with the measure columns added: dali:measureColumn (one per measured column), dali:timestampColumn and
+dali:carryColumn, and a hierarchy that ends in a metric field the file does not have ("entity_id,metric_id"). Each entity
+and measure becomes one series, and every stored frame is wrapped back to the panel's own columns: a row that was in the
+file gets its index, name and storage time back, a row imputation adds has them empty except the carried columns.
+report["unwrap"]["layout"] is "panel" then, and its levels are the entities and the measures.
+
 `validation`, `imputation` and `timeline` are passed straight through to run_pipeline
 as its validation_config / imputation_config / timeline_config. Omitted, they fall back to
 dali.processing's defaults, which mirror WaveStitchPlus/config/dataops.yaml
