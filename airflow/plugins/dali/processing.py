@@ -755,7 +755,6 @@ def _wrap_artifacts(produced: dict[str, str], state, wide_columns: list[str], re
     return out, rows, left_out
 
 
-@task
 def _unwrap_row_counts(report: dict, state, wrapped_rows: dict[str, int], imputation: dict | None) -> dict:
     """Rows in, out and imputed for a narrow dataset, in both layouts: the report's `unwrap.rows`.
 
@@ -795,6 +794,7 @@ def _unwrap_row_counts(report: dict, state, wrapped_rows: dict[str, int], imputa
     }
 
 
+@task
 def unwrap_dataset(file_content: str, asset_title: str, format_check: dict | None = None) -> dict:
     """Unwrap a narrow dataset into one column per series, just before the DataOps pipeline.
 
