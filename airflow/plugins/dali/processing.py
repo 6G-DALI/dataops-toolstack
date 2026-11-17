@@ -436,53 +436,111 @@ def _column_spread(truth, train, column: str) -> float:
     return float(np.std(pooled)) if len(pooled) >= 2 else 0.0
 
 
+def _fill_errors(prepared_dir: str, summary: dict) -> dict:
+    """What a run did to the cells hidden to score it: the arrays `_score_mask` works from.
+
+    The bundle blanks about 15% of the test split in short blocks and keeps the true values in test_gt.csv.
+    `hidden` counts those cells, and `ok` marks the ones this run filled: a method that leaves a hole (darts, on a
+    column with no neighbour in the split) has fewer. Returns {"cols", "gt", "imp", "ok", "hidden"}.
+    """
+    import numpy as np
+    import pandas as pd
+    from dataops.imputation_runner import _load_meta
+
+    prepared = Path(prepared_dir)
+    cols = _load_meta(prepared)["target_cols"]
+    given = pd.read_csv(prepared / "test_input.csv")[cols].to_numpy(dtype=float)
+    gt = pd.read_csv(prepared / "test_gt.csv")[cols].to_numpy(dtype=float)
+    hidden = np.isnan(given) & ~np.isnan(gt)
+    path = ((summary.get("files") or {}).get("test") or {}).get("path")
+    imp = pd.read_csv(path)[cols].to_numpy(dtype=float) if path else np.full_like(gt, np.nan)
+    return {"cols": cols, "gt": gt, "imp": imp, "ok": hidden & ~np.isnan(imp), "hidden": int(hidden.sum())}
+
+
+def _score_mask(prepared_dir: str, errors: dict, mask) -> dict:
+    """MAE, RMSE and nrmse of one run on the cells in `mask`, per column and overall.
+
+    nrmse is RMSE divided by the spread (standard deviation) of that column's true values (see _column_spread),
+    then averaged over the columns with equal weight. 0 is a perfect fill; about 1 is no better than guessing the
+    column's mean. A column whose truth has no spread is left out of the average. Raw MAE and RMSE stay beside it
+    in per-column units.
+    """
+    import numpy as np
+    import pandas as pd
+
+    truth = pd.read_csv(Path(prepared_dir) / "test_gt.csv")
+    train_path = Path(prepared_dir) / "train.csv"
+    train = pd.read_csv(train_path) if train_path.exists() else None
+    per_column: dict[str, dict] = {}
+    for j, column in enumerate(errors["cols"]):
+        rows = mask[:, j]
+        if not rows.any():
+            continue
+        diff = errors["imp"][rows, j] - errors["gt"][rows, j]
+        rmse = float(np.sqrt(np.mean(diff ** 2)))
+        spread = _column_spread(truth, train, column)
+        per_column[column] = {"eval_cells": int(rows.sum()), "MAE": float(np.mean(np.abs(diff))), "RMSE": rmse,
+                              "nrmse": rmse / spread if spread > 0 else None}
+    scored = [c["nrmse"] for c in per_column.values() if c["nrmse"] is not None]
+    return {"metric": "nrmse", "nrmse": float(np.mean(scored)) if scored else None,
+            "eval_cells": int(mask.sum()), "per_column": per_column}
+
+
 def _score_run(prepared_dir: str, summary: dict) -> dict:
-    """How close one run's fills are to the truth hidden to score them.
+    """How close one run's fills are to the truth hidden to score them, on the cells this run filled.
 
-    The bundle blanks about 15% of the test split in short blocks and keeps the
-    true values in test_gt.csv, so every run is scored on the same cells.
-    dataops.imputation_runner.compare_clean_vs_imputed reports the error on them
-    per column; this adds the normalised figure that can be averaged and ranked.
-
-    nrmse is RMSE divided by the spread (standard deviation) of that column's
-    true values in test_gt.csv, then averaged over the columns with equal weight.
-    0 is a perfect fill; about 1 is no better than guessing the column's mean.
-    A column whose truth is constant has no spread to divide by and is left out.
-    Raw MAE and RMSE stay beside it in per-column units.
+    `hidden_cells` is how many cells were hidden and `coverage` the share this run filled. Runs that fill
+    different cells are not comparable on these figures; impute_prepared_bundle re-scores them all on the cells
+    every run filled (_score_on_common_cells) before ranking.
 
     Never raises: a run that cannot be scored still counts as imputed.
     """
     scale = {"metric": "nrmse"}
     try:
-        import numpy as np
-        import pandas as pd
-        from dataops.imputation_runner import compare_clean_vs_imputed
-
-        split = (compare_clean_vs_imputed(prepared_dir, summary).get("splits") or {}).get("test") or {}
-        accuracy = split.get("accuracy") or {}
-        if not accuracy.get("eval_cells"):
+        errors = _fill_errors(prepared_dir, summary)
+        if not errors["hidden"]:
             return {**scale, "nrmse": None, "eval_cells": 0,
                     "reason": "the bundle holds no hidden cells to score against"}
-
-        truth = pd.read_csv(Path(prepared_dir) / "test_gt.csv")
-        train_path = Path(prepared_dir) / "train.csv"
-        train = pd.read_csv(train_path) if train_path.exists() else None
-        per_column: dict[str, dict] = {}
-        for column, errors in (accuracy.get("per_column") or {}).items():
-            spread = _column_spread(truth, train, column)
-            per_column[column] = {
-                "eval_cells": errors["eval_cells"],
-                "MAE":        errors["MAE"],
-                "RMSE":       errors["RMSE"],
-                "nrmse":      errors["RMSE"] / spread if spread > 0 else None,
-            }
-        scored = [c["nrmse"] for c in per_column.values() if c["nrmse"] is not None]
-        return {**scale, "nrmse": float(np.mean(scored)) if scored else None,
-                "eval_cells": accuracy["eval_cells"], "per_column": per_column}
+        accuracy = _score_mask(prepared_dir, errors, errors["ok"])
+        accuracy["hidden_cells"] = errors["hidden"]
+        accuracy["coverage"] = round(accuracy["eval_cells"] / errors["hidden"], 4)
+        return accuracy
     except Exception as exc:  # noqa: BLE001 - scoring is a bonus, never a failure
         print(f"[dataops] could not score {summary.get('lib')}/{summary.get('method')}: "
               f"{exc.__class__.__name__}: {exc}")
         return {**scale, "nrmse": None, "error": f"{exc.__class__.__name__}: {exc}"}
+
+
+def _score_on_common_cells(prepared_dir: str, summaries: list[dict]) -> None:
+    """Re-score the runs on the hidden cells every one of them filled, so their scores can be compared.
+
+    A run that leaves holes is scored by `_score_run` on the easier cells only, which can put it ahead of a run that
+    filled them all. Here every imputed run is scored on the intersection. Each run's `accuracy` then carries the
+    common figure as `nrmse` and `eval_cells` (what the ranking reads), `scored_on: "common"`, and its own figure as
+    `own_nrmse` / `own_cells`, with `hidden_cells` and `coverage` kept. A single run, or no cell filled by all,
+    keeps its own figure. Never raises.
+    """
+    try:
+        runs = [r for r in summaries if r.get("status") == "imputed" and (r.get("accuracy") or {}).get("eval_cells")]
+        if len(runs) < 2:
+            return
+        errors = {id(r): _fill_errors(prepared_dir, r) for r in runs}
+        common = None
+        for r in runs:
+            common = errors[id(r)]["ok"] if common is None else common & errors[id(r)]["ok"]
+        if common is None or not common.any():
+            for r in runs:
+                r["accuracy"]["scored_on"] = "own"
+                r["accuracy"]["note"] = "no hidden cell was filled by every run, so scores are not comparable"
+            return
+        for r in runs:
+            own = r["accuracy"]
+            scored = _score_mask(prepared_dir, errors[id(r)], common)
+            r["accuracy"] = {**scored, "scored_on": "common", "own_nrmse": own.get("nrmse"),
+                             "own_cells": own.get("eval_cells"), "hidden_cells": own.get("hidden_cells"),
+                             "coverage": own.get("coverage")}
+    except Exception as exc:  # noqa: BLE001 - scoring is a bonus, never a failure
+        print(f"[dataops] could not score the runs on common cells: {exc.__class__.__name__}: {exc}")
 
 
 def _rank_runs(runs: list[dict]) -> list[dict]:
@@ -642,6 +700,7 @@ def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict:
 
     bundle = _bundle_facts(prepared_dir)
     summaries = [_timed_impute_one(prepared_dir, bundle, **run) for run in runs]
+    _score_on_common_cells(prepared_dir, summaries)
     ranking = _rank_runs(summaries)
     return {**summaries[0], "runs": summaries, "runs_total": len(summaries),
             "runs_imputed": sum(1 for r in summaries if r.get("status") == "imputed"),
@@ -763,13 +822,19 @@ def _unwrap_row_counts(report: dict, state, wrapped_rows: dict[str, int], imputa
     timestamp and one column per series, where a missing sample is an empty cell. So the narrow rows an imputation
     adds (out - in) are the cells it filled, and the wide row count does not change.
 
-    `stages` lists the narrow rows of each stored frame; `runs` one entry per imputation run.
+    `stages` lists the narrow rows of each stored frame; `runs` one entry per imputation run. Columns are given the
+    same way: the narrow file keeps its columns (the hierarchy, the timestamp, the value, and what was ignored), and
+    the wide frame has the timestamp plus one column per series.
     """
     stats = state.stats
     cleaning = report.get("cleaning") or {}
     narrow_in = stats.get("narrow_rows")
     series = stats.get("series")
     cells_total = (series or 0) * (stats.get("timestamps") or 0)
+    narrow_columns = len(state.columns)
+
+    def column_count(value) -> int | None:
+        return len(value) if isinstance(value, list) else value if isinstance(value, int) else None
 
     runs = []
     for run in (imputation or {}).get("runs") or ([imputation] if imputation else []):
@@ -778,14 +843,19 @@ def _unwrap_row_counts(report: dict, state, wrapped_rows: dict[str, int], imputa
         runs.append({
             "lib": run.get("lib"), "method": run.get("method"), "status": run.get("status"),
             "wide": {"rows_in": stats.get("timestamps"), "rows_out": (run.get("final") or {}).get("rows"),
+                     "columns_in": cleaning.get("input_columns"),
+                     "columns_out": column_count((run.get("final") or {}).get("columns")),
                      "cells_missing": run.get("missing_before"), "cells_imputed": run.get("filled")},
             "narrow": {"rows_in": narrow_in, "rows_out": narrow_out,
+                       "columns_in": narrow_columns, "columns_out": narrow_columns if narrow_out is not None else None,
                        "rows_imputed": narrow_out - narrow_in if narrow_out is not None and narrow_in is not None
                        else None},
         })
     return {
-        "narrow": {"rows_in": narrow_in, "stages": dict(wrapped_rows)},
+        "narrow": {"rows_in": narrow_in, "columns_in": narrow_columns, "columns_out": narrow_columns,
+                   "stages": dict(wrapped_rows)},
         "wide": {"rows_in": stats.get("timestamps"), "series": series, "cells": cells_total,
+                 "columns_in": cleaning.get("input_columns"), "columns_cleaned": cleaning.get("output_columns"),
                  "cells_present": narrow_in,
                  "rows_cleaned": cleaning.get("output_rows"),
                  "dropped_duplicate_rows": cleaning.get("dropped_duplicate_rows"),
