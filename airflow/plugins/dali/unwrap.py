@@ -139,6 +139,25 @@ class UnwrapState:
     stats: dict = field(default_factory=dict)
 
 
+    def levels(self) -> dict:
+        """The choices a reader has to pick one series: what the report's `unwrap.levels` carries.
+
+        `fields` are the hierarchy's id columns in order, the metric last. `series` lists every series as its tokens,
+        in the order of `fields`, sorted the way the wide frame orders its columns, so a reader can narrow the choice
+        level by level (only the cells that have a UE, only the metrics of that UE). An absent level keeps the token
+        the file used ("N/A"); `values` lists each field's distinct tokens in the same order.
+        """
+        fields = list(self.fields)
+        rows = [[attrs.get(f, "") for f in fields] for attrs in self.series.values()]
+        rows.sort(key=lambda row: tuple(_sortable(token) for token in row))
+        values = []
+        for i in range(len(fields)):
+            seen: dict[str, None] = {}
+            for row in rows:
+                seen.setdefault(row[i], None)
+            values.append(sorted(seen, key=_sortable))
+        return {"fields": fields, "values": values, "series": rows}
+
     def to_dict(self) -> dict:
         """The state as plain JSON types, so it can travel between Airflow tasks."""
         return {

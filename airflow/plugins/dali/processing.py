@@ -28,7 +28,9 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -411,6 +413,29 @@ def _v1_before_its_dependents(runs: list[dict]) -> list[dict]:
     return runs
 
 
+def _column_spread(truth, train, column: str) -> float:
+    """Standard deviation of a column's true values: the divisor of its nrmse.
+
+    Taken from test_gt.csv. On a sparse dataset that file may hold a single observed value in a column (the
+    spread of one value is 0, so the column could never be scored); then the observed values of train.csv are
+    pooled in. Every run on the bundle uses the same divisor, so the ranking is unaffected.
+    """
+    import numpy as np
+    import pandas as pd
+
+    def observed(frame):
+        if frame is None or column not in frame.columns:
+            return np.array([])
+        values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+        return values[~np.isnan(values)]
+
+    own = observed(truth)
+    if len(own) >= 2 and float(np.std(own)) > 0:
+        return float(np.std(own))
+    pooled = np.concatenate([own, observed(train)])
+    return float(np.std(pooled)) if len(pooled) >= 2 else 0.0
+
+
 def _score_run(prepared_dir: str, summary: dict) -> dict:
     """How close one run's fills are to the truth hidden to score them.
 
@@ -440,9 +465,11 @@ def _score_run(prepared_dir: str, summary: dict) -> dict:
                     "reason": "the bundle holds no hidden cells to score against"}
 
         truth = pd.read_csv(Path(prepared_dir) / "test_gt.csv")
+        train_path = Path(prepared_dir) / "train.csv"
+        train = pd.read_csv(train_path) if train_path.exists() else None
         per_column: dict[str, dict] = {}
         for column, errors in (accuracy.get("per_column") or {}).items():
-            spread = float(np.nanstd(pd.to_numeric(truth[column], errors="coerce")))
+            spread = _column_spread(truth, train, column)
             per_column[column] = {
                 "eval_cells": errors["eval_cells"],
                 "MAE":        errors["MAE"],
@@ -538,6 +565,23 @@ def _impute_one(prepared_dir: str, bundle: dict, *, lib: str, method: str, engin
     return {**summary, "status": "nothing_to_fill", "reason": reason}
 
 
+def _timed_impute_one(prepared_dir: str, bundle: dict, **run) -> dict:
+    """:func:`_impute_one`, with how long it took: `timing` {started_at, finished_at, seconds} on the run's summary.
+
+    The seconds are the wall clock of the whole run, including the wait on a service that does the work (WaveStitch+,
+    PyPOTS) and the scoring and stitching that follow it. Runs are made one after the other, so they do not overlap.
+    A run that failed carries its timing too.
+    """
+    started = datetime.now(timezone.utc)
+    begin = time.monotonic()
+    summary = _impute_one(prepared_dir, bundle, **run)
+    seconds = round(time.monotonic() - begin, 3)
+    summary["timing"] = {"started_at": started.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
+                         "seconds": seconds}
+    print(f"[dataops] imputation {run.get('lib')}/{run.get('method')}: {summary.get('status')} in {seconds:.1f} s")
+    return summary
+
+
 def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict:
     """Run the configured imputations over the handoff's regularized bundle, in-process.
 
@@ -556,7 +600,7 @@ def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict:
     already reads — plus `runs`, the summaries of all of them, `runs_total` /
     `runs_imputed`, and `ranking`: the runs ordered by how close their fills came to
     the values hidden to score them (see _score_run), best first. Each run carries
-    its own `accuracy` and `rank`. The first run stays the primary one whatever the
+    its own `accuracy`, `rank` and `timing` (see _timed_impute_one); `runs_seconds` is their total. The first run stays the primary one whatever the
     ranking says. One run failing does not stop the others.
 
     Always returns a summary carrying a `status` and a `reason`, including when
@@ -597,10 +641,11 @@ def impute_prepared_bundle(report: dict, imputation_config: dict) -> dict:
                 "bundle_error": handoff.get("bundle_error")}
 
     bundle = _bundle_facts(prepared_dir)
-    summaries = [_impute_one(prepared_dir, bundle, **run) for run in runs]
+    summaries = [_timed_impute_one(prepared_dir, bundle, **run) for run in runs]
     ranking = _rank_runs(summaries)
     return {**summaries[0], "runs": summaries, "runs_total": len(summaries),
             "runs_imputed": sum(1 for r in summaries if r.get("status") == "imputed"),
+            "runs_seconds": round(sum((r.get("timing") or {}).get("seconds") or 0.0 for r in summaries), 3),
             "ranking": ranking}
 
 
@@ -711,6 +756,45 @@ def _wrap_artifacts(produced: dict[str, str], state, wide_columns: list[str], re
 
 
 @task
+def _unwrap_row_counts(report: dict, state, wrapped_rows: dict[str, int], imputation: dict | None) -> dict:
+    """Rows in, out and imputed for a narrow dataset, in both layouts: the report's `unwrap.rows`.
+
+    `narrow` is the layout of the file that came in and of every stored artifact: one row per timestamp, entity
+    and metric, and a missing sample is a missing row. `wide` is the layout the pipeline worked on: one row per
+    timestamp and one column per series, where a missing sample is an empty cell. So the narrow rows an imputation
+    adds (out - in) are the cells it filled, and the wide row count does not change.
+
+    `stages` lists the narrow rows of each stored frame; `runs` one entry per imputation run.
+    """
+    stats = state.stats
+    cleaning = report.get("cleaning") or {}
+    narrow_in = stats.get("narrow_rows")
+    series = stats.get("series")
+    cells_total = (series or 0) * (stats.get("timestamps") or 0)
+
+    runs = []
+    for run in (imputation or {}).get("runs") or ([imputation] if imputation else []):
+        stem = f"imputed_{run.get('lib')}_{run.get('method')}"
+        narrow_out = wrapped_rows.get(f"{stem}_final_csv")
+        runs.append({
+            "lib": run.get("lib"), "method": run.get("method"), "status": run.get("status"),
+            "wide": {"rows_in": stats.get("timestamps"), "rows_out": (run.get("final") or {}).get("rows"),
+                     "cells_missing": run.get("missing_before"), "cells_imputed": run.get("filled")},
+            "narrow": {"rows_in": narrow_in, "rows_out": narrow_out,
+                       "rows_imputed": narrow_out - narrow_in if narrow_out is not None and narrow_in is not None
+                       else None},
+        })
+    return {
+        "narrow": {"rows_in": narrow_in, "stages": dict(wrapped_rows)},
+        "wide": {"rows_in": stats.get("timestamps"), "series": series, "cells": cells_total,
+                 "cells_present": narrow_in,
+                 "rows_cleaned": cleaning.get("output_rows"),
+                 "dropped_duplicate_rows": cleaning.get("dropped_duplicate_rows"),
+                 "dropped_empty_rows": cleaning.get("dropped_empty_rows")},
+        "runs": runs,
+    }
+
+
 def unwrap_dataset(file_content: str, asset_title: str, format_check: dict | None = None) -> dict:
     """Unwrap a narrow dataset into one column per series, just before the DataOps pipeline.
 
@@ -946,7 +1030,9 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
                             "ignore_columns": list(state.constants),
                             "timestamp_col": timestamp_col, "value_col": state.value_col,
                             "tz_offset": state.tz_offset, **state.stats,
-                            "wrapped_artifacts": wrapped_rows, "not_wrapped": not_wrapped}
+                            "wrapped_artifacts": wrapped_rows, "not_wrapped": not_wrapped,
+                            "levels": state.levels(),
+                            "rows": _unwrap_row_counts(report, state, wrapped_rows, imputation)}
     if imputation or unwrapped:
         if imputation:
             report["imputation"] = imputation

@@ -475,3 +475,15 @@ class TestOrderedFieldList:
         graph = {"@graph": [{"@id": "x", "@type": "dcat:Distribution", "https://dali-project.eu/ns#assetId": "a"}]}
         assert "seriesSeparator" not in apply_layout(graph, "a", FIELDS, IGNORE, "value")["after"]
         assert apply_layout(graph, "a", FIELDS, IGNORE, "value", ".")["after"]["seriesSeparator"] == "."
+
+
+def test_levels_list_the_choices_for_picking_one_series(narrow):
+    _, state = unwrap(narrow, FIELDS, ignore=IGNORE)
+    levels = state.levels()
+    assert levels["fields"] == ["cell_id", "ue_id", "metric_id"]
+    assert levels["values"][0] == ["1", "3"]
+    assert levels["values"][1] == ["N/A", "4"]                      # absent first, then numbers
+    assert ["3", "4", "DRB.UEBlerDl"] in levels["series"]
+    assert ["1", "N/A", "DRB.UEThpDl"] in levels["series"]
+    assert len(levels["series"]) == state.stats["series"]
+    json.dumps(levels)                                              # plain JSON, it goes in the report
