@@ -253,12 +253,56 @@ def guess_timestamp_in_frame(sample) -> str | None:
     return None
 
 
+def _tolerate_mixed_time_formats() -> None:
+    """Let the vendored pipeline read a time column that mixes whole and fractional seconds.
+
+    DataFrame.to_csv formats a datetime column in chunks of 100000 // (number of columns) rows, each on its own: a
+    chunk with a fractional second is written "2026-07-19 10:03:50.000", one without "2026-09-19 01:02:54". The
+    pipeline writes its remediated frame that way and then builds the imputation bundle from the file, and
+    dataops._preprocess_impl.coerce_time_column infers one format from the first value and drops the rest ("Could not
+    parse time column: only 0/6488 parse as numeric and 826/6488 parse as datetime"). A dataset with a few sub-second
+    timestamps and enough rows or columns to span two chunks hits it.
+
+    The fix belongs in WaveStitchPlus; until it is there, the plugin copy is not edited (see plugins/VENDORED.md) and
+    the function is wrapped here instead: when it raises, the column is read once more with format="mixed", each value
+    on its own. Idempotent, and a no-op for pandas older than 2.0, which has no such format.
+    """
+    import dataops._preprocess_impl as impl
+    import dataops.transform as transform
+
+    original = impl.coerce_time_column
+    if getattr(original, "_dali_mixed_formats", False):
+        return
+
+    def coerce_time_column(series, min_valid_frac: float = 0.9):
+        try:
+            return original(series, min_valid_frac)
+        except ValueError as first:
+            import warnings
+
+            import pandas as pd
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    parsed = pd.to_datetime(series, errors="coerce", utc=False, format="mixed")
+            except (TypeError, ValueError):
+                raise first
+            if len(series) == 0 or parsed.notna().sum() < min_valid_frac * len(series):
+                raise first
+            return (parsed - pd.Timestamp("1970-01-01")).dt.total_seconds(), "datetime"
+
+    coerce_time_column._dali_mixed_formats = True
+    impl.coerce_time_column = coerce_time_column
+    transform.coerce_time_column = coerce_time_column       # imported by name, so patched where it is used too
+
+
 def _load_run_pipeline():
     """Import run_pipeline from the vendored pipeline module.
 
     Deferred to task runtime on purpose — see the module docstring."""
     try:
         from minimal_dataops import run_pipeline
+        _tolerate_mixed_time_formats()
     except ImportError as exc:
         raise RuntimeError(
             f"[dataops] could not import the vendored WaveStitchPlus pipeline: "
@@ -815,7 +859,8 @@ def _wrap_artifacts(produced: dict[str, str], state, wide_columns: list[str], re
                 frame[time_col] = frame[time_col] * float(meta.get("time_unit_seconds") or 1.0 if imputed else 1.0)
                 unit = "epoch"
             else:
-                frame[time_col] = pd.to_datetime(frame[time_col])
+                # format="mixed": the pipeline's own to_csv writes a time column with and without fractional seconds
+                frame[time_col] = pd.to_datetime(frame[time_col], format="mixed")
                 unit = "datetime"
             if original is not None:
                 narrow_df = narrow.wrap_panel(frame, state, original, time_col=time_col, rename=inverse, time_unit=unit)
