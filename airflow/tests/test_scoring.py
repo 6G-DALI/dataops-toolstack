@@ -13,8 +13,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from dali.processing import _rank_runs, _score_on_common_cells, _score_run
+from dali.processing import _column_spread, _rank_runs, _score_on_common_cells, _score_run
 
 GT = pd.DataFrame({"t": range(6), "a": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], "b": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]})
 
@@ -90,3 +91,36 @@ def test_a_single_run_keeps_its_own_score(tmp_path):
     before = dict(run["accuracy"])
     _score_on_common_cells(bundle, [run])
     assert run["accuracy"] == before
+
+
+def test_a_column_that_varies_only_by_rounding_noise_is_left_out_of_the_average(tmp_path):
+    """A stationary sensor's latitude: 37.0329350000000x. Dividing any error by its 1e-14 spread gives 1e12."""
+    gt = GT.copy()
+    gt["lat"] = 37.032935 + np.array([0.0, 1e-14, 0.0, 2e-14, 0.0, 1e-14])
+    test_input = gt.copy()
+    test_input.loc[[1, 2], "a"] = np.nan
+    test_input.loc[[1, 4], "lat"] = np.nan
+    test_input.to_csv(tmp_path / "test_input.csv", index=False)
+    gt.to_csv(tmp_path / "test_gt.csv", index=False)
+    gt.to_csv(tmp_path / "train.csv", index=False)
+    (tmp_path / "meta.json").write_text(json.dumps({"target_cols": ["a", "lat"]}))
+    filled = gt.copy()
+    filled.loc[[1, 2], "a"] += 1.0                      # a is off by 1, the real signal
+    filled.loc[[1, 4], "lat"] += 0.02                   # lat is off by 0.02 degrees (about 2 km), on a column that never moves
+    filled.to_csv(tmp_path / "run_test.csv", index=False)
+    run = {"lib": "x", "method": "m", "status": "imputed", "files": {"test": {"path": str(tmp_path / "run_test.csv")}}}
+
+    accuracy = _score_run(str(tmp_path), run)
+
+    assert np.std(gt["lat"]) > 0                                         # not exactly constant, which is the point
+    assert accuracy["per_column"]["lat"]["nrmse"] is None and accuracy["per_column"]["lat"]["constant"] is True
+    assert accuracy["per_column"]["lat"]["RMSE"] == pytest.approx(0.02)  # the error is still reported, in degrees
+    assert accuracy["nrmse"] == pytest.approx(accuracy["per_column"]["a"]["nrmse"])   # only `a` is in the average
+    assert accuracy["nrmse"] < 10
+
+
+def test_the_spread_of_a_real_column_is_unchanged_and_a_constant_one_has_none():
+    truth = pd.DataFrame({"v": [1.0, 2.0, 3.0, 4.0], "k": [5.0, 5.0, 5.0, 5.0], "tiny": [1e-12, 2e-12, 3e-12, 4e-12]})
+    assert _column_spread(truth, None, "v") == pytest.approx(np.std([1, 2, 3, 4]))
+    assert _column_spread(truth, None, "k") == 0.0
+    assert _column_spread(truth, None, "tiny") == pytest.approx(np.std([1e-12, 2e-12, 3e-12, 4e-12]))  # small, not constant

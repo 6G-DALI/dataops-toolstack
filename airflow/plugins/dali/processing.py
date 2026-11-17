@@ -457,12 +457,21 @@ def _v1_before_its_dependents(runs: list[dict]) -> list[dict]:
     return runs
 
 
+# A column whose spread is below this share of its largest absolute value does not vary (see _column_spread).
+_NO_SPREAD = 1e-9
+
+
 def _column_spread(truth, train, column: str) -> float:
     """Standard deviation of a column's true values: the divisor of its nrmse.
 
     Taken from test_gt.csv. On a sparse dataset that file may hold a single observed value in a column (the
     spread of one value is 0, so the column could never be scored); then the observed values of train.csv are
     pooled in. Every run on the bundle uses the same divisor, so the ranking is unaffected.
+
+    A column that does not vary has no spread to divide by, and the answer is 0.0 (the column is left out of the
+    average). That includes a column that varies only by rounding noise: a stationary sensor's latitude, written as
+    37.0245925641345 and 37.0245925641346, has a spread of about 4e-15, and any error divided by that is 1e12. A spread
+    below one part in a billion of the column's largest value counts as none.
     """
     import numpy as np
     import pandas as pd
@@ -473,11 +482,16 @@ def _column_spread(truth, train, column: str) -> float:
         values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
         return values[~np.isnan(values)]
 
+    def spread_of(values) -> float:
+        if len(values) < 2:
+            return 0.0
+        spread = float(np.std(values))
+        return spread if spread > _NO_SPREAD * float(np.max(np.abs(values))) else 0.0
+
     own = observed(truth)
-    if len(own) >= 2 and float(np.std(own)) > 0:
-        return float(np.std(own))
-    pooled = np.concatenate([own, observed(train)])
-    return float(np.std(pooled)) if len(pooled) >= 2 else 0.0
+    if spread_of(own) > 0:
+        return spread_of(own)
+    return spread_of(np.concatenate([own, observed(train)]))
 
 
 def _fill_errors(prepared_dir: str, summary: dict) -> dict:
@@ -525,6 +539,8 @@ def _score_mask(prepared_dir: str, errors: dict, mask) -> dict:
         spread = _column_spread(truth, train, column)
         per_column[column] = {"eval_cells": int(rows.sum()), "MAE": float(np.mean(np.abs(diff))), "RMSE": rmse,
                               "nrmse": rmse / spread if spread > 0 else None}
+        if spread <= 0:
+            per_column[column]["constant"] = True            # no spread: left out of the average, RMSE and MAE say how far off
     scored = [c["nrmse"] for c in per_column.values() if c["nrmse"] is not None]
     return {"metric": "nrmse", "nrmse": float(np.mean(scored)) if scored else None,
             "eval_cells": int(mask.sum()), "per_column": per_column}
