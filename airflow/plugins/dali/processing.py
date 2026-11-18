@@ -38,6 +38,7 @@ from airflow.decorators import task
 from airflow.sdk import get_current_context
 
 from dali import pypots, unwrap as narrow, wavestitch
+from dali.timestamps import normalise_timestamps
 from dali.utils import fetch_series_layout, sanitize
 
 # The Darts runner, vendored verbatim next to this package (see VENDORED.md). The
@@ -1097,6 +1098,20 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
               f"unwrapped by the DAG into {state.stats.get('series')} series")
     print(f"[dataops] mode={validation_config.get('mode')!r} timestamp_col={timestamp_col!r}")
 
+    # The vendored pipeline cannot read timezone-aware timestamps (dali.timestamps), so a time column with an offset or a
+    # "Z" is converted to naive UTC here, before the file is handed over. Best effort: if it cannot be done the pipeline
+    # gets the file as it came and reports what it makes of it.
+    timestamps_utc = None
+    try:
+        timestamps_utc = normalise_timestamps(pipeline_csv, timestamp_col, workdir / f"{stem}_utc.csv")
+    except Exception as exc:  # noqa: BLE001 - an adaptation that fails must not take the run down with it
+        print(f"[dataops] could not normalise the timestamps to UTC, passing the file as it is: "
+              f"{exc.__class__.__name__}: {exc}")
+    if timestamps_utc:
+        pipeline_csv = workdir / f"{stem}_utc.csv"
+        print(f"[dataops] timestamps in {timestamps_utc['column']!r} carried an offset ({timestamps_utc['offset']}): "
+              f"converted to UTC for the pipeline ({timestamps_utc['rows']} row(s), {timestamps_utc['unparsed']} unparsed)")
+
     pipeline_error = None
     try:
         run_pipeline(
@@ -1184,7 +1199,9 @@ def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict
                             "layout": "panel" if state.panel else "narrow",
                             "levels": state.levels(),
                             "rows": _unwrap_row_counts(report, state, wrapped_rows, imputation)}
-    if imputation or unwrapped:
+    if timestamps_utc:
+        report["timestamps"] = timestamps_utc
+    if imputation or unwrapped or timestamps_utc:
         if imputation:
             report["imputation"] = imputation
         # Written back to the file, not just to the dict: the report artifact is
