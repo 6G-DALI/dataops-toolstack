@@ -119,7 +119,7 @@ def series_layout_of(node: dict) -> dict | None:
       dali:seriesSeparator  what joins the parts of a series name (default "_")
       dali:ignoredColumn    one per column of the narrow file that holds a single value (source, gNB_id); repeatable
       dali:valueColumn      the column holding the measured value (default "value" when only the hierarchy is set)
-    A *wide panel* (several entities on their own clocks, one column per measure) adds:
+    A *panel* (several entities on their own clocks, one column per measure) adds:
       dali:measureColumn    one per column that is measured (barometer, pm10, latitude, ...); repeatable. The
                             hierarchy then ends in a metric field that is not a column of the file ("entity_id,metric_id")
       dali:timestampColumn  the column that holds the time of the measurement (measured_at); also usable on a narrow file

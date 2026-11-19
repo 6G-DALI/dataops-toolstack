@@ -795,7 +795,7 @@ def _unwrap_input(input_csv: Path, workdir: Path, stem: str, layout: dict, times
     narrow_df = pd.read_csv(input_csv, dtype=str, keep_default_na=False)
     timestamp_col = layout.get("timestamp_col") or timestamp_col or guess_timestamp_column(input_csv) or "timestamp"
     if layout.get("measure_cols"):
-        # a wide panel: one row per entity and time, a column per measure (see dali.unwrap.unwrap_panel)
+        # a panel: one row per entity and time, a column per measure (see dali.unwrap.unwrap_panel)
         wide, state = narrow.unwrap_panel(
             narrow_df,
             layout["hierarchy"],
@@ -854,7 +854,7 @@ def _wrap_artifacts(produced: dict[str, str], state, wide_columns: list[str], re
 
     original = None
     if state.panel:
-        # a wide panel is stored in its own layout, and the rows that were in the file get their other columns back
+        # a panel is stored in its own layout, and the rows that were in the file get their other columns back
         original = pd.read_csv(produced["input_csv"], dtype=str, keep_default_na=False)
 
     out: dict[str, str] = {}
@@ -1201,13 +1201,17 @@ def run_imputation(file_content: str, asset_title: str, format_check: dict | Non
                             "rows": _unwrap_row_counts(report, state, wrapped_rows, imputation)}
     if timestamps_utc:
         report["timestamps"] = timestamps_utc
-    if imputation or unwrapped or timestamps_utc:
+    # The shape of the file that came in: wide (one column per series) unless it was unwrapped, in which case it was
+    # narrow or a panel. Every run says it, so a wide file is named as much as the other two.
+    if report:
+        report["layout"] = report["unwrap"]["layout"] if unwrapped else "wide"
+    if report or imputation or unwrapped or timestamps_utc:
         if imputation:
             report["imputation"] = imputation
         # Written back to the file, not just to the dict: the report artifact is
         # uploaded from disk, and it is what the results view reads. Leaving the
         # summary in memory only would upload a report that never mentions the
-        # imputation this run performed.
+        # imputation or the layout of this run.
         report_json.write_text(
             json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8"
         )

@@ -137,7 +137,7 @@ class UnwrapState:
     tz_offset: str = ""                                 # "+02:00", or "" when the input carried none
     templates: list[tuple[list[str], str]] = field(default_factory=list)
     stats: dict = field(default_factory=dict)
-    panel: dict | None = None                           # a wide panel's layout (see PanelState), else None
+    panel: dict | None = None                           # a panel's layout (see PanelState), else None
 
 
     def levels(self) -> dict:
@@ -399,7 +399,7 @@ def wrap(
 
 
 
-# ── Wide panels ───────────────────────────────────────────────────────────────────────────────────────────────────
+# ── Panels ───────────────────────────────────────────────────────────────────────────────────────────────────
 #
 # Some datasets are not narrow but already carry one column per measure, with several entities interleaved on their own
 # clocks (a weather station per entity_id, rows of barometer, humidity, pm10, ...). The catalogue declares such a file
@@ -466,7 +466,7 @@ def panel_to_narrow(
     panel: pd.DataFrame, hierarchy: str | list[str], measure_cols: Iterable[str], *,
     timestamp_col: str, separator: str = "_", carry: Iterable[str] = (),
 ) -> tuple[pd.DataFrame, PanelState]:
-    """Melt a wide panel into the narrow frame `unwrap` takes. `panel` is read as text (dtype=str, keep_default_na=False).
+    """Melt a panel into the narrow frame `unwrap` takes. `panel` is read as text (dtype=str, keep_default_na=False).
 
     `hierarchy` is the entity columns then a metric field that is not a column of the file ("entity_id,metric_id").
     Empty cells are not observations and give no row. Raises UnwrapError for a column that is missing, a metric field
@@ -524,7 +524,7 @@ def unwrap_panel(
     panel: pd.DataFrame, hierarchy: str | list[str], measure_cols: Iterable[str], *,
     timestamp_col: str, separator: str = "_", carry: Iterable[str] = (),
 ) -> tuple[pd.DataFrame, UnwrapState]:
-    """`unwrap` for a wide panel: one column per entity and measure. The state remembers the panel for `wrap_panel`."""
+    """`unwrap` for a panel: one column per entity and measure. The state remembers the panel for `wrap_panel`."""
     narrow_df, pstate = panel_to_narrow(
         panel, hierarchy, measure_cols, timestamp_col=timestamp_col, separator=separator, carry=carry)
     wide, state = unwrap(narrow_df, hierarchy, (), timestamp_col=timestamp_col, value_col="value", separator=separator)

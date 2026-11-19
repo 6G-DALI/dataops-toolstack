@@ -322,6 +322,19 @@ class TestPipelineWithAnUnwrappedInput:
             NARROW_CSV, "readings.csv", {"success": True}, {"unwrapped": False, "reason": "no layout declared"})
         assert seen["input_csv"].endswith("readings.csv") and out["error"] is None
 
+    def test_the_report_names_the_layout_of_every_run(self, pipeline):
+        processing, _ = pipeline
+        plain = processing.run_imputation.function(
+            NARROW_CSV, "readings.csv", {"success": True}, {"unwrapped": False, "reason": "no layout declared"})
+        assert plain["report"]["layout"] == "wide" and "unwrap" not in plain["report"]
+
+        narrow = narrow_strings()
+        wide, state = unwrap(narrow, "cell_id,ue_id,metric_id", ["source", "gNB_id"])
+        handed = {"unwrapped": True, "file_content": wide.to_csv(index=False), "timestamp_col": "timestamp",
+                  "wide_columns": list(wide.columns), "layout": LAYOUT, "state": state.to_dict()}
+        unwrapped = processing.run_imputation.function(NARROW_CSV, "readings.csv", {"success": True}, handed)
+        assert unwrapped["report"]["layout"] == unwrapped["report"]["unwrap"]["layout"] == "narrow"
+
 
 @pytest.fixture
 def pandera_stub(monkeypatch):

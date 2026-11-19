@@ -377,6 +377,44 @@ class TestSetSeriesLayoutScript:
         assert not any(k.startswith("https://dali-project.eu/ns#") and not k.endswith("assetId")
                        for k in graph["@graph"][2])
 
+    def test_reads_the_layout_from_a_metadata_file(self, tmp_path):
+        sys.path.insert(0, self.SCRIPTS)
+        import json
+        from set_series_layout import apply_layout, layout_from_metadata
+        from dali.utils import series_layout_of
+
+        meta = tmp_path / "metadata.json"
+        meta.write_text(json.dumps({"title": "t", "series_layout": {"throughput.csv": {
+            "hierarchy": ["phase", "cell_id", "ue_id", "metric_id"], "separator": "_",
+            "measure_columns": ["dl", "ul", "cqi"], "timestamp_column": "timestamp",
+            "carry_columns": [], "ignored_columns": []}}}))
+        layout = layout_from_metadata(str(meta))                            # one entry: no --file needed
+        assert layout["hierarchy"] == "phase,cell_id,ue_id,metric_id" and layout["measure"] == ["dl", "ul", "cqi"]
+        graph = self._graph()
+        apply_layout(graph, "a1", layout["hierarchy"], layout["ignore"], layout["value_col"] or "value",
+                     layout["separator"], layout["measure"], layout["timestamp_col"], layout["carry"])
+        got = series_layout_of(graph["@graph"][1])
+        assert got["hierarchy"] == ["phase,cell_id,ue_id,metric_id"] and got["measure_cols"] == ["dl", "ul", "cqi"]
+        assert got["timestamp_col"] == "timestamp" and got["carry_columns"] == []
+
+    def test_a_metadata_file_without_exactly_one_layout_is_refused(self, tmp_path):
+        sys.path.insert(0, self.SCRIPTS)
+        import json
+        from set_series_layout import layout_from_metadata
+
+        block = {"hierarchy": "a,metric_id", "measure_columns": ["x"]}
+        meta = tmp_path / "metadata.json"
+        meta.write_text(json.dumps({"series_layout": {"one.csv": block, "two.csv": block}}))
+        with pytest.raises(SystemExit):
+            layout_from_metadata(str(meta))                                  # two entries: the file must be named
+        assert layout_from_metadata(str(meta), "two.csv")["hierarchy"] == "a,metric_id"
+        with pytest.raises(SystemExit):
+            layout_from_metadata(str(meta), "missing.csv")
+        empty = tmp_path / "none.json"
+        empty.write_text(json.dumps({"title": "t"}))
+        with pytest.raises(SystemExit):
+            layout_from_metadata(str(empty))                                 # no layout at all
+
     def test_unknown_asset(self):
         sys.path.insert(0, self.SCRIPTS)
         from set_series_layout import apply_layout
@@ -489,7 +527,7 @@ def test_levels_list_the_choices_for_picking_one_series(narrow):
     json.dumps(levels)                                              # plain JSON, it goes in the report
 
 
-# ── Wide panels: several entities on their own clocks, one column per measure ────────────────────────────────────────
+# ── Panels: several entities on their own clocks, one column per measure ────────────────────────────────────────
 
 PANEL = """id,entity_id,name,temp,hum,lat,loc,measured_at,inserted_at
 1,st:1,Alpha,20.5,50.0,37.0,POINT (22.0 37.0),2026-09-10 20:00:00.000 +0300,2026-09-10 22:00:00.000 +0300
