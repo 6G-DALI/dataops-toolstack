@@ -2,7 +2,7 @@
 
 dali.validation.run_expectations runs these over the downloaded file, before any unwrapping or cleaning, so every
 check, and every quality measurement published from it, names a column the submitter's file has. The DataOps pipeline
-does not repeat them (processing.run_dataops_pipeline switches them off); merge_quality_report joins both halves.
+does not repeat them (processing.run_imputation switches them off); merge_quality_report joins both halves.
 
 The suite is the one the pipeline used to build for itself, from the same vendored builders
 (dataops.ts_checks.build_expectations and dataops.tabular_checks.build_expectations), over the raw frame instead of the

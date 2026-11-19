@@ -192,7 +192,7 @@ def report_outcome(output_key: str, report: dict) -> None:
 
 # ── Merging the DataOps pipeline's own verdict in ─────────────────────────────
 #
-# The WaveStitchPlus pipeline (dali.processing.run_dataops_pipeline) runs its
+# The WaveStitchPlus pipeline (dali.processing.run_imputation) runs its
 # own auto-generated Great Expectations suite and a pandera schema over the same
 # distribution this DAG validates against the conf-supplied suite. Those
 # findings used to stop at the pipeline's report.json; merge_quality_report
@@ -220,7 +220,7 @@ def report_outcome(output_key: str, report: dict) -> None:
 #   run_expectations       own ephemeral context, suite "dali_validation_suite",
 #                          over the RAW file parsed from file_content
 #   ts_checks.run          dataops.gx.get_gx_context, suite "ts_quality", over
-#   (run_dataops_pipeline) the SOFT-CLEANED frame — minimal_dataops.run_pipeline
+#   (run_imputation) the SOFT-CLEANED frame — minimal_dataops.run_pipeline
 #                          calls clean_dataframe() before _run_quality_checks
 #
 # So a folded entry ANDs a verdict on the raw frame with a verdict on a frame

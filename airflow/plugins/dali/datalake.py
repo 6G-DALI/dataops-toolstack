@@ -389,7 +389,7 @@ def upload_results(report: dict) -> str:
 
 
 # The file name each of a processing run's artifacts is stored under, inside the run's
-# directory (see dali.processing.run_dataops_pipeline for what produces them). Derived from
+# directory (see dali.processing.run_imputation for what produces them). Derived from
 # the artifact's name rather than from its local filename, which starts with the dataset's
 # own stem and may itself contain underscores.
 _ARTIFACT_NAMES = {
@@ -498,7 +498,7 @@ def upload_artifacts(pipeline: dict, quality: dict | None = None) -> dict:
         )
         uploaded[name] = key
 
-    # A skipped pipeline (dali.processing.run_dataops_pipeline bails out when
+    # A skipped pipeline (dali.processing.run_imputation bails out when
     # the format check failed) wrote no report.json at all. Publish one holding
     # just the quality report, so the run still has something for the UI to
     # render — a format failure is exactly the case a user needs to see.

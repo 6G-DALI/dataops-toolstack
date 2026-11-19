@@ -953,7 +953,7 @@ def unwrap_dataset(file_content: str, asset_title: str, format_check: dict | Non
     pipeline's input is transformed: the quality checks of the file as received (dali.validation.run_expectations)
     take the original download, so what they report names the file's own columns.
 
-    Returns {"file_content", "timestamp_col", "wide_columns", "layout", "state"} for run_dataops_pipeline, with the
+    Returns {"file_content", "timestamp_col", "wide_columns", "layout", "state"} for run_imputation, with the
     unwrapped CSV as file_content and the state as plain JSON; {"error"} when the hierarchy does not fit the data; and
     {"unwrapped": False} when the dataset declares no layout, or failed its format check, so there is nothing to do.
     """
@@ -977,7 +977,7 @@ def unwrap_dataset(file_content: str, asset_title: str, format_check: dict | Non
         try:
             wide_csv, state, timestamp_col, wide_columns = _unwrap_input(
                 input_csv, workdir, stem, layout, timestamp_col)
-        except Exception as exc:  # noqa: BLE001 - reported, and the pipeline skips; see run_dataops_pipeline
+        except Exception as exc:  # noqa: BLE001 - reported, and the pipeline skips; see run_imputation
             return {"unwrapped": False, "error": f"{exc.__class__.__name__}: {exc}"}
         wide_content = Path(wide_csv).read_text(encoding="utf-8")
     return {"unwrapped": True, "file_content": wide_content, "timestamp_col": timestamp_col,
@@ -985,7 +985,7 @@ def unwrap_dataset(file_content: str, asset_title: str, format_check: dict | Non
 
 
 @task(multiple_outputs=True)
-def run_dataops_pipeline(file_content: str, asset_title: str, format_check: dict | None = None,
+def run_imputation(file_content: str, asset_title: str, format_check: dict | None = None,
                          unwrapped_input: dict | None = None) -> dict:
     """Run the minimal DataOps pipeline over a downloaded distribution.
 

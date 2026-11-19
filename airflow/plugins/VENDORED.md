@@ -12,7 +12,7 @@ so these import like any other plugin module.
 | `data_process_modules/` | `WaveStitchPlus/src/data_process_modules/` |
 | `Darts_app/run_imputation.py` | `WaveStitchPlus/dockers/tools/Darts_app/run_imputation.py` |
 
-`dali.processing.run_dataops_pipeline` imports `run_pipeline` from
+`dali.processing.run_imputation` imports `run_pipeline` from
 `minimal_dataops`; that module imports `data_process_modules`, which re-exports
 `dataops`. All three are needed — `data_process_modules` is only a shim.
 

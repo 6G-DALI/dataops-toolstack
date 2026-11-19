@@ -7,7 +7,7 @@ the regularized bundle the pipeline just wrote, waits for the job, and reports t
 dataops.imputation_runner.impute_bundle returns, so scoring, the final dataset and the uploads work on it unchanged.
 
 The bundle crosses over a volume both containers mount, not HTTP: only its path is sent, and the filled splits are
-read from `<bundle parent>/<base>_generated/` where the service wrote them. That is why `run_dataops_pipeline` puts its
+read from `<bundle parent>/<base>_generated/` where the service wrote them. That is why `run_imputation` puts its
 scratch directory under DALI_WORK_ROOT when it is set, and why a bundle outside it is refused here with that reason.
 
 DAG run input, in `imputation.runs`:

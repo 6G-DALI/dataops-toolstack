@@ -11,7 +11,7 @@ regimes and reports their combined verdict.
      piveau's own column metadata) asks for. See `expectations` below.
   2. The WaveStitchPlus minimal DataOps pipeline (minimal_dataops.run_pipeline,
      vendored into plugins/ — see plugins/VENDORED.md — and wrapped by
-     dali.processing.run_dataops_pipeline): conservative cleaning, profiling,
+     dali.processing.run_imputation): conservative cleaning, profiling,
      its *own* auto-generated GX suite, pandera schema validation, per-issue
      remediation and imputation.
 
@@ -250,7 +250,7 @@ from airflow.models.param import Param
 
 from dali.dataspace import publish_quality_to_piveau
 from dali.datalake import download_dataset_edc, upload_artifacts, upload_results
-from dali.processing import cleanup_workdir, report_pipeline_outcome, run_dataops_pipeline, unwrap_dataset
+from dali.processing import cleanup_workdir, report_pipeline_outcome, run_imputation, unwrap_dataset
 from dali.validation import (
     merge_quality_report,
     report_outcome,
@@ -299,7 +299,7 @@ def dali_dataspace_validate_dataset():
         asset_title=downloaded["asset_title"],
         format_check=format_check,
     )
-    pipeline  = run_dataops_pipeline(
+    pipeline  = run_imputation(
         file_content=downloaded["content"],
         asset_title=downloaded["asset_title"],
         format_check=format_check,

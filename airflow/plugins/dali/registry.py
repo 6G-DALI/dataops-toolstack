@@ -63,7 +63,7 @@ SERVICES = {
         "output_format": "text/csv",
         "framework":    "WaveStitchPlus",
         "module":       "dali.processing",
-        "function":     "run_dataops_pipeline",
+        "function":     "run_imputation",
     },
     "dali-upload-artifacts": {
         "title":        "Data Lake Artifacts Upload",

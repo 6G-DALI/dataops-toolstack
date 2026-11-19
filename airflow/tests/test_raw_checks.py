@@ -273,7 +273,7 @@ class TestUnwrapTask:
 
 
 class TestPipelineWithAnUnwrappedInput:
-    """run_dataops_pipeline takes the unwrapped file from the task before it, and runs no quality check of its own."""
+    """run_imputation takes the unwrapped file from the task before it, and runs no quality check of its own."""
 
     @pytest.fixture
     def pipeline(self, monkeypatch, tmp_path):
@@ -299,7 +299,7 @@ class TestPipelineWithAnUnwrappedInput:
         wide, state = unwrap(narrow, "cell_id,ue_id,metric_id", ["source", "gNB_id"])
         handed = {"unwrapped": True, "file_content": wide.to_csv(index=False), "timestamp_col": "timestamp",
                   "wide_columns": list(wide.columns), "layout": LAYOUT, "state": state.to_dict()}
-        out = processing.run_dataops_pipeline.function(NARROW_CSV, "readings.csv", {"success": True}, handed)
+        out = processing.run_imputation.function(NARROW_CSV, "readings.csv", {"success": True}, handed)
         assert seen["input_csv"].endswith("readings_unwrapped.csv")
         assert open(seen["input_csv"], newline="").read().replace("\r", "") == handed["file_content"].replace("\r", "")
         assert seen["kw"]["validation_config"]["run_gx"] is False
@@ -312,13 +312,13 @@ class TestPipelineWithAnUnwrappedInput:
 
     def test_an_unwrap_that_failed_skips_the_run(self, pipeline):
         processing, seen = pipeline
-        out = processing.run_dataops_pipeline.function(
+        out = processing.run_imputation.function(
             NARROW_CSV, "readings.csv", {"success": True}, {"unwrapped": False, "error": "KeyError: 'nope'"})
         assert out["report"] is None and "hierarchy not applied" in out["error"] and "input_csv" not in seen
 
     def test_nothing_to_unwrap_runs_the_file_as_it_is(self, pipeline):
         processing, seen = pipeline
-        out = processing.run_dataops_pipeline.function(
+        out = processing.run_imputation.function(
             NARROW_CSV, "readings.csv", {"success": True}, {"unwrapped": False, "reason": "no layout declared"})
         assert seen["input_csv"].endswith("readings.csv") and out["error"] is None
 
@@ -430,3 +430,44 @@ class TestMergeWithTheFileChecks:
         pipeline["report"]["validation"] = {"mode": "time_series", "pandera_passed": True, "errors": []}
         merged = merge_quality_report.function(gx_report=self._gx(with_pandera=False), pipeline=pipeline)
         assert merged["sources"]["pandera"]["success"] is True
+
+
+class TestImputationTimings:
+    """Every imputation run of the report says when it ran and how long it took."""
+
+    @pytest.fixture
+    def processing(self, monkeypatch, tmp_path):
+        from dali import processing
+
+        (tmp_path / "meta.json").write_text("{}")
+        monkeypatch.setattr(processing, "_bundle_facts", lambda prepared_dir: {})
+        monkeypatch.setattr(processing, "_rank_runs", lambda summaries: [])
+        return processing
+
+    def _report(self, tmp_path):
+        return {"handoff": {"bundle_written": True, "prepared_dir": str(tmp_path)}}
+
+    def test_each_run_carries_its_timing_and_the_report_their_total(self, processing, monkeypatch, tmp_path):
+        clock = iter([100.0, 100.5, 200.0, 207.25])             # two runs: 0.5 s and 7.25 s
+        monkeypatch.setattr(processing.time, "monotonic", lambda: next(clock))
+        monkeypatch.setattr(processing, "_impute_one", lambda d, b, lib, method, engine, **k: {
+            "lib": lib, "method": method, "engine": engine, "status": "imputed", "files": {}, "filled": 3})
+        out = processing.impute_prepared_bundle(self._report(tmp_path), {"runs": [
+            {"lib": "darts", "method": "linear"}, {"lib": "pypots", "method": "saits"}]})
+
+        assert [r["timing"]["seconds"] for r in out["runs"]] == [0.5, 7.25]
+        assert out["runs_seconds"] == 7.75
+        for run in out["runs"]:
+            started, finished = run["timing"]["started_at"], run["timing"]["finished_at"]
+            assert started <= finished and started.endswith("+00:00")
+        json.dumps(out["runs"])                                  # it goes into report.json
+
+    def test_a_failed_run_is_timed_too(self, processing, monkeypatch, tmp_path):
+        monkeypatch.setattr(processing, "_impute_one", lambda d, b, lib, method, engine, **k: {
+            "lib": lib, "method": method, "engine": engine, "status": "error", "reason": "boom", "files": {}})
+        out = processing.impute_prepared_bundle(self._report(tmp_path), {"runs": [{"lib": "darts", "method": "linear"}]})
+        assert out["runs"][0]["status"] == "error" and out["runs"][0]["timing"]["seconds"] >= 0.0
+
+    def test_nothing_to_impute_has_no_timings(self, processing):
+        out = processing.impute_prepared_bundle({"handoff": {}}, {"runs": [{"lib": "darts", "method": "linear"}]})
+        assert out["status"] == "no_bundle" and "runs" not in out
